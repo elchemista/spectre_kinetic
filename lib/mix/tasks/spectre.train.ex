@@ -5,7 +5,7 @@ defmodule Mix.Tasks.Spectre.Train do
   Runs the upstream Rust training pipeline to build a new runtime model pack.
   """
 
-  alias SpectreKinetic.Runtime
+  alias SpectreKinetic.Helper
 
   @shortdoc "Train a spectre model pack with the upstream Rust training pipeline"
 
@@ -45,7 +45,7 @@ defmodule Mix.Tasks.Spectre.Train do
       |> maybe_add("--dim", opts[:dim])
       |> maybe_add_flag("--zipf", opts[:zipf])
 
-    Runtime.run_helper!("train", args)
+    Helper.run!("train", args)
   end
 
   defp required!(opts, keys) do

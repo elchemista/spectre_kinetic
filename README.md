@@ -293,7 +293,7 @@ Prompt guidance:
 
 Purpose:
 
-- install the pinned upstream example model pack locally
+- install the upstream example model pack locally
 - optionally install the upstream test registry files
 
 Typical use:
@@ -315,7 +315,7 @@ Other useful flags:
 Notes:
 
 - this task prefers copying from a local checkout when available
-- it falls back to downloading raw files from the pinned upstream commit
+- otherwise it derives the git ref from the native Cargo dependency and downloads matching raw files
 - use it for setup and experimentation, not as your only production distribution strategy
 
 ### `mix spectre.show`

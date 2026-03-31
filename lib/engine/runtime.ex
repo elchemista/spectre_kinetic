@@ -2,39 +2,7 @@ defmodule SpectreKinetic.Runtime do
   @moduledoc false
 
   @app :spectre_kinetic
-  @engine_commit "6684410461ecbcd6785f6c58fc6acf8a4d26b961"
   @default_top_k 5
-
-  @doc """
-  Returns the project root used for helper task execution.
-  """
-  @spec app_root() :: binary()
-  def app_root do
-    Path.expand("..", __DIR__)
-  end
-
-  @doc """
-  Returns the path to the native Rust `Cargo.toml`.
-  """
-  @spec native_manifest_path() :: binary()
-  def native_manifest_path do
-    Path.join(app_root(), "native/spectre_ffi/Cargo.toml")
-  end
-
-  @doc """
-  Returns the pinned upstream engine commit used by the native crate.
-  """
-  @spec engine_commit() :: binary()
-  def engine_commit, do: @engine_commit
-
-  @doc """
-  Returns whether helper tasks should run with `cargo run --release`.
-  """
-  @spec helper_release?() :: boolean()
-  def helper_release? do
-    Application.get_env(@app, :helper_release?, false) or
-      System.get_env("SPECTRE_KINETIC_HELPER_RELEASE") == "1"
-  end
 
   @doc """
   Returns default planner options merged from application config and environment.
@@ -111,43 +79,6 @@ defmodule SpectreKinetic.Runtime do
       |> wrap_required_path(opt_key, env_var)
 
   @doc """
-  Runs the upstream Rust helper binary with the given subcommand and arguments.
-  """
-  @spec run_helper!(binary(), [binary()]) :: :ok
-  def run_helper!(subcommand, args) when is_binary(subcommand) and is_list(args) do
-    cargo =
-      System.find_executable("cargo") ||
-        raise ArgumentError, "`cargo` is required to run spectre helper tasks."
-
-    command =
-      ["run"]
-      |> maybe_add_release()
-      |> Kernel.++([
-        "--manifest-path",
-        native_manifest_path(),
-        "--features",
-        "helper",
-        "--bin",
-        "spectre_kinetic_helper",
-        "--",
-        subcommand
-      ])
-      |> Kernel.++(args)
-
-    {_output, status} =
-      System.cmd(cargo, command,
-        cd: app_root(),
-        into: IO.stream(:stdio, :line),
-        stderr_to_stdout: true
-      )
-
-    case status do
-      0 -> :ok
-      _ -> raise RuntimeError, "spectre helper task failed with exit status #{status}"
-    end
-  end
-
-  @doc """
   Recursively stringifies map keys for JSON payloads passed into Rust.
   """
   @spec stringify_map(map()) :: map()
@@ -167,9 +98,6 @@ defmodule SpectreKinetic.Runtime do
   def missing_path_message({:missing_path, key, env_var}) do
     "missing required #{inspect(key)}. Pass it explicitly, configure :#{key} for :spectre_kinetic, or export #{env_var}."
   end
-
-  defp maybe_add_release(command),
-    do: if(helper_release?(), do: command ++ ["--release"], else: command)
 
   defp fallback_path(nil, fallback), do: fallback
   defp fallback_path("", fallback), do: fallback

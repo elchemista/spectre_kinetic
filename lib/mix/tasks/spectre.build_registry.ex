@@ -5,7 +5,7 @@ defmodule Mix.Tasks.Spectre.BuildRegistry do
   Compiles a human-editable registry JSON file into a runtime `.mcr` registry.
   """
 
-  alias SpectreKinetic.Runtime
+  alias SpectreKinetic.Helper
 
   @shortdoc "Compile a registry JSON file into a spectre .mcr registry"
 
@@ -22,7 +22,7 @@ defmodule Mix.Tasks.Spectre.BuildRegistry do
 
     required!(opts, [:model, :registry, :out])
 
-    Runtime.run_helper!("build-registry", [
+    Helper.run!("build-registry", [
       "--model",
       opts[:model],
       "--registry",

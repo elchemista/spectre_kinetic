@@ -2,12 +2,16 @@ defmodule Mix.Tasks.Spectre.DownloadModel do
   use Mix.Task
 
   @moduledoc """
-  Installs the pinned upstream example model pack and optional test registry files.
+  Installs the upstream example model pack and optional test registry files.
+
+  By default, the task derives the upstream git revision from the native Cargo
+  dependency so the downloaded assets stay aligned with the Rust engine version
+  this project actually builds against.
   """
 
-  alias SpectreKinetic.Runtime
+  alias SpectreKinetic.Helper
 
-  @shortdoc "Install the pinned upstream model pack locally"
+  @shortdoc "Install the upstream model pack locally"
 
   @switches [
     out: :string,
@@ -20,7 +24,7 @@ defmodule Mix.Tasks.Spectre.DownloadModel do
   ]
 
   @doc """
-  Runs the task and installs the pinned example model assets locally.
+  Runs the task and installs example model assets locally.
   """
   @spec run([binary()]) :: any()
   @impl true
@@ -30,7 +34,7 @@ defmodule Mix.Tasks.Spectre.DownloadModel do
 
     out_dir = opts[:out] || Mix.raise("missing required option --out")
     pack = opts[:pack] || "minilm"
-    commit = opts[:commit] || Runtime.engine_commit()
+    commit = opts[:commit] || native_engine_ref!()
     source_dir = opts[:source_dir] || find_local_source()
     force? = opts[:force] || false
 
@@ -86,11 +90,50 @@ defmodule Mix.Tasks.Spectre.DownloadModel do
     "https://raw.githubusercontent.com/elchemista/spectre-kinetic-engine/#{commit}/#{path}"
   end
 
+  defp native_engine_ref! do
+    cargo_lock_ref() || cargo_manifest_ref() ||
+      Mix.raise("could not determine spectre-kinetic-engine git ref from native Cargo metadata")
+  end
+
+  defp cargo_lock_ref do
+    lock_path = Path.join(Path.dirname(Helper.native_manifest_path()), "Cargo.lock")
+
+    if File.exists?(lock_path) do
+      lock_path
+      |> File.read!()
+      |> extract_lock_ref()
+    end
+  end
+
+  defp cargo_manifest_ref do
+    Helper.native_manifest_path()
+    |> File.read!()
+    |> extract_manifest_ref()
+  end
+
+  defp extract_lock_ref(contents) do
+    case Regex.run(
+           ~r/source = "git\+https:\/\/github\.com\/elchemista\/spectre-kinetic-engine\.git(?:\?[^"]*)?#([0-9a-f]{7,40})"/,
+           contents,
+           capture: :all_but_first
+         ) do
+      [ref] -> ref
+      _ -> nil
+    end
+  end
+
+  defp extract_manifest_ref(contents) do
+    case Regex.run(~r/rev\s*=\s*"([0-9a-f]{7,40})"/, contents, capture: :all_but_first) do
+      [ref] -> ref
+      _ -> nil
+    end
+  end
+
   defp find_local_source do
     [
       System.get_env("SPECTRE_KINETIC_FIXTURES_ROOT"),
-      Path.expand("../spectre-kinetic", Runtime.app_root()),
-      Path.expand("../spectre-kinetic-engine", Runtime.app_root())
+      Path.expand("../spectre-kinetic", Helper.app_root()),
+      Path.expand("../spectre-kinetic-engine", Helper.app_root())
     ]
     |> Enum.find(&valid_source?/1)
   end

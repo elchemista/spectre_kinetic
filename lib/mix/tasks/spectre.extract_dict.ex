@@ -5,7 +5,7 @@ defmodule Mix.Tasks.Spectre.ExtractDict do
   Extracts a compact prompt dictionary from a corpus and optional registry input.
   """
 
-  alias SpectreKinetic.Runtime
+  alias SpectreKinetic.Helper
 
   @shortdoc "Extract a compact AL dictionary from a corpus and optional registry"
 
@@ -34,7 +34,7 @@ defmodule Mix.Tasks.Spectre.ExtractDict do
       |> maybe_add("--out", opts[:out])
       |> maybe_add("--top-n", opts[:top_n])
 
-    Runtime.run_helper!("extract-dict", args)
+    Helper.run!("extract-dict", args)
   end
 
   defp maybe_add(args, _flag, nil), do: args
