@@ -3,8 +3,6 @@ defmodule SpectreKinetic.Native do
 
   use Rustler, otp_app: :spectre_kinetic, crate: :spectre_ffi
 
-  # NIF stubs — replaced at load time by the Rust implementations.
-
   def open(_model_dir, _registry_mcr), do: :erlang.nif_error(:nif_not_loaded)
   def plan(_handle, _al_text), do: :erlang.nif_error(:nif_not_loaded)
   def plan_al(_handle, _al_text), do: :erlang.nif_error(:nif_not_loaded)
