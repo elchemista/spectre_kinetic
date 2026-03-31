@@ -25,6 +25,9 @@ defmodule SpectreKinetic.Extractor do
           entries: [entry()]
         }
 
+  @doc """
+  Extracts validated AL strings from a noisy text response.
+  """
   @spec extract(binary()) :: {binary(), [binary()]}
   def extract(text) when is_binary(text) do
     result = scan(text)
@@ -33,6 +36,9 @@ defmodule SpectreKinetic.Extractor do
 
   def extract(_), do: {"", []}
 
+  @doc """
+  Scans a text response for AL candidates and returns validation diagnostics.
+  """
   @spec scan(binary()) :: scan_result()
   def scan(text) when is_binary(text) do
     text
@@ -93,7 +99,7 @@ defmodule SpectreKinetic.Extractor do
 
         %{state | mode: :normal}
         |> add_entry(raw)
-        |> handle_normal_line(after_close)
+        |> continue_after_tag_close(after_close)
 
       :not_found ->
         %{state | mode: {:al_tag, parts ++ [line]}}
@@ -218,6 +224,8 @@ defmodule SpectreKinetic.Extractor do
 
   defp continue_after_close(state, ""), do: keep_clean(state, "")
   defp continue_after_close(state, after_close), do: handle_normal_line(after_close, state)
+  defp continue_after_tag_close(state, ""), do: keep_clean(state, "")
+  defp continue_after_tag_close(state, after_close), do: handle_normal_line(after_close, state)
 
   defp keep_clean(state, line), do: %{state | clean_lines: state.clean_lines ++ [line]}
 
@@ -238,22 +246,25 @@ defmodule SpectreKinetic.Extractor do
   defp parse_fence_open(trimmed_line) do
     case fence_delimiter(trimmed_line) do
       {delimiter, rest} ->
-        case split_first_token(String.trim_leading(rest)) do
-          {language, content} ->
-            language = String.downcase(language)
-
-            if language in ["al", "action", "action-language"] do
-              parse_fence_body(delimiter, content)
-            else
-              {:plain_open, delimiter}
-            end
-
-          :error ->
-            {:plain_open, delimiter}
-        end
+        parse_fence_open_with_delimiter(delimiter, rest)
 
       :error ->
         :not_a_fence
+    end
+  end
+
+  defp parse_fence_open_with_delimiter(delimiter, rest) do
+    case split_first_token(String.trim_leading(rest)) do
+      {language, content} -> parse_fence_language(delimiter, language, content)
+      :error -> {:plain_open, delimiter}
+    end
+  end
+
+  defp parse_fence_language(delimiter, language, content) do
+    if String.downcase(language) in ["al", "action", "action-language"] do
+      parse_fence_body(delimiter, content)
+    else
+      {:plain_open, delimiter}
     end
   end
 
@@ -267,25 +278,32 @@ defmodule SpectreKinetic.Extractor do
   defp parse_inline_al_fence(rest, delimiter) do
     case fence_delimiter(rest) do
       {^delimiter, after_delimiter} ->
-        case split_first_token(String.trim_leading(after_delimiter)) do
-          {language, content} ->
-            language = String.downcase(language)
-
-            if language in ["al", "action", "action-language"] do
-              case split_inline_fence_close(content, delimiter) do
-                {:ok, body, after_close} -> {:ok, body, after_close}
-                :not_found -> :not_inline
-              end
-            else
-              :not_al
-            end
-
-          :error ->
-            :not_al
-        end
+        parse_inline_al_body(after_delimiter, delimiter)
 
       :error ->
         :not_al
+    end
+  end
+
+  defp parse_inline_al_body(after_delimiter, delimiter) do
+    case split_first_token(String.trim_leading(after_delimiter)) do
+      {language, content} -> parse_inline_al_language(language, content, delimiter)
+      :error -> :not_al
+    end
+  end
+
+  defp parse_inline_al_language(language, content, delimiter) do
+    if String.downcase(language) in ["al", "action", "action-language"] do
+      parse_inline_al_content(content, delimiter)
+    else
+      :not_al
+    end
+  end
+
+  defp parse_inline_al_content(content, delimiter) do
+    case split_inline_fence_close(content, delimiter) do
+      {:ok, body, after_close} -> {:ok, body, after_close}
+      :not_found -> :not_inline
     end
   end
 
@@ -297,8 +315,7 @@ defmodule SpectreKinetic.Extractor do
         {:close, "", ""}
 
       String.starts_with?(trimmed, delimiter) ->
-        {:close, "",
-         String.trim_leading(String.slice(trimmed, byte_size(delimiter)..-1//1) || "")}
+        {:close, "", trimmed |> delimiter_tail(delimiter) |> String.trim_leading()}
 
       true ->
         :continue
@@ -412,6 +429,11 @@ defmodule SpectreKinetic.Extractor do
        when delimiter in ["```", "~~~"], do: {delimiter, rest}
 
   defp fence_delimiter(_line), do: :error
+
+  defp delimiter_tail(text, delimiter) do
+    offset = byte_size(delimiter)
+    binary_part(text, offset, byte_size(text) - offset)
+  end
 
   defp next_inline_fence(line) do
     [find_delimiter(line, "```"), find_delimiter(line, "~~~")]

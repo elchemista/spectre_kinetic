@@ -21,6 +21,9 @@ defmodule SpectreKinetic.Prompt do
 
   @type output_format :: :tags | :lines
 
+  @doc """
+  Builds an LLM-ready AL prompt from either a provided dictionary or registry options.
+  """
   @spec build(keyword()) :: {:ok, binary()} | {:error, term()}
   def build(opts \\ []) do
     with {:ok, dictionary} <- dictionary_from_opts(opts) do
@@ -28,15 +31,20 @@ defmodule SpectreKinetic.Prompt do
     end
   end
 
+  @doc """
+  Builds an LLM-ready AL prompt and raises on failure.
+  """
   @spec build!(keyword()) :: binary()
   def build!(opts \\ []) do
-    with {:ok, prompt} <- build(opts) do
-      prompt
-    else
+    case build(opts) do
+      {:ok, prompt} -> prompt
       {:error, reason} -> raise ArgumentError, "failed to build AL prompt: #{inspect(reason)}"
     end
   end
 
+  @doc """
+  Renders prompt text from a prebuilt dictionary.
+  """
   @spec render(Dictionary.t(), keyword()) :: binary()
   def render(%Dictionary{} = dictionary, opts \\ []) do
     output = Keyword.get(opts, :output, :tags)

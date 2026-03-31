@@ -5,21 +5,41 @@ defmodule SpectreKinetic.Runtime do
   @engine_commit "6684410461ecbcd6785f6c58fc6acf8a4d26b961"
   @default_top_k 5
 
+  @doc """
+  Returns the project root used for helper task execution.
+  """
+  @spec app_root() :: binary()
   def app_root do
     Path.expand("..", __DIR__)
   end
 
+  @doc """
+  Returns the path to the native Rust `Cargo.toml`.
+  """
+  @spec native_manifest_path() :: binary()
   def native_manifest_path do
     Path.join(app_root(), "native/spectre_ffi/Cargo.toml")
   end
 
+  @doc """
+  Returns the pinned upstream engine commit used by the native crate.
+  """
+  @spec engine_commit() :: binary()
   def engine_commit, do: @engine_commit
 
+  @doc """
+  Returns whether helper tasks should run with `cargo run --release`.
+  """
+  @spec helper_release?() :: boolean()
   def helper_release? do
     Application.get_env(@app, :helper_release?, false) or
       System.get_env("SPECTRE_KINETIC_HELPER_RELEASE") == "1"
   end
 
+  @doc """
+  Returns default planner options merged from application config and environment.
+  """
+  @spec default_plan_options() :: keyword()
   def default_plan_options do
     [
       top_k: config_integer(:top_k, "SPECTRE_KINETIC_TOP_K", @default_top_k),
@@ -29,6 +49,10 @@ defmodule SpectreKinetic.Runtime do
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
 
+  @doc """
+  Returns the configured tool-selection threshold, if any.
+  """
+  @spec default_tool_threshold() :: float() | nil
   def default_tool_threshold do
     first_present_float([
       Application.get_env(@app, :tool_threshold),
@@ -40,6 +64,11 @@ defmodule SpectreKinetic.Runtime do
     ])
   end
 
+  @doc """
+  Resolves the required runtime paths for model and compiled registry.
+  """
+  @spec resolve_runtime_paths(keyword()) ::
+          {:ok, %{model_dir: binary(), registry_mcr: binary()}} | {:error, term()}
   def resolve_runtime_paths(opts) do
     with {:ok, model_dir} <-
            resolve_path(opts, :model_dir, :model_dir, "SPECTRE_KINETIC_MODEL_DIR"),
@@ -49,14 +78,21 @@ defmodule SpectreKinetic.Runtime do
     end
   end
 
+  @doc """
+  Resolves the required runtime paths and raises on failure.
+  """
+  @spec resolve_runtime_paths!(keyword()) :: %{model_dir: binary(), registry_mcr: binary()}
   def resolve_runtime_paths!(opts \\ []) do
-    with {:ok, paths} <- resolve_runtime_paths(opts) do
-      paths
-    else
+    case resolve_runtime_paths(opts) do
+      {:ok, paths} -> paths
       {:error, reason} -> raise ArgumentError, missing_path_message(reason)
     end
   end
 
+  @doc """
+  Resolves one optional path from call-site opts, app config, or environment.
+  """
+  @spec resolve_optional_path(keyword(), atom(), atom(), binary()) :: binary() | nil
   def resolve_optional_path(opts, opt_key, app_key, env_var) do
     opts
     |> Keyword.get(opt_key)
@@ -65,15 +101,23 @@ defmodule SpectreKinetic.Runtime do
     |> normalize_optional_path()
   end
 
+  @doc """
+  Resolves one required path from call-site opts, app config, or environment.
+  """
+  @spec resolve_path(keyword(), atom(), atom(), binary()) :: {:ok, binary()} | {:error, term()}
   def resolve_path(opts, opt_key, app_key, env_var),
     do:
       resolve_optional_path(opts, opt_key, app_key, env_var)
       |> wrap_required_path(opt_key, env_var)
 
+  @doc """
+  Runs the upstream Rust helper binary with the given subcommand and arguments.
+  """
+  @spec run_helper!(binary(), [binary()]) :: :ok
   def run_helper!(subcommand, args) when is_binary(subcommand) and is_list(args) do
     cargo =
       System.find_executable("cargo") ||
-        Mix.raise("`cargo` is required to run spectre helper tasks.")
+        raise ArgumentError, "`cargo` is required to run spectre helper tasks."
 
     command =
       ["run"]
@@ -99,10 +143,14 @@ defmodule SpectreKinetic.Runtime do
 
     case status do
       0 -> :ok
-      _ -> Mix.raise("spectre helper task failed with exit status #{status}")
+      _ -> raise RuntimeError, "spectre helper task failed with exit status #{status}"
     end
   end
 
+  @doc """
+  Recursively stringifies map keys for JSON payloads passed into Rust.
+  """
+  @spec stringify_map(map()) :: map()
   def stringify_map(map) when is_map(map) do
     Map.new(map, fn
       {key, value} when is_atom(key) -> {Atom.to_string(key), stringify_value(value)}
@@ -112,6 +160,10 @@ defmodule SpectreKinetic.Runtime do
 
   def stringify_map(_), do: %{}
 
+  @doc """
+  Formats a readable error message for missing required paths.
+  """
+  @spec missing_path_message({:missing_path, atom(), binary()}) :: binary()
   def missing_path_message({:missing_path, key, env_var}) do
     "missing required #{inspect(key)}. Pass it explicitly, configure :#{key} for :spectre_kinetic, or export #{env_var}."
   end

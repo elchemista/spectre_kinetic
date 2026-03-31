@@ -1,6 +1,10 @@
 defmodule Mix.Tasks.Spectre.Train do
   use Mix.Task
 
+  @moduledoc """
+  Runs the upstream Rust training pipeline to build a new runtime model pack.
+  """
+
   alias SpectreKinetic.Runtime
 
   @shortdoc "Train a spectre model pack with the upstream Rust training pipeline"
@@ -15,6 +19,10 @@ defmodule Mix.Tasks.Spectre.Train do
     zipf: :boolean
   ]
 
+  @doc """
+  Runs the upstream training helper with the provided CLI arguments.
+  """
+  @spec run([binary()]) :: any()
   @impl true
   def run(argv) do
     {opts, _args, invalid} = OptionParser.parse(argv, strict: @switches)

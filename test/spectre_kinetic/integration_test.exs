@@ -52,7 +52,7 @@ defmodule SpectreKinetic.IntegrationTest do
 
     assert action.status == :no_tool
     assert is_list(action.alternatives)
-    assert length(action.alternatives) > 0
+    refute Enum.empty?(action.alternatives)
     assert Enum.all?(action.alternatives, &(&1.kind == :suggestion))
   end
 

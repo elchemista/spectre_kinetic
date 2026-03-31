@@ -1,12 +1,20 @@
 defmodule Mix.Tasks.Spectre.BuildRegistry do
   use Mix.Task
 
+  @moduledoc """
+  Compiles a human-editable registry JSON file into a runtime `.mcr` registry.
+  """
+
   alias SpectreKinetic.Runtime
 
   @shortdoc "Compile a registry JSON file into a spectre .mcr registry"
 
   @switches [model: :string, registry: :string, out: :string]
 
+  @doc """
+  Runs the registry compilation helper with the provided CLI arguments.
+  """
+  @spec run([binary()]) :: any()
   @impl true
   def run(argv) do
     {opts, _args, invalid} = OptionParser.parse(argv, strict: @switches)

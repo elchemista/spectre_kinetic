@@ -22,6 +22,10 @@ defmodule SpectreKinetic.Dictionary do
 
   @default_top_n 200
 
+  @doc """
+  Builds a scoped dictionary from the configured registry JSON file.
+  """
+  @spec build(keyword()) :: {:ok, t()} | {:error, term()}
   def build(opts \\ []) do
     with {:ok, path} <- registry_json_path(opts),
          {:ok, payload} <- File.read(path),
@@ -43,20 +47,35 @@ defmodule SpectreKinetic.Dictionary do
     end
   end
 
+  @doc """
+  Builds a scoped dictionary and raises on failure.
+  """
+  @spec build!(keyword()) :: t()
   def build!(opts \\ []) do
-    with {:ok, dictionary} <- build(opts) do
-      dictionary
-    else
+    case build(opts) do
+      {:ok, dictionary} -> dictionary
       {:error, reason} -> raise ArgumentError, "failed to build dictionary: #{inspect(reason)}"
     end
   end
 
+  @doc """
+  Builds compact prompt text from the scoped dictionary.
+  """
+  @spec text(keyword()) :: {:ok, binary()} | {:error, term()}
   def text(opts \\ []), do: with({:ok, dictionary} <- build(opts), do: {:ok, to_text(dictionary)})
 
+  @doc """
+  Builds compact prompt text and raises on failure.
+  """
+  @spec text!(keyword()) :: binary()
   def text!(opts \\ []) do
     opts |> build!() |> to_text()
   end
 
+  @doc """
+  Renders the dictionary as compact multi-line prompt text.
+  """
+  @spec to_text(t()) :: binary()
   def to_text(%__MODULE__{} = dictionary) do
     [
       Enum.join(dictionary.keywords, " "),

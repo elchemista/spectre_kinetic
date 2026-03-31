@@ -1,6 +1,11 @@
 defmodule Mix.Tasks.Spectre.Show do
   use Mix.Task
 
+  @moduledoc """
+  Shows runtime information for a model/registry pair and optionally plans
+  either one AL instruction or a whole LLM response.
+  """
+
   alias SpectreKinetic.Runtime
 
   @shortdoc "Inspect a model/registry pair and optionally resolve an AL statement"
@@ -18,6 +23,10 @@ defmodule Mix.Tasks.Spectre.Show do
     format: :string
   ]
 
+  @doc """
+  Runs the task and prints either runtime summary information or planning output.
+  """
+  @spec run([binary()]) :: any()
   @impl true
   def run(argv) do
     Mix.Task.run("app.start")

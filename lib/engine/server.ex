@@ -14,22 +14,60 @@ defmodule SpectreKinetic.Server do
 
   @plan_keys [:slots, :top_k, :tool_threshold, :mapping_threshold]
 
+  @doc """
+  Starts the supervised server that owns the Rust planner resource.
+  """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
+  @doc """
+  Plans one AL instruction through the server process.
+  """
+  @spec plan(GenServer.server(), binary(), keyword()) :: {:ok, Action.t()} | {:error, term()}
   def plan(server, al_text, opts \\ []), do: GenServer.call(server, {:plan, al_text, opts})
+
+  @doc """
+  Plans from an explicit request map.
+  """
+  @spec plan_request(GenServer.server(), map()) :: {:ok, Action.t()} | {:error, term()}
   def plan_request(server, request), do: GenServer.call(server, {:plan_request, request})
+
+  @doc """
+  Plans from a JSON-encoded request payload.
+  """
+  @spec plan_json(GenServer.server(), binary()) :: {:ok, Action.t()} | {:error, term()}
   def plan_json(server, request_json), do: GenServer.call(server, {:plan_json, request_json})
+
+  @doc """
+  Adds one tool definition to the active registry.
+  """
+  @spec add_action(GenServer.server(), map()) :: :ok | {:error, term()}
   def add_action(server, action), do: GenServer.call(server, {:add_action, action})
+
+  @doc """
+  Deletes one tool definition by id from the active registry.
+  """
+  @spec delete_action(GenServer.server(), binary()) :: {:ok, boolean()} | {:error, term()}
   def delete_action(server, action_id), do: GenServer.call(server, {:delete_action, action_id})
 
+  @doc """
+  Reloads the compiled registry from disk.
+  """
+  @spec reload_registry(GenServer.server(), binary()) :: :ok | {:error, term()}
   def reload_registry(server, registry_path),
     do: GenServer.call(server, {:reload_registry, registry_path})
 
+  @doc """
+  Returns the number of active tools in the current registry.
+  """
+  @spec action_count(GenServer.server()) :: non_neg_integer()
   def action_count(server), do: GenServer.call(server, :action_count)
 
+  @doc false
+  @spec init(keyword()) :: {:ok, map()} | {:stop, term()}
   @impl true
   def init(opts) do
     with {:ok, %{model_dir: model_dir, registry_mcr: registry_mcr}} <- resolve_config(opts),
@@ -46,6 +84,8 @@ defmodule SpectreKinetic.Server do
     end
   end
 
+  @doc false
+  @spec handle_call(term(), GenServer.from(), map()) :: {:reply, term(), map()}
   @impl true
   def handle_call({:plan, al_text, opts}, _from, state) do
     {:reply, plan_result(state.handle, al_text, opts), state}
@@ -171,9 +211,8 @@ defmodule SpectreKinetic.Server do
   end
 
   defp encode_and_plan(request, handle, al_text) do
-    with {:ok, json} <- Jason.encode(request) do
-      decode_plan(Native.plan_json(handle, json), al_text)
-    else
+    case Jason.encode(request) do
+      {:ok, json} -> decode_plan(Native.plan_json(handle, json), al_text)
       {:error, reason} -> {:error, {:json_encode, reason}}
     end
   end

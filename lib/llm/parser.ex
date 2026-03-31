@@ -28,6 +28,9 @@ defmodule SpectreKinetic.Parser do
           | :unterminated_al_fence
           | :invalid_al_verb
 
+  @doc """
+  Normalizes AL text by unwrapping common LLM wrappers and collapsing whitespace.
+  """
   @spec normalize(binary()) :: {:ok, binary()} | {:error, validation_error()}
   def normalize(al_text) when is_binary(al_text) do
     al_text
@@ -41,6 +44,9 @@ defmodule SpectreKinetic.Parser do
 
   def normalize(_), do: {:error, :invalid_al}
 
+  @doc """
+  Validates one AL candidate after normalization.
+  """
   @spec validate(binary()) :: {:ok, binary()} | {:error, validation_error()}
   def validate(al_text) do
     with {:ok, normalized} <- normalize(al_text),
@@ -49,6 +55,9 @@ defmodule SpectreKinetic.Parser do
     end
   end
 
+  @doc """
+  Parses one AL candidate into lightweight Elixir-side metadata.
+  """
   @spec parse(binary()) :: parsed() | {:error, validation_error()}
   def parse(al_text) do
     with {:ok, normalized} <- validate(al_text) do
@@ -64,6 +73,9 @@ defmodule SpectreKinetic.Parser do
     end
   end
 
+  @doc """
+  Extracts literal `KEY=value` arguments from one AL instruction.
+  """
   @spec args(binary()) :: map()
   def args(al_text) do
     case parse(al_text) do
@@ -72,6 +84,9 @@ defmodule SpectreKinetic.Parser do
     end
   end
 
+  @doc """
+  Returns the parsed argument map with lowercase keys for planner slot input.
+  """
   @spec slot_map(binary()) :: map()
   def slot_map(al_text) do
     Map.new(args(al_text), fn {key, value} -> {String.downcase(key), value} end)
@@ -148,27 +163,36 @@ defmodule SpectreKinetic.Parser do
   defp unwrap_al_fence(text) do
     case opening_fence(text) do
       {delimiter, language, rest} when language in ["al", "action", "action-language"] ->
-        close_token = "\n" <> delimiter
-
-        case :binary.match(rest, close_token) do
-          {close_index, _size} ->
-            {:ok, binary_part(rest, 0, close_index)}
-
-          :nomatch ->
-            if String.ends_with?(String.trim_trailing(rest), delimiter) do
-              trailing = String.trim_trailing(rest)
-              body_size = byte_size(trailing) - byte_size(delimiter)
-              {:ok, binary_part(trailing, 0, body_size)}
-            else
-              {:error, :unterminated_al_fence}
-            end
-        end
+        unwrap_known_al_fence(rest, delimiter)
 
       {_delimiter, _language, _rest} ->
         {:ok, text}
 
       :error ->
         {:ok, text}
+    end
+  end
+
+  defp unwrap_known_al_fence(rest, delimiter) do
+    close_token = "\n" <> delimiter
+
+    case :binary.match(rest, close_token) do
+      {close_index, _size} ->
+        {:ok, binary_part(rest, 0, close_index)}
+
+      :nomatch ->
+        unwrap_trailing_fence(rest, delimiter)
+    end
+  end
+
+  defp unwrap_trailing_fence(rest, delimiter) do
+    trailing = String.trim_trailing(rest)
+
+    if String.ends_with?(trailing, delimiter) do
+      body_size = byte_size(trailing) - byte_size(delimiter)
+      {:ok, binary_part(trailing, 0, body_size)}
+    else
+      {:error, :unterminated_al_fence}
     end
   end
 

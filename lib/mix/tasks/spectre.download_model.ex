@@ -1,6 +1,10 @@
 defmodule Mix.Tasks.Spectre.DownloadModel do
   use Mix.Task
 
+  @moduledoc """
+  Installs the pinned upstream example model pack and optional test registry files.
+  """
+
   alias SpectreKinetic.Runtime
 
   @shortdoc "Install the pinned upstream model pack locally"
@@ -15,6 +19,10 @@ defmodule Mix.Tasks.Spectre.DownloadModel do
     force: :boolean
   ]
 
+  @doc """
+  Runs the task and installs the pinned example model assets locally.
+  """
+  @spec run([binary()]) :: any()
   @impl true
   def run(argv) do
     {opts, _args, invalid} = OptionParser.parse(argv, strict: @switches)
@@ -59,22 +67,18 @@ defmodule Mix.Tasks.Spectre.DownloadModel do
   end
 
   defp fetch_asset!(source_path, remote_url, destination, force?) do
-    cond do
-      File.exists?(destination) and not force? ->
-        Mix.shell().info("skip #{destination}")
+    if File.exists?(destination) and not force? do
+      Mix.shell().info("skip #{destination}")
+    else
+      File.mkdir_p!(Path.dirname(destination))
 
-      true ->
-        File.mkdir_p!(Path.dirname(destination))
-
-        cond do
-          is_binary(source_path) and File.exists?(source_path) ->
-            Mix.shell().info("copy #{source_path} -> #{destination}")
-            File.cp!(source_path, destination)
-
-          true ->
-            Mix.shell().info("download #{remote_url} -> #{destination}")
-            download_with_system!(remote_url, destination)
-        end
+      if is_binary(source_path) and File.exists?(source_path) do
+        Mix.shell().info("copy #{source_path} -> #{destination}")
+        File.cp!(source_path, destination)
+      else
+        Mix.shell().info("download #{remote_url} -> #{destination}")
+        download_with_system!(remote_url, destination)
+      end
     end
   end
 

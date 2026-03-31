@@ -1,12 +1,20 @@
 defmodule Mix.Tasks.Spectre.ExtractDict do
   use Mix.Task
 
+  @moduledoc """
+  Extracts a compact prompt dictionary from a corpus and optional registry input.
+  """
+
   alias SpectreKinetic.Runtime
 
   @shortdoc "Extract a compact AL dictionary from a corpus and optional registry"
 
   @switches [corpus: :string, registry: :string, seed: :string, out: :string, top_n: :integer]
 
+  @doc """
+  Runs the dictionary extraction helper with the provided CLI arguments.
+  """
+  @spec run([binary()]) :: any()
   @impl true
   def run(argv) do
     {opts, _args, invalid} = OptionParser.parse(argv, strict: @switches)
