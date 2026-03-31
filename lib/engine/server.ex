@@ -243,6 +243,9 @@ defmodule SpectreKinetic.Server do
       Map.get(request, :confidence) || Map.get(request, "confidence")
   end
 
+  @spec resolve_config(keyword()) ::
+          {:ok, %{model_dir: binary(), registry_mcr: binary()}}
+          | {:error, {:invalid_config, term()}}
   defp resolve_config(opts) do
     case Runtime.resolve_runtime_paths(opts) do
       {:ok, paths} -> {:ok, paths}
@@ -250,6 +253,7 @@ defmodule SpectreKinetic.Server do
     end
   end
 
+  @spec open_handle(binary(), binary()) :: {:ok, reference()} | {:error, {:nif_open_failed, term()}}
   defp open_handle(model_dir, registry_mcr) do
     case Native.open(model_dir, registry_mcr) do
       handle when is_reference(handle) -> {:ok, handle}

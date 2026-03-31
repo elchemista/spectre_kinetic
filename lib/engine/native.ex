@@ -4,7 +4,7 @@ defmodule SpectreKinetic.Native do
   use Rustler, otp_app: :spectre_kinetic, crate: :spectre_ffi
 
   @doc false
-  @spec open(binary(), binary()) :: reference() | no_return()
+  @spec open(binary(), binary()) :: reference() | {:error, term()} | no_return()
   def open(_model_dir, _registry_mcr), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc false
