@@ -195,7 +195,6 @@ Plan a whole LLM response with multiple actions:
 
   ```al
   LIST DIRECTORY WITH: PATH="/var/log"
-  ```
   """)
 
 Enum.map(chain.actions, &{&1.index, &1.selected_tool, &1.args})
@@ -213,24 +212,216 @@ Parse one AL helper-side:
 SpectreKinetic.parse_al(~s|CREATE PAYMENT LINK WITH: AMOUNT=5000 CURRENCY="usd"|)
 ```
 
+## Dispatcher Concurrency And Scaling
+
+One `SpectreKinetic` server is a good default when you want one supervised planner service:
+
+- simple startup and supervision
+- one shared named process to call from anywhere in the app
+- one native handle opened once at boot
+
+But one dispatcher also means one Elixir mailbox and one native handle. Under heavy traffic, that single process can become a bottleneck because every `plan/3`, `plan_request/2`, `plan_json/2`, `add_action/2`, and `delete_action/2` request is serialized through the same server.
+
+If you need more throughput, start multiple dispatchers. Each dispatcher opens its own native handle, so planning work can run in parallel across workers.
+
+```elixir
+children = [
+  {SpectreKinetic,
+   name: :spectre_planner_a,
+   model_dir: "/abs/path/to/pack",
+   registry_mcr: "/abs/path/to/registry.mcr"},
+  {SpectreKinetic,
+   name: :spectre_planner_b,
+   model_dir: "/abs/path/to/pack",
+   registry_mcr: "/abs/path/to/registry.mcr"}
+]
+
+{:ok, _pid} = Supervisor.start_link(children, strategy: :one_for_one)
+
+servers = [:spectre_planner_a, :spectre_planner_b]
+
+results =
+  [
+    ~s|INSTALL PACKAGE WITH: PACKAGE="nginx"|,
+    ~s|LIST DIRECTORY WITH: PATH="/var/log"|,
+    ~s|CREATE STRIPE PAYMENT LINK WITH: AMOUNT=5000 PRODUCT_NAME="Premium Plan"|
+  ]
+  |> Task.async_stream(
+    fn al ->
+      server = Enum.random(servers)
+      SpectreKinetic.plan(server, al)
+    end,
+    ordered: false,
+    max_concurrency: length(servers)
+  )
+  |> Enum.to_list()
+```
+
+Keep these tradeoffs in mind:
+
+- one dispatcher is easiest to reason about, but it serializes traffic
+- many dispatchers can improve throughput, but each one opens its own model/registry handle
+- more workers usually mean more memory use and more startup cost
+- if you mutate the in-memory registry with `add_action/2`, `delete_action/2`, or `reload_registry/2`, apply the same change to every worker to keep them in sync
+
 ## Result Shapes
 
-`%SpectreKinetic.Action{}`
+### `%SpectreKinetic.Action{}`
 
-- `index`: position inside a chain, when relevant
-- `al`: the final AL string that was planned
-- `status`: `:ok`, `:no_tool`, `:missing_args`, `:ambiguous_mapping`, or `:error`
-- `selected_tool`: matched tool id or `nil`
-- `confidence`: planner score
-- `args`: final mapped args
-- `missing`: missing required params
-- `notes`: planner notes
-- `alternatives`: ranked fallback entries
-- `error`: extraction or wrapper-level error
+`plan/3`, `plan_request/2`, and `plan_json/2` return one `%SpectreKinetic.Action{}`.
 
-`%SpectreKinetic.ActionChain{}`
+Fields:
 
-- `actions`: ordered list of `%SpectreKinetic.Action{}`
+- `index`
+  - Position inside a chain result.
+  - `nil` for a standalone `plan/3` call.
+
+- `al`
+  - The AL string that was actually planned.
+  - This is the normalized or extracted instruction the planner used as input.
+
+- `status`
+  - Planner outcome.
+  - Common values are `:ok`, `:no_tool`, `:missing_args`, `:ambiguous_mapping`, and `:error`.
+
+- `selected_tool`
+  - The matched tool id.
+  - `nil` when nothing passed the threshold or when planning failed before a tool could be selected.
+
+- `confidence`
+  - Similarity score for the selected tool.
+  - Usually a float, or `nil` when no tool was selected.
+
+- `args`
+  - Final mapped arguments ready to send to the selected tool.
+  - Always a map.
+
+- `missing`
+  - Required parameter names that are still missing after mapping and defaults.
+  - Usually an empty list when `status == :ok`.
+
+- `notes`
+  - Planner notes about mapping quality, unmatched fields, or useful hints for the caller.
+  - Always a list of strings.
+
+- `alternatives`
+  - Ranked fallback entries returned by the planner.
+  - Each entry is a map with:
+    - `:kind` as either `:candidate` or `:suggestion`
+    - `:id` as the alternative tool id
+    - `:score` as the alternative score
+    - `:al` as a suggested AL command when the entry is a suggestion
+
+- `error`
+  - Wrapper-level or extraction-level failure reason.
+  - Typically set only when `status == :error`.
+
+Full example:
+
+```elixir
+%SpectreKinetic.Action{
+  index: nil,
+  al: ~s|INSTALL PACKAGE WITH: PACKAGE="nginx"|,
+  status: :ok,
+  selected_tool: "Linux.Apt.install/1",
+  confidence: 0.9821,
+  args: %{"package" => "nginx"},
+  missing: [],
+  notes: [],
+  alternatives: [
+    %{kind: :candidate, id: "Linux.Dnf.install/1", score: 0.7312},
+    %{kind: :candidate, id: "Linux.Pacman.install/1", score: 0.7024}
+  ],
+  error: nil
+}
+```
+
+Example when no tool passes the threshold:
+
+```elixir
+%SpectreKinetic.Action{
+  index: nil,
+  al: "DO SOMETHING COMPLETELY UNKNOWN",
+  status: :no_tool,
+  selected_tool: nil,
+  confidence: nil,
+  args: %{},
+  missing: [],
+  notes: [],
+  alternatives: [
+    %{
+      kind: :suggestion,
+      id: "Linux.Apt.install/1",
+      score: 0.41,
+      al: ~s|INSTALL PACKAGE WITH: PACKAGE="something"|
+    }
+  ],
+  error: nil
+}
+```
+
+### `%SpectreKinetic.ActionChain{}`
+
+`plan_chain/3` returns one `%SpectreKinetic.ActionChain{}`.
+
+Fields:
+
+- `actions`
+  - Ordered list of `%SpectreKinetic.Action{}` values.
+  - Order matches the extracted execution order from the source text.
+  - Entries can include successful actions and failed ones with `status: :error`.
+
+Full example:
+
+```elixir
+%SpectreKinetic.ActionChain{
+  actions: [
+    %SpectreKinetic.Action{
+      index: 0,
+      al: ~s|INSTALL PACKAGE WITH: PACKAGE="nginx"|,
+      status: :ok,
+      selected_tool: "Linux.Apt.install/1",
+      confidence: 0.9821,
+      args: %{"package" => "nginx"},
+      missing: [],
+      notes: [],
+      alternatives: [
+        %{kind: :candidate, id: "Linux.Dnf.install/1", score: 0.7312}
+      ],
+      error: nil
+    },
+    %SpectreKinetic.Action{
+      index: 1,
+      al: ~s|LIST DIRECTORY WITH: PATH="/var/log"|,
+      status: :ok,
+      selected_tool: "Linux.Coreutils.ls/1",
+      confidence: 0.9553,
+      args: %{"path" => "/var/log"},
+      missing: [],
+      notes: [],
+      alternatives: [],
+      error: nil
+    },
+    %SpectreKinetic.Action{
+      index: 2,
+      al: "BROKEN ACTION",
+      status: :error,
+      selected_tool: nil,
+      confidence: nil,
+      args: %{},
+      missing: [],
+      notes: [],
+      alternatives: [],
+      error: :invalid_al_verb
+    }
+  ]
+}
+```
+
+Useful helpers:
+
+- `SpectreKinetic.ActionChain.count(chain)` returns the number of actions
+- `SpectreKinetic.ActionChain.ok_actions(chain)` returns only actions with `status == :ok`
 
 ## LLM Workflow
 
