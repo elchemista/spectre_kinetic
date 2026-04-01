@@ -90,6 +90,90 @@ defmodule SpectreKinetic.IntegrationTest do
     assert SpectreKinetic.action_count(pid) == initial_count
   end
 
+  test "reranking uses recipient value shape to disambiguate message tools", %{pid: pid} do
+    email_action = %{
+      id: "Dynamic.Email.send/2",
+      module: "Dynamic.Email",
+      name: "send",
+      arity: 2,
+      doc: "Send a message to an email recipient",
+      spec: "send(to :: String.t(), body :: String.t()) :: :ok",
+      args: [
+        %{
+          name: "to",
+          type: "String.t()",
+          required: true,
+          aliases: ["recipient", "email"]
+        },
+        %{
+          name: "body",
+          type: "String.t()",
+          required: true,
+          aliases: ["message", "text"]
+        }
+      ],
+      examples: ["SEND MESSAGE WITH: TO={to} BODY={body}"]
+    }
+
+    sms_action = %{
+      id: "Dynamic.Sms.send/2",
+      module: "Dynamic.Sms",
+      name: "send",
+      arity: 2,
+      doc: "Send a message to a phone recipient",
+      spec: "send(to :: String.t(), body :: String.t()) :: :ok",
+      args: [
+        %{
+          name: "to",
+          type: "String.t()",
+          required: true,
+          aliases: ["recipient", "phone", "number"]
+        },
+        %{
+          name: "body",
+          type: "String.t()",
+          required: true,
+          aliases: ["message", "text"]
+        }
+      ],
+      examples: ["SEND MESSAGE WITH: TO={to} BODY={body}"]
+    }
+
+    assert :ok = SpectreKinetic.add_action(pid, email_action)
+    assert :ok = SpectreKinetic.add_action(pid, sms_action)
+
+    on_exit(fn ->
+      SpectreKinetic.delete_action(pid, "Dynamic.Email.send/2")
+      SpectreKinetic.delete_action(pid, "Dynamic.Sms.send/2")
+    end)
+
+    assert {:ok, %Action{} = email} =
+             SpectreKinetic.plan(
+               pid,
+               ~s(SEND MESSAGE WITH: TO="dev@example.com" BODY="hello"),
+               tool_threshold: 0.0,
+               mapping_threshold: 0.0
+             )
+
+    assert email.selected_tool == "Dynamic.Email.send/2"
+    assert is_float(email.tool_score)
+    assert is_float(email.mapping_score)
+    assert email.combined_score == email.confidence
+
+    assert {:ok, %Action{} = sms} =
+             SpectreKinetic.plan(
+               pid,
+               ~s(SEND MESSAGE WITH: TO="+15551234567" BODY="hello"),
+               tool_threshold: 0.0,
+               mapping_threshold: 0.0
+             )
+
+    assert sms.selected_tool == "Dynamic.Sms.send/2"
+    assert is_float(sms.tool_score)
+    assert is_float(sms.mapping_score)
+    assert sms.combined_score == sms.confidence
+  end
+
   test "plan_chain/3 extracts and plans multiple actions in order", %{pid: pid} do
     response = """
     I'll do this in sequence.

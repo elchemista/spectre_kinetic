@@ -14,6 +14,9 @@ defmodule SpectreKinetic.Action do
              :status,
              :selected_tool,
              :confidence,
+             :tool_score,
+             :mapping_score,
+             :combined_score,
              :args,
              :missing,
              :notes,
@@ -32,6 +35,12 @@ defmodule SpectreKinetic.Action do
     selected_tool: nil,
     # Similarity/confidence score of the selected tool.
     confidence: nil,
+    # Raw action-text retrieval score for the selected tool.
+    tool_score: nil,
+    # Aggregate slot-fit score for the selected tool.
+    mapping_score: nil,
+    # Final late-fusion score used for selection.
+    combined_score: nil,
     # Final mapped arguments ready to pass to the selected tool.
     args: %{},
     # Required parameters still missing after mapping and defaults.
@@ -55,7 +64,10 @@ defmodule SpectreKinetic.Action do
             required(:kind) => :candidate | :suggestion,
             required(:id) => binary(),
             required(:score) => float() | integer() | nil,
-            optional(:al) => binary() | nil
+            optional(:al) => binary() | nil,
+            optional(:tool_score) => float() | integer() | nil,
+            optional(:mapping_score) => float() | integer() | nil,
+            optional(:combined_score) => float() | integer() | nil
           }
 
   @typedoc """
@@ -70,6 +82,9 @@ defmodule SpectreKinetic.Action do
           status: atom() | nil,
           selected_tool: binary() | nil,
           confidence: float() | nil,
+          tool_score: float() | nil,
+          mapping_score: float() | nil,
+          combined_score: float() | nil,
           args: map(),
           missing: [binary()],
           notes: [binary()],
@@ -93,7 +108,10 @@ defmodule SpectreKinetic.Action do
       al: al,
       status: normalize_status(repaired["status"]),
       selected_tool: repaired["selected_tool"],
-      confidence: repaired["confidence"],
+      confidence: repaired["confidence"] || repaired["combined_score"],
+      tool_score: repaired["tool_score"],
+      mapping_score: repaired["mapping_score"],
+      combined_score: repaired["combined_score"],
       args: repaired["args"] || %{},
       missing: repaired["missing"] || [],
       notes: repaired["notes"] || [],
@@ -177,7 +195,10 @@ defmodule SpectreKinetic.Action do
       %{
         kind: :candidate,
         id: candidate["id"],
-        score: candidate["score"]
+        score: candidate["score"],
+        tool_score: candidate["tool_score"],
+        mapping_score: candidate["mapping_score"],
+        combined_score: candidate["combined_score"]
       }
     end)
   end
