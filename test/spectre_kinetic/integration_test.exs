@@ -174,7 +174,8 @@ defmodule SpectreKinetic.IntegrationTest do
     assert sms.combined_score == sms.confidence
   end
 
-  test "planner recovers inline recipient args without requiring WITH", %{pid: pid} do
+  test "planner recovers inline recipient args without requiring WITH and removes stale unmatched notes",
+       %{pid: pid} do
     email_action = %{
       id: "Dynamic.Email.send/2",
       module: "Dynamic.Email",
@@ -208,12 +209,16 @@ defmodule SpectreKinetic.IntegrationTest do
     for al <- [
           "SEND ME EMAIL to yuriy.zhar@gmail.com",
           "SEND ME EMAIL TO: yuriy.zhar@gmail.com",
-          "SEND ME EMAIL TO=yuriy.zhar@gmail.com"
+          "SEND ME EMAIL TO=yuriy.zhar@gmail.com",
+          "SEND ME EMAIL RECIPIENT=yuriy.zhar@gmail.com",
+          "SEND ME EMAIL recipient: yuriy.zhar@gmail.com",
+          "SEND ME EMAIL EMAIL= yuriy.zhar@gmail.com"
         ] do
       assert {:ok, %Action{} = action} = SpectreKinetic.plan(pid, al)
       assert action.selected_tool == "Dynamic.Email.send/2"
       assert action.args["to"] == "yuriy.zhar@gmail.com"
       refute "to" in action.missing
+      refute Enum.any?(action.notes, &String.starts_with?(&1, "unmatched slots:"))
     end
   end
 
