@@ -28,6 +28,17 @@ defmodule SpectreKinetic.Parser do
           | :unterminated_al_fence
           | :invalid_al_verb
 
+  @space_assign_keys ~w(
+    to from cc bcc reply_to recipient phone number
+    subject body text message title
+    path file source dest destination target
+    url uri repo branch host port method payload amount currency
+  )
+
+  @loose_value_stopwords ~w(with via using into onto in on at by for as and or)
+
+  @explicit_arg_pattern ~r/(^|[\s,;])(?<key>[A-Za-z0-9_]+)\s*(?:=|:)\s*(?<value>"[^"]*"|'[^']*'|\{[^}]*\}|[^\s,;]+)/u
+
   @doc """
   Normalizes AL text by unwrapping common LLM wrappers and collapsing whitespace.
   """
@@ -63,12 +74,13 @@ defmodule SpectreKinetic.Parser do
     with {:ok, normalized} <- validate(al_text) do
       {head, with_part} = split_with_section(normalized)
       {verb, object} = parse_verb_object(head)
+      args_source = with_part || normalized
 
       %{
         al: normalized,
         verb: verb,
         object: object,
-        args: parse_args(with_part || "")
+        args: parse_args(args_source)
       }
     end
   end
@@ -301,9 +313,34 @@ defmodule SpectreKinetic.Parser do
   defp parse_args(""), do: %{}
 
   defp parse_args(text) do
+    explicit_args =
+      text
+      |> then(&Regex.scan(@explicit_arg_pattern, &1, capture: ["key", "value"]))
+      |> Enum.reduce(%{}, &put_scanned_arg/2)
+
+    parse_loose_space_args(text, explicit_args)
+  end
+
+  defp put_scanned_arg([key, value], acc),
+    do: Map.put(acc, String.upcase(key), parse_arg_value(value))
+
+  defp parse_loose_space_args(text, explicit_args) do
     text
     |> split_arg_tokens()
-    |> Enum.reduce(%{}, &put_arg_token/2)
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.reduce(explicit_args, fn [key, value], acc ->
+      upper_key = String.upcase(key)
+      lower_key = String.downcase(key)
+      parsed_value = parse_arg_value(value)
+
+      cond do
+        Map.has_key?(acc, upper_key) -> acc
+        lower_key not in @space_assign_keys -> acc
+        parsed_value == "" -> acc
+        String.downcase(parsed_value) in @loose_value_stopwords -> acc
+        true -> Map.put(acc, upper_key, parsed_value)
+      end
+    end)
   end
 
   defp split_arg_tokens(text) do
@@ -350,30 +387,6 @@ defmodule SpectreKinetic.Parser do
     end
   end
 
-  defp put_arg_token(token, acc) do
-    case split_arg_assignment(token) do
-      {key, value} -> Map.put(acc, String.upcase(key), value)
-      :error -> acc
-    end
-  end
-
-  defp split_arg_assignment(token) do
-    case :binary.match(token, "=") do
-      {index, 1} ->
-        key = binary_part(token, 0, index) |> String.trim()
-        value = binary_part(token, index + 1, byte_size(token) - index - 1) |> parse_arg_value()
-
-        if valid_arg_key?(key) and value != "" do
-          {key, value}
-        else
-          :error
-        end
-
-      :nomatch ->
-        :error
-    end
-  end
-
   defp parse_arg_value(<<"\"", rest::binary>>), do: unquote_arg(rest, ?")
   defp parse_arg_value(<<"'", rest::binary>>), do: unquote_arg(rest, ?')
   defp parse_arg_value(value), do: value |> String.trim() |> trim_terminal_punctuation()
@@ -390,14 +403,6 @@ defmodule SpectreKinetic.Parser do
       trimmed
     end
     |> trim_terminal_punctuation()
-  end
-
-  defp valid_arg_key?(key) do
-    key != "" and
-      String.to_charlist(key)
-      |> Enum.all?(fn char ->
-        char in ?A..?Z or char in ?a..?z or char in ?0..?9 or char == ?_
-      end)
   end
 
   defp first_token(text) do

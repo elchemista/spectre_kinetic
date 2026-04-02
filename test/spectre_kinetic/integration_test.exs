@@ -174,6 +174,49 @@ defmodule SpectreKinetic.IntegrationTest do
     assert sms.combined_score == sms.confidence
   end
 
+  test "planner recovers inline recipient args without requiring WITH", %{pid: pid} do
+    email_action = %{
+      id: "Dynamic.Email.send/2",
+      module: "Dynamic.Email",
+      name: "send",
+      arity: 2,
+      doc: "Send a message to an email recipient",
+      spec: "send(to :: String.t(), body :: String.t()) :: :ok",
+      args: [
+        %{
+          name: "to",
+          type: "String.t()",
+          required: true,
+          aliases: ["recipient", "email"]
+        },
+        %{
+          name: "body",
+          type: "String.t()",
+          required: true,
+          aliases: ["message", "text"]
+        }
+      ],
+      examples: ["SEND MESSAGE WITH: TO={to} BODY={body}"]
+    }
+
+    assert :ok = SpectreKinetic.add_action(pid, email_action)
+
+    on_exit(fn ->
+      SpectreKinetic.delete_action(pid, "Dynamic.Email.send/2")
+    end)
+
+    for al <- [
+          "SEND ME EMAIL to yuriy.zhar@gmail.com",
+          "SEND ME EMAIL TO: yuriy.zhar@gmail.com",
+          "SEND ME EMAIL TO=yuriy.zhar@gmail.com"
+        ] do
+      assert {:ok, %Action{} = action} = SpectreKinetic.plan(pid, al)
+      assert action.selected_tool == "Dynamic.Email.send/2"
+      assert action.args["to"] == "yuriy.zhar@gmail.com"
+      refute "to" in action.missing
+    end
+  end
+
   test "plan_chain/3 extracts and plans multiple actions in order", %{pid: pid} do
     response = """
     I'll do this in sequence.
