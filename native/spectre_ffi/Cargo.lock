@@ -909,6 +909,7 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 [[package]]
 name = "spectre-core"
 version = "0.1.0"
+source = "git+https://github.com/elchemista/spectre-kinetic-engine.git?rev=b51a04802d5bc2f6c7136db7d700a81abe26b115#b51a04802d5bc2f6c7136db7d700a81abe26b115"
 dependencies = [
  "half",
  "ndarray 0.16.1",
@@ -921,6 +922,7 @@ dependencies = [
 [[package]]
 name = "spectre-train"
 version = "0.1.0"
+source = "git+https://github.com/elchemista/spectre-kinetic-engine.git?rev=b51a04802d5bc2f6c7136db7d700a81abe26b115#b51a04802d5bc2f6c7136db7d700a81abe26b115"
 dependencies = [
  "half",
  "ndarray 0.16.1",
