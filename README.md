@@ -287,7 +287,7 @@ For a fuller explanation of:
 - why the fallback stays efficient
 - how Axon reranker artifacts differ from ONNX reranker artifacts
 
-see [TRAIN.md](https://github.com/elchemista/spectre_kinetic/TRAIN.md).
+see [TRAIN.md](https://github.com/elchemista/spectre_kinetic/blob/master/TRAIN.md).
 
 ## Prompt Helpers
 
