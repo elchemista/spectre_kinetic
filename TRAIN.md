@@ -31,7 +31,7 @@ The ambiguity conditions are:
 
 When that happens, the planner reranks only the top `fallback_top_k` candidates, not the full registry.
 
-That logic lives in [lib/planner/planner.ex](https://github.com/elchemista/spectre_kinetic/lib/planner/planner.ex).
+That logic lives in [lib/planner/planner.ex](https://github.com/elchemista/spectre_kinetic/blob/master/lib/planner/planner.ex).
 
 ## High-Level Flow
 
@@ -46,7 +46,7 @@ The training pipeline is:
 7. Derive simple calibration thresholds from the resulting scores.
 8. Save the trained parameters and metadata.
 
-The training code is in [lib/reranker/trainer.ex](https://github.com/elchemista/spectre_kinetic/lib/reranker/trainer.ex).
+The training code is in [lib/reranker/trainer.ex](https://github.com/elchemista/spectre_kinetic/blob/master/lib/reranker/trainer.ex).
 
 ## Training Command
 
@@ -69,7 +69,7 @@ Supported options:
 - `--epochs`
 - `--learning_rate`
 
-The task implementation is in [lib/mix/tasks/spectre.train_reranker.ex](https://github.com/elchemista/spectre_kinetic/lib/mix/tasks/spectre.train_reranker.ex).
+The task implementation is in [lib/mix/tasks/spectre.train_reranker.ex](https://github.com/elchemista/spectre_kinetic/blob/master/lib/mix/tasks/spectre.train_reranker.ex).
 
 ## Dataset Format
 
@@ -126,7 +126,7 @@ Where:
 - `abs(q - t)` captures distance-like disagreement
 - `q * t` captures elementwise interaction
 
-This logic lives in [lib/reranker/feature_builder.ex](https://github.com/elchemista/spectre_kinetic/lib/reranker/feature_builder.ex).
+This logic lives in [lib/reranker/feature_builder.ex](https://github.com/elchemista/spectre_kinetic/blob/master/lib/reranker/feature_builder.ex).
 
 If the encoder embedding dimension is `d`, the final feature dimension is:
 
@@ -224,7 +224,7 @@ The current calibration builder emits:
 - `reranker_reject_threshold`
 - positive and negative example counts
 
-That logic is in [lib/reranker/calibration.ex](https://github.com/elchemista/spectre_kinetic/lib/reranker/calibration.ex).
+That logic is in [lib/reranker/calibration.ex](https://github.com/elchemista/spectre_kinetic/blob/master/lib/reranker/calibration.ex).
 
 ## How Calibration Works
 
@@ -251,7 +251,7 @@ It is useful as tuning metadata, but the runtime does not currently auto-apply t
 
 ## How The Trained Reranker Is Used At Runtime
 
-The Axon reranker runtime is implemented in [lib/reranker/runtime/axon.ex](https://github.com/elchemista/spectre_kinetic/lib/reranker/runtime/axon.ex).
+The Axon reranker runtime is implemented in [lib/reranker/runtime/axon.ex](https://github.com/elchemista/spectre_kinetic/blob/master/lib/reranker/runtime/axon.ex).
 
 At runtime it:
 
@@ -359,7 +359,7 @@ This project currently has **two reranker runtime stories**.
 
 ### ONNX reranker runtime
 
-The default runtime module is [lib/reranker/runtime.ex](https://github.com/elchemista/spectre_kinetic/lib/reranker/runtime.ex).
+The default runtime module is [lib/reranker/runtime.ex](https://github.com/elchemista/spectre_kinetic/blob/master/lib/reranker/runtime.ex).
 
 It expects:
 
@@ -370,7 +370,7 @@ This is a token-level pair scorer using ONNX and `Tokenizers`.
 
 ### Axon reranker runtime
 
-The training pipeline in this repo produces artifacts for [lib/reranker/runtime/axon.ex](https://github.com/elchemista/spectre_kinetic/lib/reranker/runtime/axon.ex).
+The training pipeline in this repo produces artifacts for [lib/reranker/runtime/axon.ex](https://github.com/elchemista/spectre_kinetic/blob/master/lib/reranker/runtime/axon.ex).
 
 It expects:
 
