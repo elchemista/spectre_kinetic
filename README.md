@@ -112,7 +112,7 @@ Plan a noisy LLM response:
 
   ```al
   LIST DIRECTORY WITH: PATH="/var/log"
-  ```
+  ``
   """)
 ```
 
