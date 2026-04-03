@@ -118,8 +118,6 @@ Plan a noisy LLM response:
 
 ## Plan4: Code-First Tool Registration
 
-The code-first flow is now implemented.
-
 You mark planner-visible functions with:
 
 - `use SpectreKinetic`
@@ -289,7 +287,7 @@ For a fuller explanation of:
 - why the fallback stays efficient
 - how Axon reranker artifacts differ from ONNX reranker artifacts
 
-see [TRAIN.md](/home/dev/Sviluppo/personal/spectre_kinetic/TRAIN.md).
+see [TRAIN.md](https://github.com/elchemista/spectre_kinetic/TRAIN.md).
 
 ## Prompt Helpers
 
