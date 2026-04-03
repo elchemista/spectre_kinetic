@@ -6,7 +6,7 @@ defmodule Mix.Tasks.Spectre.Show do
   resolve one AL instruction or response chain.
   """
 
-  alias SpectreKinetic.Runtime
+  alias SpectreKinetic.RuntimeConfig
 
   @shortdoc "Inspect planner artifacts and optionally resolve an AL statement"
 
@@ -39,12 +39,12 @@ defmodule Mix.Tasks.Spectre.Show do
       |> maybe_put(:registry_json, opts[:registry_json])
       |> maybe_put(:fallback_model_dir, opts[:fallback_model])
 
-    {:ok, pid} = SpectreKinetic.start_link(runtime_opts ++ [name: nil])
-    {:ok, resolved_paths} = Runtime.resolve_runtime_paths(runtime_opts)
+    runtime = SpectreKinetic.load_runtime!(runtime_opts)
+    {:ok, resolved_paths} = RuntimeConfig.resolve_runtime_paths(runtime_opts)
 
     summary = %{
       version: SpectreKinetic.version(),
-      action_count: SpectreKinetic.action_count(pid),
+      action_count: SpectreKinetic.action_count(runtime),
       encoder_model_dir: resolved_paths.encoder_model_dir,
       compiled_registry: resolved_paths.compiled_registry,
       registry_json: resolved_paths.registry_json,
@@ -63,7 +63,7 @@ defmodule Mix.Tasks.Spectre.Show do
           |> maybe_put(:mapping_threshold, opts[:mapping_threshold])
           |> maybe_put(:slots, parse_slots(opts[:slot] || []))
 
-        payload = build_payload(pid, input_text, plan_opts, summary, opts)
+        payload = build_payload(runtime, input_text, plan_opts, summary, opts)
         render(payload, opts[:format] || "pretty")
     end
   end
@@ -91,14 +91,14 @@ defmodule Mix.Tasks.Spectre.Show do
     |> fallback_input(Keyword.get(opts, :al))
   end
 
-  defp build_payload(pid, input_text, plan_opts, summary, opts) do
+  defp build_payload(runtime, input_text, plan_opts, summary, opts) do
     case Keyword.fetch(opts, :al) do
       {:ok, _al} ->
-        {:ok, action} = SpectreKinetic.plan(pid, input_text, plan_opts)
+        {:ok, action} = SpectreKinetic.plan(runtime, input_text, plan_opts)
         %{summary: summary, al: input_text, action: action}
 
       :error ->
-        {:ok, chain} = SpectreKinetic.plan_chain(pid, input_text, plan_opts)
+        {:ok, chain} = SpectreKinetic.plan_chain(runtime, input_text, plan_opts)
         %{summary: summary, chain: chain}
     end
   end

@@ -1,6 +1,6 @@
 # spectre_kinetic
 
-Elixir-first planning toolkit for agent action selection.
+Elixir-first planning toolkit for Action Language tool selection.
 
 `spectre_kinetic` takes Action Language (AL) such as:
 
@@ -15,29 +15,18 @@ and returns the best matching registered tool, mapped args, missing fields, and 
 ## What It Owns
 
 - AL extraction, normalization, and validation
-- planner runtime loading
-- registry compilation and loading
-- retrieval, scoring, and slot mapping
+- runtime loading from local artifacts
+- tool retrieval, scoring, and slot mapping
+- code-first tool extraction from Elixir modules
+- registry compilation into `registry.etf`
 - optional prompt and dictionary helpers
-- optional bounded reranker fallback for ambiguous tool selection
+- optional bounded reranker fallback
 
 ## What It Does Not Own
 
 - tool execution
 - workflow orchestration
 - retry/state-machine logic
-- Rust/NIF runtime infrastructure
-
-## Runtime Model
-
-The canonical runtime is a plain Elixir struct loaded from local artifacts:
-
-- `encoder_model_dir` for ONNX encoder inference
-- `compiled_registry` for precompiled `registry.etf`
-- optional `registry_json` for development and compilation flows
-- optional `fallback_model_dir` for reranker artifacts
-
-The server wrapper is now only a thin adapter over that runtime.
 
 ## Installation
 
@@ -49,14 +38,7 @@ def deps do
 end
 ```
 
-Core runtime dependencies:
-
-- `Nx`
-- `Ortex`
-- `Tokenizers`
-- optional `Axon` for Elixir-native reranker training
-
-## Configuration
+## Runtime Configuration
 
 ```elixir
 config :spectre_kinetic,
@@ -89,7 +71,7 @@ export SPECTRE_KINETIC_FALLBACK_MARGIN=0.12
 
 ## Quick Start
 
-Library-first:
+Load an explicit runtime and plan directly:
 
 ```elixir
 runtime =
@@ -100,7 +82,7 @@ runtime =
 {:ok, action} =
   SpectreKinetic.plan(
     runtime,
-    ~s|INSTALL PACKAGE WITH: PACKAGE="nginx"|
+    ~s(INSTALL PACKAGE WITH: PACKAGE="nginx")
   )
 
 action.selected_tool
@@ -108,7 +90,7 @@ action.args
 action.status
 ```
 
-Server wrapper:
+Use the optional server adapter:
 
 ```elixir
 {:ok, pid} =
@@ -116,14 +98,14 @@ Server wrapper:
     registry_json: "/abs/path/to/registry.json"
   )
 
-{:ok, action} = SpectreKinetic.plan(pid, ~s|LIST DIRECTORY WITH: PATH="/tmp"|)
+{:ok, action} = SpectreKinetic.plan(pid, ~s(LIST DIRECTORY WITH: PATH="/tmp"))
 ```
 
 Plan a noisy LLM response:
 
 ```elixir
 {:ok, chain} =
-  SpectreKinetic.plan_chain(pid, """
+  SpectreKinetic.plan_chain(runtime, """
   I will do this in order.
 
   <al>INSTALL PACKAGE WITH: PACKAGE="nginx"</al>
@@ -134,18 +116,117 @@ Plan a noisy LLM response:
   """)
 ```
 
-## Registry Pipeline
+## Plan4: Code-First Tool Registration
 
-Compile a human-editable registry into `registry.etf`:
+The code-first flow is now implemented.
+
+You mark planner-visible functions with:
+
+- `use SpectreKinetic`
+
+`@al` holds the canonical AL declaration for the next public function.
+Any `AL:` lines inside `@doc` are collected as extra examples.
+
+Example:
+
+```elixir
+defmodule MyApp.Emailer do
+  use SpectreKinetic
+
+  @al ~s(SEND EMAIL TO=email@gmail.com BODY=text)
+  @doc """
+  Send an email to a recipient.
+
+  AL: SEND EMAIL TO="dev@example.com" BODY="hello"
+  AL: SEND MAIL TO="ops@example.com" BODY="pager"
+  """
+  @spec send(email :: String.t(), text :: String.t()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send(email, text) do
+    {:ok, "#{email}:#{text}"}
+  end
+end
+```
+
+What gets inferred from that:
+
+- canonical example from `@al`
+- extra examples from `@doc`
+- function name and arity
+- parameter names from the function definition
+- types from the typespec when available
+- argument aliases from observed AL slot names
+
+Argument mapping rule:
+
+1. exact AL slot name to parameter name match
+2. positional fallback for any remaining slots
+
+So for:
+
+```elixir
+@al ~s(SEND EMAIL TO=email@gmail.com BODY=text)
+def send(email, text), do: ...
+```
+
+the inferred args are effectively:
+
+- `email` with alias `TO`
+- `text` with alias `BODY`
+
+If your function is:
+
+```elixir
+def send(to, body), do: ...
+```
+
+then no aliases need to be inferred for those slots because the exact-name rule already matches `TO -> to` and `BODY -> body`.
+
+## Extracting Tools
+
+Extract the code-defined tools from a compiled app into source registry JSON:
 
 ```bash
-mix spectre.compile_registry \
+mix extract_kinetic --app my_app --out registry.json
+```
+
+Extract and compile directly into `registry.etf` in one step:
+
+```bash
+mix extract_kinetic \
+  --app my_app \
+  --encoder artifacts/encoder \
+  --out artifacts/registry/registry.etf
+```
+
+This task:
+
+1. compiles the app
+2. finds modules exporting `__spectre_tools__/0`
+3. reads docs and specs from compiled modules
+4. merges `@al` and `AL:` doc examples
+5. normalizes the result into the planner action schema
+6. writes either `registry.json` or `registry.etf`
+
+## Compiling Registry Artifacts
+
+If you already have a `registry.json`, compile it with:
+
+```bash
+mix compile_kinetic \
   --registry registry.json \
   --encoder artifacts/encoder \
   --out artifacts/registry/registry.etf
 ```
 
-## Encoder Pipeline
+This compiles:
+
+- normalized action definitions
+- ordered action IDs
+- precomputed tool-card embeddings
+- registry metadata
+
+## Encoder Artifacts
 
 Download encoder artifacts for runtime embedding:
 
@@ -155,7 +236,16 @@ mix spectre.download_encoder \
   --out artifacts/encoder
 ```
 
-## Elixir-Native Training
+Typical layout:
+
+```text
+artifacts/encoder/
+├── config.json
+├── model.onnx
+└── tokenizer.json
+```
+
+## Reranker Training
 
 Reranker training is Elixir-native via `Nx` and `Axon`:
 
@@ -177,6 +267,29 @@ The task writes:
 - `params.etf`
 - `metadata.json`
 - `calibration.json`
+
+If you want to use the Axon reranker at runtime:
+
+```elixir
+runtime =
+  SpectreKinetic.load_runtime!(
+    registry_json: "/abs/path/to/registry.json",
+    encoder_model_dir: "/abs/path/to/artifacts/encoder",
+    tool_selection_fallback: :reranker,
+    fallback_model_dir: "/abs/path/to/artifacts/reranker",
+    fallback_runtime_module: SpectreKinetic.Reranker.Runtime.Axon
+  )
+```
+
+For a fuller explanation of:
+
+- how the training matrix is built
+- what the model actually learns
+- when the planner invokes reranking
+- why the fallback stays efficient
+- how Axon reranker artifacts differ from ONNX reranker artifacts
+
+see [TRAIN.md](/home/dev/Sviluppo/personal/spectre_kinetic/TRAIN.md).
 
 ## Prompt Helpers
 

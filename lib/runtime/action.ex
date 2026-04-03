@@ -24,34 +24,19 @@ defmodule SpectreKinetic.Action do
              :error
            ]}
 
-  defstruct [
-    # Position inside an extracted action chain. `nil` for single-action planning.
-    index: nil,
-    # The AL string that was actually planned.
-    al: nil,
-    # Planner outcome such as `:ok`, `:no_tool`, `:missing_args`, or `:error`.
-    status: nil,
-    # Selected tool id returned by the planner.
-    selected_tool: nil,
-    # Similarity/confidence score of the selected tool.
-    confidence: nil,
-    # Raw action-text retrieval score for the selected tool.
-    tool_score: nil,
-    # Aggregate slot-fit score for the selected tool.
-    mapping_score: nil,
-    # Final late-fusion score used for selection.
-    combined_score: nil,
-    # Final mapped arguments ready to pass to the selected tool.
-    args: %{},
-    # Required parameters still missing after mapping and defaults.
-    missing: [],
-    # Planner notes, for example unmatched slots or mapping remarks.
-    notes: [],
-    # Fallback entries exposed as either candidates or suggestions.
-    alternatives: [],
-    # Wrapper-level or extraction-level error reason.
-    error: nil
-  ]
+  defstruct index: nil,
+            al: nil,
+            status: nil,
+            selected_tool: nil,
+            confidence: nil,
+            tool_score: nil,
+            mapping_score: nil,
+            combined_score: nil,
+            args: %{},
+            missing: [],
+            notes: [],
+            alternatives: [],
+            error: nil
 
   @typedoc """
   One alternative returned when the planner has either:
@@ -72,9 +57,6 @@ defmodule SpectreKinetic.Action do
 
   @typedoc """
   One planned action result.
-
-  The most important fields in practice are `selected_tool`, `confidence`,
-  `args`, `status`, and `alternatives`.
   """
   @type t :: %__MODULE__{
           index: non_neg_integer() | nil,
@@ -94,10 +76,6 @@ defmodule SpectreKinetic.Action do
 
   @doc """
   Builds an action struct from the decoded planner payload.
-
-  This function also performs a small Elixir-side repair step for obvious
-  literal values already present in the AL text when the planner reports
-  missing args for those same exact slot names.
   """
   @spec from_plan(binary(), map(), non_neg_integer() | nil) :: t()
   def from_plan(al, plan, index \\ nil) when is_binary(al) and is_map(plan) do
@@ -121,9 +99,6 @@ defmodule SpectreKinetic.Action do
 
   @doc """
   Builds an error action for extraction or wrapper failures.
-
-  This is used for cases where the planner was not able to run because
-  the extracted AL block was malformed or rejected before planning.
   """
   @spec error(binary() | nil, term(), non_neg_integer() | nil) :: t()
   def error(al, reason, index \\ nil) do
@@ -145,9 +120,6 @@ defmodule SpectreKinetic.Action do
 
   defp normalize_status(other), do: other
 
-  # Reuse literal values from the AL text only for exact missing arg names.
-  # This keeps the Elixir wrapper small while still smoothing over obvious
-  # `WITH:` cases that the planner may leave unresolved.
   defp repair_missing_args(plan, parsed_args) do
     missing = plan["missing"] || []
     current_args = plan["args"] || %{}
@@ -159,7 +131,8 @@ defmodule SpectreKinetic.Action do
   end
 
   defp merge_recovered_args(plan, _current_args, _missing, recovered, _recovered_slots)
-       when map_size(recovered) == 0, do: plan
+       when map_size(recovered) == 0,
+       do: plan
 
   defp merge_recovered_args(plan, current_args, missing, recovered, recovered_slots) do
     args = Map.merge(current_args, recovered)
@@ -233,7 +206,6 @@ defmodule SpectreKinetic.Action do
     end)
   end
 
-  # Suggestions appear when no tool passed the confidence threshold.
   defp build_alternatives(%{"suggestions" => [_ | _] = suggestions}) do
     Enum.map(suggestions, fn suggestion ->
       %{
@@ -245,8 +217,6 @@ defmodule SpectreKinetic.Action do
     end)
   end
 
-  # Candidates appear when the planner did rank tools but none need to be
-  # expanded into suggestion commands.
   defp build_alternatives(%{"candidates" => [_ | _] = candidates}) do
     Enum.map(candidates, fn candidate ->
       %{

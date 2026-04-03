@@ -39,15 +39,17 @@ defmodule SpectreKinetic.Planner.RegistryStoreTest do
 
     # Canonical name
     results = RegistryStore.resolve_alias(store, "to")
+
     assert Enum.any?(results, fn {id, canonical} ->
-      id == "Dynamic.Email.send/3" && canonical == "to"
-    end)
+             id == "Dynamic.Email.send/3" && canonical == "to"
+           end)
 
     # Alias
     results = RegistryStore.resolve_alias(store, "recipient")
+
     assert Enum.any?(results, fn {id, canonical} ->
-      id == "Dynamic.Email.send/3" && canonical == "to"
-    end)
+             id == "Dynamic.Email.send/3" && canonical == "to"
+           end)
 
     # Unknown alias
     assert RegistryStore.resolve_alias(store, "nonexistent") == []
@@ -119,11 +121,28 @@ defmodule SpectreKinetic.Planner.RegistryStoreTest do
       "doc" => "Send an outbound email message",
       "spec" => "send(to, subject, body)",
       "args" => [
-        %{"name" => "to", "type" => "String.t()", "required" => true, "aliases" => ["recipient", "email"]},
-        %{"name" => "subject", "type" => "String.t()", "required" => true, "aliases" => ["title"]},
-        %{"name" => "body", "type" => "String.t()", "required" => true, "aliases" => ["message", "text"]}
+        %{
+          "name" => "to",
+          "type" => "String.t()",
+          "required" => true,
+          "aliases" => ["recipient", "email"]
+        },
+        %{
+          "name" => "subject",
+          "type" => "String.t()",
+          "required" => true,
+          "aliases" => ["title"]
+        },
+        %{
+          "name" => "body",
+          "type" => "String.t()",
+          "required" => true,
+          "aliases" => ["message", "text"]
+        }
       ],
-      "examples" => ["SEND OUTBOUND EMAIL WITH: TO=user@example.com SUBJECT=\"Status\" BODY=\"Report\""]
+      "examples" => [
+        "SEND OUTBOUND EMAIL WITH: TO=user@example.com SUBJECT=\"Status\" BODY=\"Report\""
+      ]
     }
   end
 end

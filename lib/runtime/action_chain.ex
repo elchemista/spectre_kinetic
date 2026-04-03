@@ -1,19 +1,13 @@
 defmodule SpectreKinetic.ActionChain do
   @moduledoc """
   Ordered list of actions extracted from a text response or an explicit AL list.
-
-  The chain stays intentionally small. It is just the execution-ordered
-  collection of `%SpectreKinetic.Action{}` values returned by `plan_chain/3`.
   """
 
   alias SpectreKinetic.Action
 
   @derive {Jason.Encoder, only: [:actions]}
 
-  defstruct [
-    # Ordered planned actions, including failed extraction/planning entries.
-    actions: []
-  ]
+  defstruct actions: []
 
   @typedoc """
   Ordered action chain result.
@@ -24,9 +18,6 @@ defmodule SpectreKinetic.ActionChain do
 
   @doc """
   Builds a new action chain from a map of attributes.
-
-  Currently only `:actions` is stored, but the constructor keeps the call site
-  readable and leaves room for future extension without changing callers.
   """
   @spec new(map()) :: t()
   def new(attrs) when is_map(attrs) do

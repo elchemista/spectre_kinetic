@@ -67,9 +67,7 @@ defmodule Mix.Tasks.Spectre.DownloadEncoder do
     cond do
       curl = System.find_executable("curl") ->
         {output, status} =
-          System.cmd(curl, ["-fsSL", "--retry", "3", url, "-o", dest],
-            stderr_to_stdout: true
-          )
+          System.cmd(curl, ["-fsSL", "--retry", "3", url, "-o", dest], stderr_to_stdout: true)
 
         if status != 0 do
           Mix.raise("download failed (curl): #{output}")

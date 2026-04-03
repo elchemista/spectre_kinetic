@@ -30,9 +30,7 @@ defmodule SpectreKinetic.IntegrationTest do
     registry_json = TestRegistryHelper.registry_json()
 
     {:ok, pid} =
-      start_supervised(
-        {SpectreKinetic, registry_json: registry_json, name: nil}
-      )
+      start_supervised({SpectreKinetic, registry_json: registry_json, name: nil})
 
     {:ok, pid: pid, registry_json: registry_json}
   end
@@ -302,7 +300,10 @@ defmodule SpectreKinetic.IntegrationTest do
     assert action.selected_tool == nil
   end
 
-  test "reload_registry/2 can reload the same registry source", %{pid: pid, registry_json: registry_json} do
+  test "reload_registry/2 can reload the same registry source", %{
+    pid: pid,
+    registry_json: registry_json
+  } do
     assert :ok = SpectreKinetic.reload_registry(pid, registry_json)
     assert SpectreKinetic.action_count(pid) > 0
   end

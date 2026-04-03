@@ -1,4 +1,4 @@
-defmodule SpectreKinetic.Server do
+defmodule SpectreKinetic.Adapter.Server do
   @moduledoc """
   Thin `GenServer` adapter over the library-first planner runtime.
   """
@@ -8,7 +8,7 @@ defmodule SpectreKinetic.Server do
   alias SpectreKinetic.Action
   alias SpectreKinetic.Planner
   alias SpectreKinetic.Planner.Runtime, as: PlannerRuntime
-  alias SpectreKinetic.Runtime
+  alias SpectreKinetic.RuntimeConfig
 
   require Logger
 
@@ -69,7 +69,7 @@ defmodule SpectreKinetic.Server do
     case PlannerRuntime.load(opts) do
       {:ok, runtime} ->
         Logger.info(
-          "SpectreKinetic.Server ready (#{PlannerRuntime.action_count(runtime)} actions)"
+          "SpectreKinetic.Adapter.Server ready (#{PlannerRuntime.action_count(runtime)} actions)"
         )
 
         {:ok, %{runtime: runtime}}
@@ -85,25 +85,30 @@ defmodule SpectreKinetic.Server do
   end
 
   def handle_call({:plan_request, request}, _from, state) do
-    al_text = Map.get(request, :al) || Map.get(request, "al") || ""
+    normalized = RuntimeConfig.normalize_request(request)
 
     reply =
-      case Planner.plan_request(normalize_request(request), PlannerRuntime.plan_opts(state.runtime)) do
-        {:ok, plan_map} -> {:ok, Action.from_plan(al_text, plan_map)}
-        {:error, _reason} = error -> error
-      end
+      planner_reply(
+        normalized["al"],
+        Planner.plan_request(normalized, PlannerRuntime.plan_opts(state.runtime))
+      )
 
     {:reply, reply, state}
   end
 
   def handle_call({:plan_json, request_json}, _from, state) do
     reply =
-      with {:ok, request} <- Jason.decode(request_json),
-           normalized <- normalize_request(request),
-           {:ok, plan_map} <- Planner.plan_request(normalized, PlannerRuntime.plan_opts(state.runtime)) do
-        {:ok, Action.from_plan(normalized["al"], plan_map)}
-      else
-        {:error, reason} -> {:error, {:json_decode, reason}}
+      case Jason.decode(request_json) do
+        {:ok, request} ->
+          normalized = RuntimeConfig.normalize_request(request)
+
+          planner_reply(
+            normalized["al"],
+            Planner.plan_request(normalized, PlannerRuntime.plan_opts(state.runtime))
+          )
+
+        {:error, %Jason.DecodeError{} = reason} ->
+          {:error, {:json_decode, reason}}
       end
 
     {:reply, reply, state}
@@ -135,27 +140,14 @@ defmodule SpectreKinetic.Server do
   end
 
   defp do_plan(runtime, al_text, opts) do
-    with {:ok, plan_map} <- Planner.plan(runtime, al_text, opts) do
-      {:ok, Action.from_plan(al_text, plan_map)}
+    planner_reply(al_text, Planner.plan(runtime, al_text, opts))
+  end
+
+  @dialyzer {:nowarn_function, planner_reply: 2}
+  defp planner_reply(al_text, planner_result) do
+    case planner_result do
+      {:error, reason} -> {:error, reason}
+      result -> {:ok, Action.from_plan(al_text, elem(result, 1))}
     end
   end
-
-  defp normalize_request(request) do
-    %{
-      "al" => Map.get(request, :al) || Map.get(request, "al") || "",
-      "slots" =>
-        request
-        |> Map.get(:slots, Map.get(request, "slots", %{}))
-        |> Runtime.stringify_map(),
-      "top_k" => Map.get(request, :top_k) || Map.get(request, "top_k") || 5
-    }
-    |> maybe_put("tool_threshold", Map.get(request, :tool_threshold) || Map.get(request, "tool_threshold"))
-    |> maybe_put(
-      "mapping_threshold",
-      Map.get(request, :mapping_threshold) || Map.get(request, "mapping_threshold")
-    )
-  end
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

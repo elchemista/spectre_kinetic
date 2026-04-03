@@ -88,7 +88,7 @@ defmodule SpectreKinetic.Dictionary do
 
   defp registry_json_path(opts),
     do:
-      SpectreKinetic.Runtime.resolve_optional_path(
+      SpectreKinetic.RuntimeConfig.resolve_optional_path(
         opts,
         :registry_json,
         :registry_json,

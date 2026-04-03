@@ -30,14 +30,14 @@ defmodule SpectreKinetic.Planner.Compiler do
   """
   @spec compile(keyword()) :: :ok | {:error, term()}
   def compile(opts) do
-    with {:ok, registry_json} <- fetch_opt(opts, :registry_json),
+    with {:ok, actions} <- load_actions(opts),
          {:ok, encoder_model_dir} <- fetch_opt(opts, :encoder_model_dir),
          {:ok, output_path} <- fetch_opt(opts, :output) do
       batch_size = Keyword.get(opts, :batch_size, 32)
 
-      Logger.info("Compiling registry from #{registry_json}")
+      Logger.info("Compiling registry with #{length(actions)} actions")
 
-      with {:ok, registry} <- ETS.new(registry_json: registry_json),
+      with {:ok, registry} <- registry_from_actions(actions),
            {:ok, embedder} <- EmbeddingRuntime.load(encoder_model_dir: encoder_model_dir) do
         try do
           do_compile(registry, embedder, output_path, batch_size)
@@ -53,6 +53,42 @@ defmodule SpectreKinetic.Planner.Compiler do
       {:ok, value} -> {:ok, value}
       :error -> {:error, {:missing_option, key}}
     end
+  end
+
+  defp load_actions(opts) do
+    case Keyword.get(opts, :actions) do
+      actions when is_list(actions) ->
+        {:ok, actions}
+
+      nil ->
+        with {:ok, registry_json} <- fetch_opt(opts, :registry_json),
+             {:ok, registry} <- ETS.new(registry_json: registry_json) do
+          try do
+            {:ok, ETS.all_actions(registry)}
+          after
+            ETS.close(registry)
+          end
+        end
+
+      _other ->
+        {:error, {:invalid_option, :actions}}
+    end
+  end
+
+  defp registry_from_actions(actions) do
+    case ETS.new() do
+      {:ok, registry} -> add_actions_to_registry(registry, actions)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp add_actions_to_registry(registry, actions) do
+    Enum.reduce_while(actions, {:ok, registry}, fn action, {:ok, current_registry} ->
+      case ETS.add_action(current_registry, action) do
+        {:ok, updated_registry} -> {:cont, {:ok, updated_registry}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
   end
 
   defp do_compile(registry, embedder, output_path, batch_size) do

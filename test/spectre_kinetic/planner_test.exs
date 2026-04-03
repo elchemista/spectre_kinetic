@@ -17,10 +17,11 @@ defmodule SpectreKinetic.PlannerTest do
 
   describe "plan/2 with lexical fallback (no embeddings)" do
     test "selects correct tool for email", %{store: store} do
-      {:ok, result} = Planner.plan(
-        "SEND OUTBOUND EMAIL WITH: TO=user@test.com SUBJECT=\"Hello\" BODY=\"World\"",
-        %{registry: store, embedder: nil}
-      )
+      {:ok, result} =
+        Planner.plan(
+          ~s(SEND OUTBOUND EMAIL WITH: TO=user@test.com SUBJECT="Hello" BODY="World"),
+          %{registry: store, embedder: nil}
+        )
 
       assert result["selected_tool"] == "Dynamic.Email.send/3"
       assert result["status"] == "ok"
@@ -30,30 +31,33 @@ defmodule SpectreKinetic.PlannerTest do
     end
 
     test "selects correct tool for SMS", %{store: store} do
-      {:ok, result} = Planner.plan(
-        "SEND OUTBOUND SMS WITH: TO=+15551234567 BODY=\"Code 123\"",
-        %{registry: store, embedder: nil}
-      )
+      {:ok, result} =
+        Planner.plan(
+          "SEND OUTBOUND SMS WITH: TO=+15551234567 BODY=\"Code 123\"",
+          %{registry: store, embedder: nil}
+        )
 
       assert result["selected_tool"] == "Dynamic.Sms.send/2"
       assert result["status"] == "ok"
     end
 
     test "selects correct tool for delete note", %{store: store} do
-      {:ok, result} = Planner.plan(
-        "DELETE NOTE ENTRY WITH: ID=note-42",
-        %{registry: store, embedder: nil}
-      )
+      {:ok, result} =
+        Planner.plan(
+          "DELETE NOTE ENTRY WITH: ID=note-42",
+          %{registry: store, embedder: nil}
+        )
 
       assert result["selected_tool"] == "Dynamic.Note.delete/1"
       assert result["args"]["id"] == "note-42"
     end
 
     test "reports missing args", %{store: store} do
-      {:ok, result} = Planner.plan(
-        "SEND OUTBOUND EMAIL WITH: TO=user@test.com",
-        %{registry: store, embedder: nil}
-      )
+      {:ok, result} =
+        Planner.plan(
+          "SEND OUTBOUND EMAIL WITH: TO=user@test.com",
+          %{registry: store, embedder: nil}
+        )
 
       assert result["selected_tool"] == "Dynamic.Email.send/3"
       assert result["status"] == "MISSING_ARGS"
@@ -62,31 +66,34 @@ defmodule SpectreKinetic.PlannerTest do
     end
 
     test "returns NO_TOOL for garbage input with high threshold", %{store: store} do
-      {:ok, result} = Planner.plan(
-        "XYZZY FROBNICATE THE QUUX",
-        %{registry: store, embedder: nil, tool_threshold: 0.99}
-      )
+      {:ok, result} =
+        Planner.plan(
+          "XYZZY FROBNICATE THE QUUX",
+          %{registry: store, embedder: nil, tool_threshold: 0.99}
+        )
 
       assert result["status"] == "NO_TOOL"
     end
 
     test "returns candidates list", %{store: store} do
-      {:ok, result} = Planner.plan(
-        "SEND OUTBOUND EMAIL WITH: TO=user@test.com SUBJECT=\"Hi\" BODY=\"Hello\"",
-        %{registry: store, embedder: nil}
-      )
+      {:ok, result} =
+        Planner.plan(
+          ~s(SEND OUTBOUND EMAIL WITH: TO=user@test.com SUBJECT="Hi" BODY="Hello"),
+          %{registry: store, embedder: nil}
+        )
 
       assert is_list(result["candidates"])
-      assert length(result["candidates"]) > 0
+      assert result["candidates"] != []
     end
   end
 
   describe "plan_request/2" do
     test "works with explicit request map", %{store: store} do
-      {:ok, result} = Planner.plan_request(
-        %{"al" => "DELETE NOTE ENTRY WITH: ID=note-1", "slots" => %{"id" => "note-1"}},
-        %{registry: store, embedder: nil}
-      )
+      {:ok, result} =
+        Planner.plan_request(
+          %{"al" => "DELETE NOTE ENTRY WITH: ID=note-1", "slots" => %{"id" => "note-1"}},
+          %{registry: store, embedder: nil}
+        )
 
       assert result["selected_tool"] == "Dynamic.Note.delete/1"
       assert result["args"]["id"] == "note-1"
@@ -103,11 +110,28 @@ defmodule SpectreKinetic.PlannerTest do
         "doc" => "Send an outbound email message to an email recipient",
         "spec" => "send(to, subject, body)",
         "args" => [
-          %{"name" => "to", "type" => "String.t()", "required" => true, "aliases" => ["recipient", "email"]},
-          %{"name" => "subject", "type" => "String.t()", "required" => true, "aliases" => ["title"]},
-          %{"name" => "body", "type" => "String.t()", "required" => true, "aliases" => ["message", "text"]}
+          %{
+            "name" => "to",
+            "type" => "String.t()",
+            "required" => true,
+            "aliases" => ["recipient", "email"]
+          },
+          %{
+            "name" => "subject",
+            "type" => "String.t()",
+            "required" => true,
+            "aliases" => ["title"]
+          },
+          %{
+            "name" => "body",
+            "type" => "String.t()",
+            "required" => true,
+            "aliases" => ["message", "text"]
+          }
         ],
-        "examples" => ["SEND OUTBOUND EMAIL WITH: TO=user@example.com SUBJECT=\"Status\" BODY=\"Report\""]
+        "examples" => [
+          "SEND OUTBOUND EMAIL WITH: TO=user@example.com SUBJECT=\"Status\" BODY=\"Report\""
+        ]
       },
       %{
         "id" => "Dynamic.Sms.send/2",
@@ -117,8 +141,18 @@ defmodule SpectreKinetic.PlannerTest do
         "doc" => "Send an outbound SMS message to a phone recipient",
         "spec" => "send(to, body)",
         "args" => [
-          %{"name" => "to", "type" => "String.t()", "required" => true, "aliases" => ["phone", "number"]},
-          %{"name" => "body", "type" => "String.t()", "required" => true, "aliases" => ["message", "text"]}
+          %{
+            "name" => "to",
+            "type" => "String.t()",
+            "required" => true,
+            "aliases" => ["phone", "number"]
+          },
+          %{
+            "name" => "body",
+            "type" => "String.t()",
+            "required" => true,
+            "aliases" => ["message", "text"]
+          }
         ],
         "examples" => ["SEND OUTBOUND SMS WITH: TO=+15551234567 BODY=\"Code\""]
       },
@@ -143,7 +177,12 @@ defmodule SpectreKinetic.PlannerTest do
         "spec" => "insert(title, body)",
         "args" => [
           %{"name" => "title", "type" => "String.t()", "required" => true, "aliases" => ["name"]},
-          %{"name" => "body", "type" => "String.t()", "required" => true, "aliases" => ["text", "content"]}
+          %{
+            "name" => "body",
+            "type" => "String.t()",
+            "required" => true,
+            "aliases" => ["text", "content"]
+          }
         ],
         "examples" => ["INSERT NOTE ENTRY WITH: TITLE=\"My note\" BODY=\"Content\""]
       },
@@ -156,8 +195,18 @@ defmodule SpectreKinetic.PlannerTest do
         "spec" => "create(title, due, priority)",
         "args" => [
           %{"name" => "title", "type" => "String.t()", "required" => true, "aliases" => ["name"]},
-          %{"name" => "due", "type" => "String.t()", "required" => true, "aliases" => ["deadline"]},
-          %{"name" => "priority", "type" => "String.t()", "required" => true, "aliases" => ["severity"]}
+          %{
+            "name" => "due",
+            "type" => "String.t()",
+            "required" => true,
+            "aliases" => ["deadline"]
+          },
+          %{
+            "name" => "priority",
+            "type" => "String.t()",
+            "required" => true,
+            "aliases" => ["severity"]
+          }
         ],
         "examples" => ["CREATE WORK TASK WITH: TITLE=\"Task\" DUE=2026-05-01 PRIORITY=high"]
       }

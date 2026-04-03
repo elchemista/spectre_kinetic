@@ -146,12 +146,10 @@ defmodule SpectreKinetic.Planner.EmbeddingRuntime do
   end
 
   defp load_model(path) do
-    try do
-      model = Ortex.load(path)
-      {:ok, model}
-    rescue
-      e -> {:error, {:model_load_failed, Exception.message(e)}}
-    end
+    model = Ortex.load(path)
+    {:ok, model}
+  rescue
+    error -> {:error, {:model_load_failed, Exception.message(error)}}
   end
 
   defp detect_dim(model, tokenizer) do
@@ -174,23 +172,21 @@ defmodule SpectreKinetic.Planner.EmbeddingRuntime do
   end
 
   defp do_embed_batch(state, texts) do
-    try do
-      {:ok, batch_encoding} = Tokenizers.Tokenizer.encode_batch(state.tokenizer, texts)
+    {:ok, batch_encoding} = Tokenizers.Tokenizer.encode_batch(state.tokenizer, texts)
 
-      {input_ids, attention_mask, token_type_ids} = build_input_tensors(batch_encoding)
+    {input_ids, attention_mask, token_type_ids} = build_input_tensors(batch_encoding)
 
-      {output} = Ortex.run(state.model, {input_ids, attention_mask, token_type_ids})
+    {output} = Ortex.run(state.model, {input_ids, attention_mask, token_type_ids})
 
-      embeddings =
-        output
-        |> Nx.backend_transfer()
-        |> extract_cls_embeddings()
-        |> l2_normalize()
+    embeddings =
+      output
+      |> Nx.backend_transfer()
+      |> extract_cls_embeddings()
+      |> l2_normalize()
 
-      {:ok, embeddings}
-    rescue
-      e -> {:error, {:embed_failed, Exception.message(e)}}
-    end
+    {:ok, embeddings}
+  rescue
+    error -> {:error, {:embed_failed, Exception.message(error)}}
   end
 
   defp build_input_tensors(encodings) when is_list(encodings) do

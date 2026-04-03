@@ -61,35 +61,38 @@ defmodule SpectreKinetic.PlannerExamplesTest do
   end
 
   defp planner_failures(example, action) do
-    []
-    |> maybe_add_failure(
-      action.status == :ok,
-      "expected :ok for #{inspect(example.al)}, got #{inspect(action)}"
-    )
-    |> maybe_add_failure(
-      action.selected_tool == example.tool_id,
-      "wrong tool for #{inspect(example.al)} expected #{example.tool_id} got #{inspect(action.selected_tool)}"
-    )
-    |> maybe_add_failure(
-      action.missing == [],
-      "unexpected missing args for #{inspect(example.al)}: #{inspect(action.missing)}"
-    )
-    |> then(fn failures ->
-      failures ++
-        Enum.flat_map(example.expected_args, fn {key, value} ->
-          if action.args[key] == value do
-            []
-          else
-            [
-              "wrong arg #{inspect(key)} for #{inspect(example.al)} expected #{inspect(value)} got #{inspect(action.args[key])} full args=#{inspect(action.args)}"
-            ]
-          end
-        end)
-    end)
+    base_failures =
+      []
+      |> maybe_add_failure(
+        action.status == :ok,
+        "expected :ok for #{inspect(example.al)}, got #{inspect(action)}"
+      )
+      |> maybe_add_failure(
+        action.selected_tool == example.tool_id,
+        "wrong tool for #{inspect(example.al)} expected #{example.tool_id} got #{inspect(action.selected_tool)}"
+      )
+      |> maybe_add_failure(
+        action.missing == [],
+        "unexpected missing args for #{inspect(example.al)}: #{inspect(action.missing)}"
+      )
+
+    base_failures ++ arg_failures(example, action)
   end
 
   defp maybe_add_failure(failures, true, _message), do: failures
   defp maybe_add_failure(failures, false, message), do: failures ++ [message]
+
+  defp arg_failures(example, action) do
+    Enum.flat_map(example.expected_args, fn {key, value} ->
+      if action.args[key] == value do
+        []
+      else
+        [
+          "wrong arg #{inspect(key)} for #{inspect(example.al)} expected #{inspect(value)} got #{inspect(action.args[key])} full args=#{inspect(action.args)}"
+        ]
+      end
+    end)
+  end
 
   defp write_registry_json(actions) do
     path =
