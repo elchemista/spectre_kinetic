@@ -2,17 +2,19 @@ defmodule Mix.Tasks.Spectre.Show do
   use Mix.Task
 
   @moduledoc """
-  Shows runtime information for a model/registry pair and optionally plans
-  either one AL instruction or a whole LLM response.
+  Shows runtime information for the Elixir planner artifacts and can optionally
+  resolve one AL instruction or response chain.
   """
 
   alias SpectreKinetic.Runtime
 
-  @shortdoc "Inspect a model/registry pair and optionally resolve an AL statement"
+  @shortdoc "Inspect planner artifacts and optionally resolve an AL statement"
 
   @switches [
-    model: :string,
-    registry: :string,
+    encoder: :string,
+    compiled_registry: :string,
+    registry_json: :string,
+    fallback_model: :string,
     al: :string,
     text: :string,
     file: :string,
@@ -23,10 +25,6 @@ defmodule Mix.Tasks.Spectre.Show do
     format: :string
   ]
 
-  @doc """
-  Runs the task and prints either runtime summary information or planning output.
-  """
-  @spec run([binary()]) :: any()
   @impl true
   def run(argv) do
     Mix.Task.run("app.start")
@@ -35,22 +33,22 @@ defmodule Mix.Tasks.Spectre.Show do
     invalid == [] || Mix.raise("invalid options: #{inspect(invalid)}")
 
     runtime_opts =
-      opts
-      |> Keyword.take([:model, :registry])
-      |> Enum.map(fn
-        {:model, value} -> {:model_dir, value}
-        {:registry, value} -> {:registry_mcr, value}
-      end)
-
-    resolved_paths = Runtime.resolve_runtime_paths!(runtime_opts)
+      []
+      |> maybe_put(:encoder_model_dir, opts[:encoder])
+      |> maybe_put(:compiled_registry, opts[:compiled_registry])
+      |> maybe_put(:registry_json, opts[:registry_json])
+      |> maybe_put(:fallback_model_dir, opts[:fallback_model])
 
     {:ok, pid} = SpectreKinetic.start_link(runtime_opts ++ [name: nil])
+    {:ok, resolved_paths} = Runtime.resolve_runtime_paths(runtime_opts)
 
     summary = %{
       version: SpectreKinetic.version(),
       action_count: SpectreKinetic.action_count(pid),
-      model_dir: resolved_paths.model_dir,
-      registry_mcr: resolved_paths.registry_mcr
+      encoder_model_dir: resolved_paths.encoder_model_dir,
+      compiled_registry: resolved_paths.compiled_registry,
+      registry_json: resolved_paths.registry_json,
+      fallback_model_dir: resolved_paths.fallback_model_dir
     }
 
     case input(opts) do
@@ -66,7 +64,6 @@ defmodule Mix.Tasks.Spectre.Show do
           |> maybe_put(:slots, parse_slots(opts[:slot] || []))
 
         payload = build_payload(pid, input_text, plan_opts, summary, opts)
-
         render(payload, opts[:format] || "pretty")
     end
   end
@@ -82,11 +79,7 @@ defmodule Mix.Tasks.Spectre.Show do
     end)
   end
 
-  defp render(payload, "json") do
-    Mix.shell().info(Jason.encode!(payload, pretty: true))
-  end
-
-  defp render(payload, _pretty) do
+  defp render(payload, _format) do
     Mix.shell().info(Jason.encode!(payload, pretty: true))
   end
 

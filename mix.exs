@@ -21,8 +21,11 @@ defmodule SpectreKinetic.MixProject do
 
   defp deps do
     [
-      {:rustler, "~> 0.37.0"},
       {:jason, "~> 1.2"},
+      {:nx, "~> 0.11"},
+      {:axon, "~> 0.7"},
+      {:ortex, "~> 0.1"},
+      {:tokenizers, "~> 0.5"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]

@@ -3,35 +3,16 @@ defmodule SpectreKinetic.PlannerExamplesTest do
 
   alias SpectreKinetic.Action
   alias SpectreKinetic.ALExamples
-  alias SpectreKinetic.TestFixtures
 
-  @moduletag skip: TestFixtures.skip_reason()
   @examples ALExamples.examples()
 
   setup_all do
-    {:ok, pid} =
-      start_supervised(
-        {SpectreKinetic,
-         model_dir: TestFixtures.model_dir(), registry_mcr: TestFixtures.registry_mcr(), name: nil}
-      )
-
-    action_defs = ALExamples.action_defs()
+    registry_json = write_registry_json(ALExamples.action_defs())
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)
 
     assert length(@examples) == 1_000
 
-    Enum.each(action_defs, fn action ->
-      assert :ok = SpectreKinetic.add_action(pid, action)
-    end)
-
-    on_exit(fn ->
-      if Process.alive?(pid) do
-        Enum.each(action_defs, fn action ->
-          SpectreKinetic.delete_action(pid, action.id)
-        end)
-      end
-    end)
-
-    {:ok, pid: pid}
+    {:ok, runtime: runtime}
   end
 
   test "generator returns exactly 1000 AL examples" do
@@ -52,10 +33,10 @@ defmodule SpectreKinetic.PlannerExamplesTest do
       |> Enum.join(" | ")
 
     @tag planner_example_index: index
-    test "planner example #{index}: #{label}", %{pid: pid} do
+    test "planner example #{index}: #{label}", %{runtime: runtime} do
       example = unquote(Macro.escape(example))
 
-      case SpectreKinetic.plan(pid, example.al, tool_threshold: 0.0, mapping_threshold: 0.0) do
+      case SpectreKinetic.plan(runtime, example.al, tool_threshold: 0.0, mapping_threshold: 0.0) do
         {:ok, %Action{} = action} ->
           failures = planner_failures(example, action)
 
@@ -109,4 +90,15 @@ defmodule SpectreKinetic.PlannerExamplesTest do
 
   defp maybe_add_failure(failures, true, _message), do: failures
   defp maybe_add_failure(failures, false, message), do: failures ++ [message]
+
+  defp write_registry_json(actions) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "spectre_examples_#{System.unique_integer([:positive])}.json"
+      )
+
+    File.write!(path, Jason.encode!(%{"actions" => actions}))
+    path
+  end
 end

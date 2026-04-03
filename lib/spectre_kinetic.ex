@@ -1,6 +1,6 @@
 defmodule SpectreKinetic do
   @moduledoc """
-  Elixir wrapper around the Rust `spectre-kinetic-engine`.
+  Elixir-first planning toolkit for Action Language tool selection.
   """
 
   alias SpectreKinetic.Action
@@ -8,16 +8,18 @@ defmodule SpectreKinetic do
   alias SpectreKinetic.Dictionary
   alias SpectreKinetic.Extractor
   alias SpectreKinetic.Parser
+  alias SpectreKinetic.Planner.Runtime, as: PlannerRuntime
   alias SpectreKinetic.Prompt
   alias SpectreKinetic.Server
 
   @type plan_option ::
           {:slots, map()}
           | {:top_k, pos_integer()}
-          | {:confidence, float()}
-          | {:confidence_threshold, float()}
           | {:tool_threshold, float()}
           | {:mapping_threshold, float()}
+          | {:tool_selection_fallback, :disabled | :reranker}
+          | {:fallback_top_k, pos_integer()}
+          | {:fallback_margin, float()}
 
   @doc """
   Returns a child spec for running the supervised dispatcher server.
@@ -32,7 +34,7 @@ defmodule SpectreKinetic do
   end
 
   @doc """
-  Starts the supervised dispatcher wrapper around the Rust planner handle.
+  Starts the supervised planner server.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   defdelegate start_link(opts \\ []), to: Server
@@ -40,25 +42,68 @@ defmodule SpectreKinetic do
   @doc """
   Plans one AL instruction and returns one `%SpectreKinetic.Action{}` result.
   """
-  @spec plan(GenServer.server(), binary(), [plan_option()]) ::
+  @spec plan(GenServer.server() | PlannerRuntime.t(), binary(), [plan_option()]) ::
           {:ok, Action.t()} | {:error, term()}
-  def plan(server \\ Server, al_text, opts \\ []) when is_binary(al_text) and is_list(opts) do
+  def plan(target_or_runtime, al_text_or_opts \\ [], opts \\ [])
+
+  def plan(al_text, opts, []) when is_binary(al_text) and is_list(opts) do
+    plan(Server, al_text, opts)
+  end
+
+  def plan(%PlannerRuntime{} = runtime, al_text, opts)
+      when is_binary(al_text) and is_list(opts) do
+    with {:ok, plan_map} <- SpectreKinetic.Planner.plan(runtime, al_text, opts) do
+      {:ok, Action.from_plan(al_text, plan_map)}
+    end
+  end
+
+  def plan(server, al_text, opts) when is_binary(al_text) and is_list(opts) do
     Server.plan(server, al_text, opts)
   end
 
   @doc """
   Plans from an explicit request map containing `al`, optional `slots`, and thresholds.
   """
-  @spec plan_request(GenServer.server(), map()) :: {:ok, Action.t()} | {:error, term()}
-  def plan_request(server \\ Server, request) when is_map(request) do
+  @spec plan_request(GenServer.server() | PlannerRuntime.t(), map()) ::
+          {:ok, Action.t()} | {:error, term()}
+  def plan_request(target_or_runtime, request \\ nil)
+
+  def plan_request(request, nil) when is_map(request) do
+    plan_request(Server, request)
+  end
+
+  def plan_request(%PlannerRuntime{} = runtime, request) when is_map(request) do
+    al_text = Map.get(request, :al) || Map.get(request, "al") || ""
+
+    with {:ok, plan_map} <-
+           SpectreKinetic.Planner.plan_request(runtime, normalize_request(request), []) do
+      {:ok, Action.from_plan(al_text, plan_map)}
+    end
+  end
+
+  def plan_request(server, request) when is_map(request) do
     Server.plan_request(server, request)
   end
 
   @doc """
   Plans from a JSON-encoded request payload.
   """
-  @spec plan_json(GenServer.server(), binary()) :: {:ok, Action.t()} | {:error, term()}
-  def plan_json(server \\ Server, request_json) when is_binary(request_json) do
+  @spec plan_json(GenServer.server() | PlannerRuntime.t(), binary()) ::
+          {:ok, Action.t()} | {:error, term()}
+  def plan_json(request_json) when is_binary(request_json) do
+    plan_json(Server, request_json)
+  end
+
+  def plan_json(%PlannerRuntime{} = runtime, request_json) when is_binary(request_json) do
+    with {:ok, request} <- Jason.decode(request_json),
+         {:ok, action} <- plan_request(runtime, request) do
+      {:ok, action}
+    else
+      {:error, reason} -> {:error, {:json_decode, reason}}
+    end
+  end
+
+  def plan_json(server, request_json) when is_binary(request_json) do
     Server.plan_json(server, request_json)
   end
 
@@ -81,33 +126,63 @@ defmodule SpectreKinetic do
   @doc """
   Adds one tool definition to the active in-memory registry.
   """
-  @spec add_action(GenServer.server(), map()) :: :ok | {:error, term()}
-  defdelegate add_action(server, action), to: Server
+  @spec add_action(GenServer.server() | PlannerRuntime.t(), map()) ::
+          :ok | {:error, term()} | {:ok, PlannerRuntime.t()}
+  def add_action(%PlannerRuntime{} = runtime, action) do
+    PlannerRuntime.add_action(runtime, action)
+  end
+
+  def add_action(server, action), do: Server.add_action(server, action)
 
   @doc """
   Deletes one tool definition from the active in-memory registry.
   """
-  @spec delete_action(GenServer.server(), binary()) :: {:ok, boolean()} | {:error, term()}
-  defdelegate delete_action(server, action_id), to: Server
+  @spec delete_action(GenServer.server() | PlannerRuntime.t(), binary()) ::
+          {:ok, boolean()} | {:error, term()} | {:ok, boolean(), PlannerRuntime.t()}
+  def delete_action(%PlannerRuntime{} = runtime, action_id) do
+    PlannerRuntime.delete_action(runtime, action_id)
+  end
+
+  def delete_action(server, action_id), do: Server.delete_action(server, action_id)
 
   @doc """
   Reloads the compiled registry from disk.
   """
-  @spec reload_registry(GenServer.server(), binary()) :: :ok | {:error, term()}
-  defdelegate reload_registry(server, registry_path), to: Server
+  @spec reload_registry(GenServer.server() | PlannerRuntime.t(), binary()) ::
+          :ok | {:error, term()} | {:ok, PlannerRuntime.t()}
+  def reload_registry(%PlannerRuntime{} = runtime, registry_path) do
+    PlannerRuntime.reload_registry(runtime, registry_path)
+  end
+
+  def reload_registry(server, registry_path), do: Server.reload_registry(server, registry_path)
 
   @doc """
   Returns the current number of active tools in the registry.
   """
-  @spec action_count(GenServer.server()) :: non_neg_integer()
-  defdelegate action_count(server), to: Server
+  @spec action_count(GenServer.server() | PlannerRuntime.t()) :: non_neg_integer()
+  def action_count(%PlannerRuntime{} = runtime), do: PlannerRuntime.action_count(runtime)
+  def action_count(server), do: Server.action_count(server)
 
   @doc """
-  Returns the native crate version compiled into the NIF.
+  Loads a library-first planner runtime without starting the compatibility server.
+  """
+  @spec load_runtime(keyword()) :: {:ok, PlannerRuntime.t()} | {:error, term()}
+  def load_runtime(opts \\ []), do: PlannerRuntime.load(opts)
+
+  @doc """
+  Loads a planner runtime and raises on failure.
+  """
+  @spec load_runtime!(keyword()) :: PlannerRuntime.t()
+  def load_runtime!(opts \\ []), do: PlannerRuntime.load!(opts)
+
+  @doc """
+  Returns the library version.
   """
   @spec version() :: binary()
   def version do
-    SpectreKinetic.Native.version()
+    :spectre_kinetic
+    |> Application.spec(:vsn)
+    |> to_string()
   end
 
   @doc """
@@ -214,4 +289,23 @@ defmodule SpectreKinetic do
 
   defp plan_scan_entry(_server, {%{raw: raw, error: reason}, index}, _opts),
     do: Action.error(raw, reason, index)
+
+  defp normalize_request(request) do
+    %{
+      "al" => Map.get(request, :al) || Map.get(request, "al") || "",
+      "slots" =>
+        request
+        |> Map.get(:slots, Map.get(request, "slots", %{}))
+        |> SpectreKinetic.Runtime.stringify_map(),
+      "top_k" => Map.get(request, :top_k) || Map.get(request, "top_k") || 5
+    }
+    |> maybe_put("tool_threshold", Map.get(request, :tool_threshold) || Map.get(request, "tool_threshold"))
+    |> maybe_put(
+      "mapping_threshold",
+      Map.get(request, :mapping_threshold) || Map.get(request, "mapping_threshold")
+    )
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

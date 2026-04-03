@@ -2,7 +2,7 @@ defmodule SpectreKinetic.Action do
   @moduledoc """
   Structured result for one planned AL instruction.
 
-  This struct intentionally stays close to the Rust planner output.
+  This struct intentionally stays close to the planner result payload.
   It keeps only the fields that are usually needed to decide whether
   a tool can be executed, retried, or shown back to an LLM.
   """
@@ -31,7 +31,7 @@ defmodule SpectreKinetic.Action do
     al: nil,
     # Planner outcome such as `:ok`, `:no_tool`, `:missing_args`, or `:error`.
     status: nil,
-    # Selected tool id returned by the Rust planner.
+    # Selected tool id returned by the planner.
     selected_tool: nil,
     # Similarity/confidence score of the selected tool.
     confidence: nil,
@@ -93,7 +93,7 @@ defmodule SpectreKinetic.Action do
         }
 
   @doc """
-  Builds an action struct from the decoded Rust planner payload.
+  Builds an action struct from the decoded planner payload.
 
   This function also performs a small Elixir-side repair step for obvious
   literal values already present in the AL text when the planner reports
@@ -122,7 +122,7 @@ defmodule SpectreKinetic.Action do
   @doc """
   Builds an error action for extraction or wrapper failures.
 
-  This is used for cases where the Rust planner was not able to run because
+  This is used for cases where the planner was not able to run because
   the extracted AL block was malformed or rejected before planning.
   """
   @spec error(binary() | nil, term(), non_neg_integer() | nil) :: t()
