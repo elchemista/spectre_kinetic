@@ -1,14 +1,12 @@
 defmodule SpectreKinetic.DictionaryTest do
   use ExUnit.Case, async: true
 
-  alias SpectreKinetic.TestFixtures
-
-  @moduletag skip: TestFixtures.skip_reason()
+  alias SpectreKinetic.TestRegistryHelper
 
   test "dictionary can be scoped to specific actions" do
     dictionary =
       SpectreKinetic.dictionary!(
-        registry_json: TestFixtures.registry_json(),
+        registry_json: TestRegistryHelper.registry_json(),
         actions: ["Linux.Apt.install/1", "Linux.Dnf.install/1"],
         top_n: 20,
         example_limit: 5
@@ -23,7 +21,7 @@ defmodule SpectreKinetic.DictionaryTest do
   test "dictionary_text renders compact prompt text" do
     text =
       SpectreKinetic.dictionary_text!(
-        registry_json: TestFixtures.registry_json(),
+        registry_json: TestRegistryHelper.registry_json(),
         actions: ["Linux.Apt.install/1"],
         top_n: 10,
         example_limit: 2

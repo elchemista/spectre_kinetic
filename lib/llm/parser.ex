@@ -2,16 +2,14 @@ defmodule SpectreKinetic.Parser do
   @moduledoc """
   Lightweight AL normalization and validation.
 
-  The Rust engine remains the source of truth for planning. This module only:
+  This module focuses only on AL cleanup and lightweight extraction. It:
 
   - unwraps common LLM wrappers like `AL:`, `<al>...</al>`, and fenced `al` blocks
   - normalizes whitespace
   - validates that a candidate looks like usable AL
   - extracts loose metadata and literal `KEY=value` args for Elixir-side helpers
 
-  It does not replace the Rust AL parser. In particular, the engine's action-text
-  retrieval, placeholder handling, and slot-to-param matching still live in
-  `spectre-core`.
+  It does not perform retrieval or final slot-to-param planning.
   """
 
   @type parsed :: %{

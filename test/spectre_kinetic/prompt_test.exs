@@ -2,7 +2,7 @@ defmodule SpectreKinetic.PromptTest do
   use ExUnit.Case, async: true
 
   alias SpectreKinetic.Dictionary
-  alias SpectreKinetic.TestFixtures
+  alias SpectreKinetic.TestRegistryHelper
 
   test "render_al_prompt/2 builds a zero-shot prompt with strict AL rules" do
     dictionary = %Dictionary{
@@ -24,10 +24,7 @@ defmodule SpectreKinetic.PromptTest do
 
     assert prompt =~ "Output only `<al>...</al>` blocks and nothing else."
     assert prompt =~ "`WITH:` is optional."
-
-    assert prompt =~
-             "Positional AL like `INSTALL PACKAGE nginx VIA APT` or `LIST DIRECTORY /tmp` is valid"
-
+    assert prompt =~ "Positional AL like `INSTALL PACKAGE nginx VIA APT` or `LIST DIRECTORY /tmp` is valid"
     assert prompt =~ "- package"
     assert prompt =~ "<al>INSTALL PACKAGE {package} VIA APT</al>"
     assert prompt =~ ~s(<al>INSTALL PACKAGE WITH: PACKAGE="nginx"</al>)
@@ -60,11 +57,10 @@ defmodule SpectreKinetic.PromptTest do
     assert prompt =~ "<al>LIST DIRECTORY WITH: PATH={path}</al>"
   end
 
-  @moduletag skip: TestFixtures.skip_reason()
   test "al_prompt!/1 builds prompt text from the scoped registry dictionary" do
     prompt =
       SpectreKinetic.al_prompt!(
-        registry_json: TestFixtures.registry_json(),
+        registry_json: TestRegistryHelper.registry_json(),
         actions: ["Linux.Apt.install/1"],
         top_n: 10,
         example_limit: 2,

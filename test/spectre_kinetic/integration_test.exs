@@ -3,18 +3,38 @@ defmodule SpectreKinetic.IntegrationTest do
 
   alias SpectreKinetic.Action
   alias SpectreKinetic.ActionChain
-  alias SpectreKinetic.TestFixtures
+  alias SpectreKinetic.TestRegistryHelper
 
-  @moduletag skip: TestFixtures.skip_reason()
+  defmodule FakeReranker do
+    def score_batch(:fake, pairs) do
+      {:ok,
+       Enum.map(pairs, fn {query, tool_card} ->
+         score(query, tool_card)
+       end)}
+    end
+
+    defp score(query, tool_card) do
+      query = String.downcase(query)
+      tool_card = String.downcase(tool_card)
+
+      cond do
+        String.contains?(query, "@") and String.contains?(tool_card, "email") -> 1.0
+        String.contains?(query, "+1") and String.contains?(tool_card, "phone") -> 1.0
+        String.contains?(query, "+1") and String.contains?(tool_card, "sms") -> 0.9
+        true -> 0.0
+      end
+    end
+  end
 
   setup_all do
+    registry_json = TestRegistryHelper.registry_json()
+
     {:ok, pid} =
       start_supervised(
-        {SpectreKinetic,
-         model_dir: TestFixtures.model_dir(), registry_mcr: TestFixtures.registry_mcr(), name: nil}
+        {SpectreKinetic, registry_json: registry_json, name: nil}
       )
 
-    {:ok, pid: pid}
+    {:ok, pid: pid, registry_json: registry_json}
   end
 
   test "plans a blog post action from AL text", %{pid: pid} do
@@ -90,120 +110,43 @@ defmodule SpectreKinetic.IntegrationTest do
     assert SpectreKinetic.action_count(pid) == initial_count
   end
 
-  test "reranking uses recipient value shape to disambiguate message tools", %{pid: pid} do
-    email_action = %{
-      id: "Dynamic.Email.send/2",
-      module: "Dynamic.Email",
-      name: "send",
-      arity: 2,
-      doc: "Send a message to an email recipient",
-      spec: "send(to :: String.t(), body :: String.t()) :: :ok",
-      args: [
-        %{
-          name: "to",
-          type: "String.t()",
-          required: true,
-          aliases: ["recipient", "email"]
-        },
-        %{
-          name: "body",
-          type: "String.t()",
-          required: true,
-          aliases: ["message", "text"]
-        }
-      ],
-      examples: ["SEND MESSAGE WITH: TO={to} BODY={body}"]
-    }
+  test "reranker fallback disambiguates message tools" do
+    registry_json = TestRegistryHelper.registry_json([email_action(), sms_action()])
 
-    sms_action = %{
-      id: "Dynamic.Sms.send/2",
-      module: "Dynamic.Sms",
-      name: "send",
-      arity: 2,
-      doc: "Send a message to a phone recipient",
-      spec: "send(to :: String.t(), body :: String.t()) :: :ok",
-      args: [
-        %{
-          name: "to",
-          type: "String.t()",
-          required: true,
-          aliases: ["recipient", "phone", "number"]
-        },
-        %{
-          name: "body",
-          type: "String.t()",
-          required: true,
-          aliases: ["message", "text"]
-        }
-      ],
-      examples: ["SEND MESSAGE WITH: TO={to} BODY={body}"]
-    }
-
-    assert :ok = SpectreKinetic.add_action(pid, email_action)
-    assert :ok = SpectreKinetic.add_action(pid, sms_action)
-
-    on_exit(fn ->
-      SpectreKinetic.delete_action(pid, "Dynamic.Email.send/2")
-      SpectreKinetic.delete_action(pid, "Dynamic.Sms.send/2")
-    end)
+    runtime =
+      SpectreKinetic.load_runtime!(
+        registry_json: registry_json,
+        tool_threshold: 0.95,
+        tool_selection_fallback: :reranker,
+        reranker: :fake,
+        fallback_runtime_module: FakeReranker
+      )
 
     assert {:ok, %Action{} = email} =
              SpectreKinetic.plan(
-               pid,
-               ~s(SEND MESSAGE WITH: TO="dev@example.com" BODY="hello"),
-               tool_threshold: 0.0,
-               mapping_threshold: 0.0
+               runtime,
+               ~s(SEND MESSAGE WITH: TO="dev@example.com" BODY="hello")
              )
 
     assert email.selected_tool == "Dynamic.Email.send/2"
-    assert is_float(email.tool_score)
-    assert is_float(email.mapping_score)
-    assert email.combined_score == email.confidence
+    assert Enum.any?(email.notes, &String.contains?(&1, "reranker fallback"))
 
     assert {:ok, %Action{} = sms} =
              SpectreKinetic.plan(
-               pid,
-               ~s(SEND MESSAGE WITH: TO="+15551234567" BODY="hello"),
-               tool_threshold: 0.0,
-               mapping_threshold: 0.0
+               runtime,
+               ~s(SEND MESSAGE WITH: TO="+15551234567" BODY="hello")
              )
 
     assert sms.selected_tool == "Dynamic.Sms.send/2"
-    assert is_float(sms.tool_score)
-    assert is_float(sms.mapping_score)
-    assert sms.combined_score == sms.confidence
+    assert Enum.any?(sms.notes, &String.contains?(&1, "reranker fallback"))
   end
 
   test "planner recovers inline recipient args without requiring WITH and removes stale unmatched notes",
        %{pid: pid} do
-    email_action = %{
-      id: "Dynamic.Email.send/2",
-      module: "Dynamic.Email",
-      name: "send",
-      arity: 2,
-      doc: "Send a message to an email recipient",
-      spec: "send(to :: String.t(), body :: String.t()) :: :ok",
-      args: [
-        %{
-          name: "to",
-          type: "String.t()",
-          required: true,
-          aliases: ["recipient", "email"]
-        },
-        %{
-          name: "body",
-          type: "String.t()",
-          required: true,
-          aliases: ["message", "text"]
-        }
-      ],
-      examples: ["SEND MESSAGE WITH: TO={to} BODY={body}"]
-    }
-
-    assert :ok = SpectreKinetic.add_action(pid, email_action)
+    assert :ok = SpectreKinetic.add_action(pid, email_action_with_subject())
 
     on_exit(fn ->
-      SpectreKinetic.delete_action(pid, "Dynamic.Email.send/2")
+      SpectreKinetic.delete_action(pid, "Dynamic.Email.send/3")
     end)
 
     for al <- [
@@ -215,7 +158,7 @@ defmodule SpectreKinetic.IntegrationTest do
           "SEND ME EMAIL EMAIL= yuriy.zhar@gmail.com"
         ] do
       assert {:ok, %Action{} = action} = SpectreKinetic.plan(pid, al)
-      assert action.selected_tool == "Dynamic.Email.send/2"
+      assert action.selected_tool == "Dynamic.Email.send/3"
       assert action.args["to"] == "yuriy.zhar@gmail.com"
       refute "to" in action.missing
       refute Enum.any?(action.notes, &String.starts_with?(&1, "unmatched slots:"))
@@ -266,10 +209,13 @@ defmodule SpectreKinetic.IntegrationTest do
            ]
   end
 
-  test "full circle llm workflow builds prompt and plans a noisy llm response", %{pid: pid} do
+  test "full circle llm workflow builds prompt and plans a noisy llm response", %{
+    pid: pid,
+    registry_json: registry_json
+  } do
     prompt =
       SpectreKinetic.al_prompt!(
-        registry_json: TestFixtures.registry_json(),
+        registry_json: registry_json,
         actions: ["Linux.Apt.install/1", "Linux.Coreutils.ls/1"],
         request: """
         install nginx and inspect /var/log
@@ -332,31 +278,120 @@ defmodule SpectreKinetic.IntegrationTest do
            ] = chain.actions
   end
 
-  test "uses configured confidence threshold by default", %{pid: pid} do
-    previous = Application.get_env(:spectre_kinetic, :confidence)
-    Application.put_env(:spectre_kinetic, :confidence, 1.1)
+  test "uses configured tool threshold by default" do
+    previous = Application.get_env(:spectre_kinetic, :tool_threshold)
+    Application.put_env(:spectre_kinetic, :tool_threshold, 1.1)
 
     on_exit(fn ->
       if is_nil(previous) do
-        Application.delete_env(:spectre_kinetic, :confidence)
+        Application.delete_env(:spectre_kinetic, :tool_threshold)
       else
-        Application.put_env(:spectre_kinetic, :confidence, previous)
+        Application.put_env(:spectre_kinetic, :tool_threshold, previous)
       end
     end)
 
+    runtime = SpectreKinetic.load_runtime!(registry_json: TestRegistryHelper.registry_json())
+
     assert {:ok, %Action{} = action} =
-             SpectreKinetic.plan(pid, "WRITE NEW BLOG POST FOR elchemista.com WITH: TITLE=\"A\"")
+             SpectreKinetic.plan(
+               runtime,
+               "WRITE NEW BLOG POST FOR elchemista.com WITH: TITLE=\"A\""
+             )
 
     assert action.status == :no_tool
     assert action.selected_tool == nil
   end
 
-  test "reload_registry/2 can reload the same compiled registry", %{pid: pid} do
-    assert :ok = SpectreKinetic.reload_registry(pid, TestFixtures.registry_mcr())
+  test "reload_registry/2 can reload the same registry source", %{pid: pid, registry_json: registry_json} do
+    assert :ok = SpectreKinetic.reload_registry(pid, registry_json)
     assert SpectreKinetic.action_count(pid) > 0
   end
 
-  test "version/0 returns a native version string" do
+  test "version/0 returns the library version string" do
     assert SpectreKinetic.version() =~ ~r/^\d+\.\d+\.\d+/
+  end
+
+  defp email_action do
+    %{
+      id: "Dynamic.Email.send/2",
+      module: "Dynamic.Email",
+      name: "send",
+      arity: 2,
+      doc: "Send a message to an email recipient",
+      spec: "send(to :: String.t(), body :: String.t()) :: :ok",
+      args: [
+        %{
+          name: "to",
+          type: "String.t()",
+          required: true,
+          aliases: ["recipient", "email"]
+        },
+        %{
+          name: "body",
+          type: "String.t()",
+          required: true,
+          aliases: ["message", "text"]
+        }
+      ],
+      examples: ["SEND MESSAGE WITH: TO={to} BODY={body}"]
+    }
+  end
+
+  defp sms_action do
+    %{
+      id: "Dynamic.Sms.send/2",
+      module: "Dynamic.Sms",
+      name: "send",
+      arity: 2,
+      doc: "Send a message to a phone recipient",
+      spec: "send(to :: String.t(), body :: String.t()) :: :ok",
+      args: [
+        %{
+          name: "to",
+          type: "String.t()",
+          required: true,
+          aliases: ["recipient", "phone", "number"]
+        },
+        %{
+          name: "body",
+          type: "String.t()",
+          required: true,
+          aliases: ["message", "text"]
+        }
+      ],
+      examples: ["SEND MESSAGE WITH: TO={to} BODY={body}"]
+    }
+  end
+
+  defp email_action_with_subject do
+    %{
+      id: "Dynamic.Email.send/3",
+      module: "Dynamic.Email",
+      name: "send",
+      arity: 3,
+      doc: "Send an email recipient a message body with optional subject",
+      spec: "send(to :: String.t(), subject :: String.t(), body :: String.t()) :: :ok",
+      args: [
+        %{
+          name: "to",
+          type: "String.t()",
+          required: true,
+          aliases: ["recipient", "email"]
+        },
+        %{
+          name: "subject",
+          type: "String.t()",
+          required: false,
+          aliases: ["title"]
+        },
+        %{
+          name: "body",
+          type: "String.t()",
+          required: false,
+          aliases: ["message", "text"]
+        }
+      ],
+      examples: ["SEND ME EMAIL WITH: TO={to} SUBJECT={subject} BODY={body}"]
+    }
   end
 end

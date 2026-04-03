@@ -17,9 +17,11 @@
 
 .agents/
 
-/native/spectre_ffi/target/
+.cargo 
+.claude
 
-/priv/native/
+/artifacts/
+/checkpoints/
 
 
 # If the VM crashes, it generates a dump, let's ignore it too.
@@ -30,4 +32,3 @@ erl_crash.dump
 
 # Ignore package tarball (built via "mix hex.build").
 spectre_kinetic-*.tar
-
