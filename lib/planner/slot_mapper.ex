@@ -115,8 +115,7 @@ defmodule SpectreKinetic.Planner.SlotMapper do
 
   defp resolve_by_type(slots, params) do
     Enum.reduce(Map.to_list(slots), {%{}, slots, params}, fn {slot_key, value},
-                                                              {matched, slots_left,
-                                                               params_left} ->
+                                                             {matched, slots_left, params_left} ->
       case infer_type_match(value, params_left) do
         {:ok, param_def} ->
           {
@@ -148,21 +147,9 @@ defmodule SpectreKinetic.Planner.SlotMapper do
   # --- Type detection ---
 
   defp infer_type_match(value, params) do
-    detected_type = detect_value_type(value)
-
-    case detected_type do
-      nil ->
-        :no_match
-
-      type ->
-        hint_names = Map.get(@type_hints, type, [])
-
-        case Enum.find(params, fn p ->
-               String.downcase(p["name"]) in hint_names
-             end) do
-          nil -> :no_match
-          param -> {:ok, param}
-        end
+    case detect_value_type(value) do
+      nil -> :no_match
+      type -> match_param_for_type(params, type)
     end
   end
 
@@ -171,17 +158,11 @@ defmodule SpectreKinetic.Planner.SlotMapper do
   """
   @spec detect_value_type(binary()) :: atom() | nil
   def detect_value_type(value) when is_binary(value) do
-    cond do
-      Regex.match?(@email_pattern, value) -> :email
-      Regex.match?(@url_pattern, value) -> :url
-      Regex.match?(@date_pattern, value) -> :date
-      Regex.match?(@time_pattern, value) -> :time
-      Regex.match?(@phone_pattern, value) -> :phone
-      Regex.match?(@path_pattern, value) -> :path
-      String.downcase(value) in @boolean_values -> :boolean
-      Regex.match?(@float_pattern, value) -> :float
-      Regex.match?(@integer_pattern, value) -> :integer
-      true -> nil
+    value
+    |> detect_textual_type()
+    |> case do
+      nil -> detect_scalar_type(value)
+      type -> type
     end
   end
 
@@ -219,6 +200,38 @@ defmodule SpectreKinetic.Planner.SlotMapper do
       n_total == 0 -> 1.0
       n_missing == 0 -> min(1.0, n_matched / max(n_required, 1))
       true -> max(0.0, (n_required - n_missing) / max(n_required, 1))
+    end
+  end
+
+  defp match_param_for_type(params, type) do
+    params
+    |> Enum.find(&(String.downcase(&1["name"]) in Map.get(@type_hints, type, [])))
+    |> case do
+      nil -> :no_match
+      param -> {:ok, param}
+    end
+  end
+
+  defp detect_textual_type(value) do
+    cond do
+      Regex.match?(@email_pattern, value) -> :email
+      Regex.match?(@url_pattern, value) -> :url
+      Regex.match?(@date_pattern, value) -> :date
+      Regex.match?(@time_pattern, value) -> :time
+      Regex.match?(@phone_pattern, value) -> :phone
+      Regex.match?(@path_pattern, value) -> :path
+      true -> nil
+    end
+  end
+
+  defp detect_scalar_type(value) do
+    normalized = String.downcase(value)
+
+    cond do
+      normalized in @boolean_values -> :boolean
+      Regex.match?(@float_pattern, value) -> :float
+      Regex.match?(@integer_pattern, value) -> :integer
+      true -> nil
     end
   end
 end

@@ -62,6 +62,7 @@ defmodule SpectreKinetic.Planner.SlotMapperTest do
   describe "type-based matching" do
     test "email value matches email-typed params" do
       parsed = %{"X" => "user@example.com"}
+
       action = %{
         "args" => [
           %{"name" => "to", "type" => "String.t()", "required" => true, "aliases" => []}
@@ -74,6 +75,7 @@ defmodule SpectreKinetic.Planner.SlotMapperTest do
 
     test "phone value matches phone-typed params" do
       parsed = %{"X" => "+1555010001"}
+
       action = %{
         "args" => [
           %{"name" => "phone", "type" => "String.t()", "required" => true, "aliases" => []}
@@ -127,9 +129,24 @@ defmodule SpectreKinetic.Planner.SlotMapperTest do
   defp email_action do
     %{
       "args" => [
-        %{"name" => "to", "type" => "String.t()", "required" => true, "aliases" => ["recipient", "email"]},
-        %{"name" => "subject", "type" => "String.t()", "required" => true, "aliases" => ["title"]},
-        %{"name" => "body", "type" => "String.t()", "required" => true, "aliases" => ["message", "text"]}
+        %{
+          "name" => "to",
+          "type" => "String.t()",
+          "required" => true,
+          "aliases" => ["recipient", "email"]
+        },
+        %{
+          "name" => "subject",
+          "type" => "String.t()",
+          "required" => true,
+          "aliases" => ["title"]
+        },
+        %{
+          "name" => "body",
+          "type" => "String.t()",
+          "required" => true,
+          "aliases" => ["message", "text"]
+        }
       ]
     }
   end

@@ -11,6 +11,7 @@ defmodule SpectreKinetic.Planner do
   alias SpectreKinetic.Planner.Runtime, as: PlannerRuntime
   alias SpectreKinetic.Planner.Scorer
   alias SpectreKinetic.Planner.SlotMapper
+  alias SpectreKinetic.RuntimeConfig
 
   @default_top_k 5
   @default_tool_threshold 0.3
@@ -88,6 +89,7 @@ defmodule SpectreKinetic.Planner do
 
   @spec plan_request(map(), plan_opts()) :: {:ok, plan_result()} | {:error, term()}
   def plan_request(request, opts \\ %{}) do
+    request = RuntimeConfig.normalize_request(request)
     al_text = Map.get(request, "al", "")
     slots = Map.get(request, "slots", %{})
 
@@ -111,27 +113,15 @@ defmodule SpectreKinetic.Planner do
   defp retrieve_candidates(al_text, registry_module, registry, embedder, top_k) do
     case registry_module.embedding_matrix(registry) do
       {matrix, action_ids} ->
-        case maybe_embed_query(embedder, al_text) do
-          {:ok, query_vec} ->
-            cos_scores = Scorer.cosine_similarity(query_vec, matrix)
-            top = Scorer.top_k(cos_scores, top_k)
-
-            candidates =
-              Enum.map(top, fn {idx, score} ->
-                action_id = Enum.at(action_ids, idx)
-                action = registry_module.get_action(registry, action_id)
-                %{action: action, embedding_score: score}
-              end)
-              |> Enum.reject(&is_nil(&1.action))
-
-            {:ok, candidates}
-
-          {:error, :embedder_unavailable} ->
-            retrieve_lexical_fallback(al_text, registry_module, registry, top_k)
-
-          {:error, _reason} = error ->
-            error
-        end
+        retrieve_embedded_candidates(
+          al_text,
+          registry_module,
+          registry,
+          embedder,
+          top_k,
+          matrix,
+          action_ids
+        )
 
       nil ->
         retrieve_lexical_fallback(al_text, registry_module, registry, top_k)
@@ -186,26 +176,65 @@ defmodule SpectreKinetic.Planner do
 
     with {:ok, %{candidate: chosen, mapping: mapping, notes: reranker_notes}} <-
            choose_candidate(al_text, scored_candidates, slots, selection_opts) do
-      cond do
-        chosen.fused_score >= tool_threshold or reranker_notes != [] ->
-          {:ok,
-           %{
-             "status" => if(mapping.missing == [], do: "ok", else: "MISSING_ARGS"),
-             "selected_tool" => chosen.action["id"],
-             "confidence" => chosen.fused_score,
-             "tool_score" => chosen.embedding_score,
-             "mapping_score" => mapping.mapping_score,
-             "combined_score" => chosen.fused_score,
-             "args" => mapping.args,
-             "missing" => mapping.missing,
-             "notes" => mapping.notes ++ reranker_notes,
-             "candidates" => build_candidate_list(scored_candidates)
-           }}
-
-        true ->
-          no_tool_result(scored_candidates, tool_threshold)
+      if chosen.fused_score >= tool_threshold or reranker_notes != [] do
+        {:ok,
+         %{
+           "status" => if(mapping.missing == [], do: "ok", else: "MISSING_ARGS"),
+           "selected_tool" => chosen.action["id"],
+           "confidence" => chosen.fused_score,
+           "tool_score" => chosen.embedding_score,
+           "mapping_score" => mapping.mapping_score,
+           "combined_score" => chosen.fused_score,
+           "args" => mapping.args,
+           "missing" => mapping.missing,
+           "notes" => mapping.notes ++ reranker_notes,
+           "candidates" => build_candidate_list(scored_candidates)
+         }}
+      else
+        no_tool_result(scored_candidates, tool_threshold)
       end
     end
+  end
+
+  defp retrieve_embedded_candidates(
+         al_text,
+         registry_module,
+         registry,
+         embedder,
+         top_k,
+         matrix,
+         action_ids
+       ) do
+    case maybe_embed_query(embedder, al_text) do
+      {:ok, query_vec} ->
+        {:ok,
+         build_embedded_candidates(
+           query_vec,
+           matrix,
+           top_k,
+           action_ids,
+           registry_module,
+           registry
+         )}
+
+      {:error, :embedder_unavailable} ->
+        retrieve_lexical_fallback(al_text, registry_module, registry, top_k)
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp build_embedded_candidates(query_vec, matrix, top_k, action_ids, registry_module, registry) do
+    query_vec
+    |> Scorer.cosine_similarity(matrix)
+    |> Scorer.top_k(top_k)
+    |> Enum.map(fn {idx, score} ->
+      action_id = Enum.at(action_ids, idx)
+      action = registry_module.get_action(registry, action_id)
+      %{action: action, embedding_score: score}
+    end)
+    |> Enum.reject(&is_nil(&1.action))
   end
 
   defp choose_candidate(al_text, [best | rest] = scored_candidates, slots, selection_opts) do

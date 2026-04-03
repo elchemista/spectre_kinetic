@@ -1,21 +1,57 @@
 defmodule SpectreKinetic.MixProject do
   use Mix.Project
 
+  @version "0.1.0"
+
   def project do
     [
       app: :spectre_kinetic,
-      version: "0.1.0",
+      version: @version,
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      dialyzer: [plt_add_apps: [:mix]]
+      dialyzer: [plt_add_apps: [:mix]],
+      description: description(),
+      package: package(),
+      docs: [
+        main: "readme",
+        extras: [
+          "README.md",
+          "TRAIN.md",
+          "LICENSE"
+        ]
+      ],
+      source_url: "https://github.com/elchemista/spectre_kinetic",
+      homepage_url: "https://github.com/elchemista/spectre_kinetic"
     ]
   end
 
   def application do
     [
       extra_applications: [:logger]
+    ]
+  end
+
+  defp description do
+    "Elixir-first planning toolkit for Action Language tool selection and reranker fallback"
+  end
+
+  defp package do
+    [
+      name: "spectre_kinetic",
+      maintainers: ["Yuriy Zhar"],
+      files: ~w(
+             lib
+             mix.exs
+             README.md
+             TRAIN.md
+             LICENSE
+      ),
+      licenses: ["Apache-2.0"],
+      links: %{
+        "GitHub" => "https://github.com/elchemista/spectre_kinetic"
+      }
     ]
   end
 

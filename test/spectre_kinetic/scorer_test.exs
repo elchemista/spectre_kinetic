@@ -49,23 +49,29 @@ defmodule SpectreKinetic.Planner.ScorerTest do
   describe "lexical_overlap/2" do
     test "full overlap returns 1.0" do
       assert_in_delta Scorer.lexical_overlap(
-        "SEND EMAIL",
-        "SEND EMAIL message"
-      ), 1.0, 0.001
+                        "SEND EMAIL",
+                        "SEND EMAIL message"
+                      ),
+                      1.0,
+                      0.001
     end
 
     test "no overlap returns 0.0" do
       assert_in_delta Scorer.lexical_overlap(
-        "DELETE TASK",
-        "SEND EMAIL message"
-      ), 0.0, 0.001
+                        "DELETE TASK",
+                        "SEND EMAIL message"
+                      ),
+                      0.0,
+                      0.001
     end
 
     test "partial overlap" do
-      score = Scorer.lexical_overlap(
-        "SEND OUTBOUND EMAIL",
-        "SEND EMAIL message to recipient"
-      )
+      score =
+        Scorer.lexical_overlap(
+          "SEND OUTBOUND EMAIL",
+          "SEND EMAIL message to recipient"
+        )
+
       assert score > 0.0 and score < 1.0
     end
   end
@@ -73,22 +79,26 @@ defmodule SpectreKinetic.Planner.ScorerTest do
   describe "alias_overlap/2" do
     test "all slots match known args" do
       parsed = %{"to" => "test@test.com", "subject" => "Hi"}
+
       action = %{
         "args" => [
           %{"name" => "to", "aliases" => ["recipient"]},
           %{"name" => "subject", "aliases" => ["title"]}
         ]
       }
+
       assert_in_delta Scorer.alias_overlap(parsed, action), 1.0, 0.001
     end
 
     test "alias matches count" do
       parsed = %{"recipient" => "test@test.com"}
+
       action = %{
         "args" => [
           %{"name" => "to", "aliases" => ["recipient", "email"]}
         ]
       }
+
       assert_in_delta Scorer.alias_overlap(parsed, action), 1.0, 0.001
     end
 
@@ -106,19 +116,27 @@ defmodule SpectreKinetic.Planner.ScorerTest do
   describe "shape_score/2" do
     test "exact match returns 1.0" do
       parsed = %{"to" => "a", "subject" => "b"}
-      action = %{"args" => [
-        %{"name" => "to", "required" => true},
-        %{"name" => "subject", "required" => true}
-      ]}
+
+      action = %{
+        "args" => [
+          %{"name" => "to", "required" => true},
+          %{"name" => "subject", "required" => true}
+        ]
+      }
+
       assert_in_delta Scorer.shape_score(parsed, action), 1.0, 0.001
     end
 
     test "missing required arg reduces score" do
       parsed = %{"to" => "a"}
-      action = %{"args" => [
-        %{"name" => "to", "required" => true},
-        %{"name" => "subject", "required" => true}
-      ]}
+
+      action = %{
+        "args" => [
+          %{"name" => "to", "required" => true},
+          %{"name" => "subject", "required" => true}
+        ]
+      }
+
       assert Scorer.shape_score(parsed, action) < 1.0
     end
   end
@@ -126,20 +144,24 @@ defmodule SpectreKinetic.Planner.ScorerTest do
   describe "fuse_scores/1" do
     test "all 1.0 returns 1.0" do
       assert_in_delta Scorer.fuse_scores(%{
-        embedding: 1.0,
-        lexical: 1.0,
-        alias: 1.0,
-        shape: 1.0
-      }), 1.0, 0.001
+                        embedding: 1.0,
+                        lexical: 1.0,
+                        alias: 1.0,
+                        shape: 1.0
+                      }),
+                      1.0,
+                      0.001
     end
 
     test "all 0.0 returns 0.0" do
       assert_in_delta Scorer.fuse_scores(%{
-        embedding: 0.0,
-        lexical: 0.0,
-        alias: 0.0,
-        shape: 0.0
-      }), 0.0, 0.001
+                        embedding: 0.0,
+                        lexical: 0.0,
+                        alias: 0.0,
+                        shape: 0.0
+                      }),
+                      0.0,
+                      0.001
     end
   end
 end

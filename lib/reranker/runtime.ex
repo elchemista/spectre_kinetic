@@ -1,4 +1,4 @@
-defmodule SpectreKinetic.Planner.RerankerRuntime do
+defmodule SpectreKinetic.Reranker.Runtime do
   @moduledoc """
   Optional ONNX reranker runtime used for bounded tool-selection fallback.
   """
@@ -49,21 +49,19 @@ defmodule SpectreKinetic.Planner.RerankerRuntime do
   """
   @spec score_batch(runtime_t(), [input_pair()]) :: {:ok, [float()]} | {:error, term()}
   def score_batch(%__MODULE__{} = runtime, pairs) when is_list(pairs) do
-    try do
-      encodings =
-        Enum.map(pairs, fn {query, tool_card} ->
-          {:ok, encoding} = Tokenizers.Tokenizer.encode(runtime.tokenizer, {query, tool_card})
-          encoding
-        end)
+    encodings =
+      Enum.map(pairs, fn {query, tool_card} ->
+        {:ok, encoding} = Tokenizers.Tokenizer.encode(runtime.tokenizer, {query, tool_card})
+        encoding
+      end)
 
-      {input_ids, attention_mask, token_type_ids} = build_input_tensors(encodings)
-      outputs = Ortex.run(runtime.model, {input_ids, attention_mask, token_type_ids})
+    {input_ids, attention_mask, token_type_ids} = build_input_tensors(encodings)
+    outputs = Ortex.run(runtime.model, {input_ids, attention_mask, token_type_ids})
 
-      {:ok, outputs |> to_score_tensor() |> Nx.to_flat_list() |> Enum.map(&normalize_number/1)}
-    rescue
-      error ->
-        {:error, {:reranker_failed, Exception.message(error)}}
-    end
+    {:ok, outputs |> to_score_tensor() |> Nx.to_flat_list() |> Enum.map(&normalize_number/1)}
+  rescue
+    error ->
+      {:error, {:reranker_failed, Exception.message(error)}}
   end
 
   defp load_tokenizer(path, max_length) do
@@ -78,11 +76,9 @@ defmodule SpectreKinetic.Planner.RerankerRuntime do
   end
 
   defp load_model(path) do
-    try do
-      {:ok, Ortex.load(path)}
-    rescue
-      error -> {:error, {:model_load_failed, Exception.message(error)}}
-    end
+    {:ok, Ortex.load(path)}
+  rescue
+    error -> {:error, {:model_load_failed, Exception.message(error)}}
   end
 
   defp build_input_tensors(encodings) do

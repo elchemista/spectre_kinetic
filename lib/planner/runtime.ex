@@ -10,8 +10,8 @@ defmodule SpectreKinetic.Planner.Runtime do
   alias SpectreKinetic.Planner.EmbeddingRuntime
   alias SpectreKinetic.Planner.Registry
   alias SpectreKinetic.Planner.Registry.ETS
-  alias SpectreKinetic.Planner.RerankerRuntime
-  alias SpectreKinetic.Runtime, as: ConfigRuntime
+  alias SpectreKinetic.Reranker.Runtime, as: RerankerRuntime
+  alias SpectreKinetic.RuntimeConfig
 
   defstruct [
     :registry_module,
@@ -124,9 +124,9 @@ defmodule SpectreKinetic.Planner.Runtime do
         {:error, :unknown_registry_format}
 
       loader ->
-        with {:ok, registry} <- loader.(runtime.registry, path),
-             {:ok, runtime} <- maybe_reembed(%{runtime | registry: registry}, path) do
-          {:ok, runtime}
+        case loader.(runtime.registry, path) do
+          {:ok, registry} -> maybe_reembed(%{runtime | registry: registry}, path)
+          {:error, _reason} = error -> error
         end
     end
   end
@@ -158,7 +158,7 @@ defmodule SpectreKinetic.Planner.Runtime do
   end
 
   defp planner_defaults(opts) do
-    ConfigRuntime.default_plan_options()
+    RuntimeConfig.default_plan_options()
     |> Keyword.merge(
       opts
       |> Keyword.take([
@@ -173,7 +173,7 @@ defmodule SpectreKinetic.Planner.Runtime do
   end
 
   defp maybe_load_encoder(opts) do
-    case ConfigRuntime.resolve_optional_path(
+    case RuntimeConfig.resolve_optional_path(
            opts,
            :encoder_model_dir,
            :encoder_model_dir,
@@ -187,7 +187,7 @@ defmodule SpectreKinetic.Planner.Runtime do
   defp maybe_load_reranker(opts, reranker_module) do
     fallback_mode =
       Keyword.get(opts, :tool_selection_fallback) ||
-        Keyword.get(ConfigRuntime.default_plan_options(), :tool_selection_fallback, :disabled)
+        Keyword.get(RuntimeConfig.default_plan_options(), :tool_selection_fallback, :disabled)
 
     cond do
       runtime = Keyword.get(opts, :reranker) ->
@@ -197,7 +197,7 @@ defmodule SpectreKinetic.Planner.Runtime do
         {:ok, nil}
 
       true ->
-        case ConfigRuntime.resolve_optional_path(
+        case RuntimeConfig.resolve_optional_path(
                opts,
                :fallback_model_dir,
                :fallback_model_dir,
@@ -211,7 +211,7 @@ defmodule SpectreKinetic.Planner.Runtime do
 
   defp maybe_embed_registry(runtime, opts) do
     source =
-      ConfigRuntime.resolve_optional_path(
+      RuntimeConfig.resolve_optional_path(
         opts,
         :registry_json,
         :registry_json,
@@ -219,7 +219,7 @@ defmodule SpectreKinetic.Planner.Runtime do
       )
 
     compiled =
-      ConfigRuntime.resolve_optional_path(
+      RuntimeConfig.resolve_optional_path(
         opts,
         :compiled_registry,
         :compiled_registry,

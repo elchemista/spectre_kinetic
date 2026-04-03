@@ -1,4 +1,4 @@
-defmodule SpectreKinetic.Training.Calibration do
+defmodule SpectreKinetic.Reranker.Calibration do
   @moduledoc """
   Emits basic selection thresholds from labeled reranker scores.
   """

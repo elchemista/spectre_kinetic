@@ -1,4 +1,4 @@
-defmodule SpectreKinetic.Runtime do
+defmodule SpectreKinetic.RuntimeConfig do
   @moduledoc false
 
   @app :spectre_kinetic
@@ -119,6 +119,21 @@ defmodule SpectreKinetic.Runtime do
   def stringify_map(_), do: %{}
 
   @doc """
+  Normalizes a plan request map into the runtime-first request shape.
+  """
+  @spec normalize_request(map()) :: map()
+  def normalize_request(request) when is_map(request) do
+    %{
+      "al" => request_value(request, :al, ""),
+      "slots" => request_slots(request),
+      "top_k" => request_value(request, :top_k, default_top_k())
+    }
+    |> put_optional_request_fields(request)
+  end
+
+  def normalize_request(_request), do: %{"al" => "", "slots" => %{}, "top_k" => @default_top_k}
+
+  @doc """
   Formats a readable error message for missing required paths.
   """
   @spec missing_path_message({:missing_path, atom(), binary()}) :: binary()
@@ -202,4 +217,34 @@ defmodule SpectreKinetic.Runtime do
   end
 
   defp parse_fallback_mode(_value), do: nil
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp put_optional_request_fields(map, request) do
+    [
+      {"tool_threshold", :tool_threshold},
+      {"mapping_threshold", :mapping_threshold},
+      {"tool_selection_fallback", :tool_selection_fallback},
+      {"fallback_top_k", :fallback_top_k},
+      {"fallback_margin", :fallback_margin}
+    ]
+    |> Enum.reduce(map, fn {target_key, request_key}, acc ->
+      maybe_put(acc, target_key, request_value(request, request_key))
+    end)
+  end
+
+  defp request_slots(request) do
+    request
+    |> request_value(:slots, %{})
+    |> stringify_map()
+  end
+
+  defp request_value(request, key, default \\ nil) do
+    Map.get(request, key) || Map.get(request, Atom.to_string(key)) || default
+  end
+
+  defp default_top_k do
+    Keyword.get(default_plan_options(), :top_k, @default_top_k)
+  end
 end

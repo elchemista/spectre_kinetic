@@ -24,7 +24,10 @@ defmodule SpectreKinetic.PromptTest do
 
     assert prompt =~ "Output only `<al>...</al>` blocks and nothing else."
     assert prompt =~ "`WITH:` is optional."
-    assert prompt =~ "Positional AL like `INSTALL PACKAGE nginx VIA APT` or `LIST DIRECTORY /tmp` is valid"
+
+    assert prompt =~
+             "Positional AL like `INSTALL PACKAGE nginx VIA APT` or `LIST DIRECTORY /tmp` is valid"
+
     assert prompt =~ "- package"
     assert prompt =~ "<al>INSTALL PACKAGE {package} VIA APT</al>"
     assert prompt =~ ~s(<al>INSTALL PACKAGE WITH: PACKAGE="nginx"</al>)

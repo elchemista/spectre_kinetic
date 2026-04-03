@@ -1,26 +1,17 @@
-defmodule Mix.Tasks.Spectre.CompileRegistry do
+defmodule Mix.Tasks.CompileKinetic do
   use Mix.Task
+
+  alias SpectreKinetic.Planner.Compiler
 
   @moduledoc """
   Compiles a registry JSON and encoder model into an Elixir-native ETF bundle.
 
-  The compiled bundle contains normalized action definitions, precomputed
-  tool-card embeddings, and metadata. It is loaded at runtime by
-  `SpectreKinetic.Planner.RegistryStore` for zero-network-access boot.
-
   ## Usage
 
-      mix spectre.compile_registry \\
+      mix compile_kinetic \\
         --registry path/to/registry.json \\
         --encoder path/to/encoder_model_dir \\
         --out artifacts/registry/registry.etf
-
-  ## Options
-
-    * `--registry` — path to source registry JSON (required)
-    * `--encoder` — path to ONNX encoder model directory (required)
-    * `--out` — output path for the compiled ETF bundle (required)
-    * `--batch-size` — embedding batch size (default 32)
   """
 
   @shortdoc "Compile registry JSON + encoder into an Elixir-native ETF bundle"
@@ -43,7 +34,7 @@ defmodule Mix.Tasks.Spectre.CompileRegistry do
 
     Mix.Task.run("app.start")
 
-    case SpectreKinetic.Planner.Compiler.compile(
+    case Compiler.compile(
            registry_json: registry,
            encoder_model_dir: encoder,
            output: out,

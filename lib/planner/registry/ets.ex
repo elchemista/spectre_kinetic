@@ -27,9 +27,9 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
       meta: :ets.new(__MODULE__, [:set, :protected])
     }
 
-    with {:ok, registry} <- maybe_load_json(registry, Keyword.get(opts, :registry_json)),
-         {:ok, registry} <- maybe_load_compiled(registry, Keyword.get(opts, :compiled_registry)) do
-      {:ok, registry}
+    case maybe_load_json(registry, Keyword.get(opts, :registry_json)) do
+      {:ok, registry} -> maybe_load_compiled(registry, Keyword.get(opts, :compiled_registry))
+      {:error, _reason} = error -> error
     end
   end
 
@@ -37,21 +37,9 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   def load_json(%__MODULE__{} = registry, path) do
     with {:ok, payload} <- File.read(path),
          {:ok, decoded} <- Jason.decode(payload) do
-      actions = Map.get(decoded, "actions", Map.get(decoded, "tools", []))
-      clear_tables(registry)
-
-      Enum.each(actions, fn raw ->
-        case Registry.normalize_action(raw) do
-          {:ok, action} ->
-            insert_action(registry, action)
-
-          {:error, reason} ->
-            Logger.warning("Skipping invalid action from #{path}: #{inspect(reason)}")
-        end
-      end)
-
-      Logger.info("Planner ETS registry loaded #{action_count(registry)} actions from #{path}")
-      {:ok, registry}
+      decoded
+      |> Map.get("actions", Map.get(decoded, "tools", []))
+      |> reload_actions(registry, path)
     else
       {:error, reason} -> {:error, normalize_file_error(reason)}
     end
@@ -214,6 +202,26 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     end
   end
 
-  defp normalize_file_error({:file_read, _} = reason), do: reason
   defp normalize_file_error(reason), do: reason
+
+  defp reload_actions(actions, registry, path) do
+    clear_tables(registry)
+
+    Enum.each(actions, fn raw ->
+      insert_normalized_action(registry, raw, path)
+    end)
+
+    Logger.info("Planner ETS registry loaded #{action_count(registry)} actions from #{path}")
+    {:ok, registry}
+  end
+
+  defp insert_normalized_action(registry, raw, path) do
+    case Registry.normalize_action(raw) do
+      {:ok, action} ->
+        insert_action(registry, action)
+
+      {:error, reason} ->
+        Logger.warning("Skipping invalid action from #{path}: #{inspect(reason)}")
+    end
+  end
 end
