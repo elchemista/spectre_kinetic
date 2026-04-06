@@ -116,7 +116,7 @@ Plan a noisy LLM response:
   """)
 ```
 
-## Plan4: Code-First Tool Registration
+## Code-First Tool Registration
 
 You mark planner-visible functions with:
 
