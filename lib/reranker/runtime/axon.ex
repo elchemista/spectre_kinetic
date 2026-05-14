@@ -11,6 +11,7 @@ defmodule SpectreKinetic.Reranker.Runtime.Axon do
   `hidden_dim`.
   """
 
+  alias SpectreKinetic.ONNX
   alias SpectreKinetic.Planner.EmbeddingRuntime
   alias SpectreKinetic.Reranker.FeatureBuilder
   alias SpectreKinetic.Reranker.Trainer
@@ -74,10 +75,7 @@ defmodule SpectreKinetic.Reranker.Runtime.Axon do
           runtime.model
           |> Trainer.predict(runtime.model_state, features)
           |> Nx.to_flat_list()
-          |> Enum.map(fn
-            value when is_float(value) -> value
-            value when is_integer(value) -> value / 1
-          end)
+          |> Enum.map(&ONNX.normalize_number/1)
 
         {:ok, scores}
 

@@ -338,13 +338,8 @@ defmodule SpectreKinetic do
   defp plan_scan_entry(_target, {%{raw: raw, error: reason}, index}, _opts),
     do: Action.error(raw, reason, index)
 
-  @dialyzer {:nowarn_function, planner_reply: 2}
-  defp planner_reply(al_text, planner_result) do
-    case planner_result do
-      {:error, reason} -> {:error, reason}
-      result -> {:ok, Action.from_plan(al_text, elem(result, 1))}
-    end
-  end
+  defp planner_reply(al_text, planner_result),
+    do: Action.from_planner_reply(al_text, planner_result)
 
   defp extract_tool_params(args) do
     args

@@ -11,6 +11,8 @@ defmodule SpectreKinetic.Planner.EmbeddingRuntime do
 
   require Logger
 
+  alias SpectreKinetic.ONNX
+
   defstruct [:model, :tokenizer, :max_length, :dim]
 
   @type runtime_t :: %__MODULE__{
@@ -33,8 +35,8 @@ defmodule SpectreKinetic.Planner.EmbeddingRuntime do
     model_path = Path.join(model_dir, "model.onnx")
     tokenizer_path = Path.join(model_dir, "tokenizer.json")
 
-    with {:ok, tokenizer} <- load_tokenizer(tokenizer_path, max_length),
-         {:ok, model} <- load_model(model_path) do
+    with {:ok, tokenizer} <- ONNX.load_tokenizer(tokenizer_path, max_length),
+         {:ok, model} <- ONNX.load_model(model_path) do
       dim = detect_dim(model, tokenizer)
 
       Logger.info(
@@ -134,24 +136,6 @@ defmodule SpectreKinetic.Planner.EmbeddingRuntime do
 
   # --- Internal helpers ---
 
-  defp load_tokenizer(path, max_length) do
-    case Tokenizers.Tokenizer.from_file(path) do
-      {:ok, tokenizer} ->
-        tokenizer = Tokenizers.Tokenizer.set_truncation(tokenizer, max_length: max_length)
-        {:ok, tokenizer}
-
-      {:error, reason} ->
-        {:error, {:tokenizer_load_failed, reason}}
-    end
-  end
-
-  defp load_model(path) do
-    model = Ortex.load(path)
-    {:ok, model}
-  rescue
-    error -> {:error, {:model_load_failed, Exception.message(error)}}
-  end
-
   defp detect_dim(model, tokenizer) do
     # Run a dummy forward pass to detect output dimension
     {:ok, encoding} = Tokenizers.Tokenizer.encode(tokenizer, "hello")
@@ -163,23 +147,26 @@ defmodule SpectreKinetic.Planner.EmbeddingRuntime do
     attention_mask = Nx.tensor([mask], type: :s64)
     token_type_ids = Nx.tensor([type_ids], type: :s64)
 
-    {output} = Ortex.run(model, {input_ids, attention_mask, token_type_ids})
-    output_nx = Nx.backend_transfer(output)
+    output_nx =
+      model
+      |> run_encoder(input_ids, attention_mask, token_type_ids)
+      |> Nx.backend_transfer()
+      |> extract_cls_embeddings()
 
-    # Output shape is {1, seq_len, dim} — take the last axis
-    {_batch, _seq, dim} = Nx.shape(output_nx)
-    dim
+    case Nx.shape(output_nx) do
+      {_batch, dim} -> dim
+      {dim} -> dim
+    end
   end
 
   defp do_embed_batch(state, texts) do
     {:ok, batch_encoding} = Tokenizers.Tokenizer.encode_batch(state.tokenizer, texts)
 
-    {input_ids, attention_mask, token_type_ids} = build_input_tensors(batch_encoding)
-
-    {output} = Ortex.run(state.model, {input_ids, attention_mask, token_type_ids})
+    {input_ids, attention_mask, token_type_ids} = ONNX.input_tensors(batch_encoding)
 
     embeddings =
-      output
+      state.model
+      |> run_encoder(input_ids, attention_mask, token_type_ids)
       |> Nx.backend_transfer()
       |> extract_cls_embeddings()
       |> l2_normalize()
@@ -189,16 +176,17 @@ defmodule SpectreKinetic.Planner.EmbeddingRuntime do
     error -> {:error, {:embed_failed, Exception.message(error)}}
   end
 
-  defp build_input_tensors(encodings) when is_list(encodings) do
-    ids = Enum.map(encodings, &Tokenizers.Encoding.get_ids/1)
-    masks = Enum.map(encodings, &Tokenizers.Encoding.get_attention_mask/1)
-    type_ids = Enum.map(encodings, &Tokenizers.Encoding.get_type_ids/1)
+  defp run_encoder(model, input_ids, attention_mask, token_type_ids) do
+    case try_run_encoder(model, {input_ids, attention_mask, token_type_ids}) do
+      {:ok, output} -> output
+      {:error, _reason} -> Ortex.run(model, {input_ids, attention_mask}) |> ONNX.first_output()
+    end
+  end
 
-    {
-      Nx.tensor(ids, type: :s64),
-      Nx.tensor(masks, type: :s64),
-      Nx.tensor(type_ids, type: :s64)
-    }
+  defp try_run_encoder(model, inputs) do
+    {:ok, Ortex.run(model, inputs) |> ONNX.first_output()}
+  rescue
+    error -> {:error, Exception.message(error)}
   end
 
   defp extract_cls_embeddings(output) do

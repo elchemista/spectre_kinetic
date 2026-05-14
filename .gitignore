@@ -16,9 +16,8 @@
 .elixir_ls/
 
 .agents/
-
-.cargo 
-.claude
+.cargo/
+.claude/
 
 /artifacts/
 /checkpoints/

@@ -13,12 +13,6 @@ defmodule SpectreKinetic.Planner do
   alias SpectreKinetic.Planner.SlotMapper
   alias SpectreKinetic.RuntimeConfig
 
-  @default_top_k 5
-  @default_tool_threshold 0.3
-  @default_mapping_threshold 0.0
-  @default_fallback_top_k 3
-  @default_fallback_margin 0.12
-
   @type plan_opts :: %{
           optional(:top_k) => pos_integer(),
           optional(:tool_threshold) => float(),
@@ -57,16 +51,20 @@ defmodule SpectreKinetic.Planner do
     registry_module = Map.get(opts, :registry_module, RegistryStore)
     registry = Map.get(opts, :registry, RegistryStore)
     embedder = Map.get(opts, :embedder)
-    top_k = Map.get(opts, :top_k, @default_top_k)
-    tool_threshold = Map.get(opts, :tool_threshold, @default_tool_threshold)
-    mapping_threshold = Map.get(opts, :mapping_threshold, @default_mapping_threshold)
+    defaults = RuntimeConfig.built_in_plan_defaults()
+    top_k = Map.get(opts, :top_k, Keyword.fetch!(defaults, :top_k))
+    tool_threshold = Map.get(opts, :tool_threshold, Keyword.fetch!(defaults, :tool_threshold))
+
+    mapping_threshold =
+      Map.get(opts, :mapping_threshold, Keyword.fetch!(defaults, :mapping_threshold))
 
     selection_opts = %{
       tool_threshold: tool_threshold,
       mapping_threshold: mapping_threshold,
       tool_selection_fallback: Map.get(opts, :tool_selection_fallback, :disabled),
-      fallback_top_k: Map.get(opts, :fallback_top_k, @default_fallback_top_k),
-      fallback_margin: Map.get(opts, :fallback_margin, @default_fallback_margin),
+      fallback_top_k: Map.get(opts, :fallback_top_k, Keyword.fetch!(defaults, :fallback_top_k)),
+      fallback_margin:
+        Map.get(opts, :fallback_margin, Keyword.fetch!(defaults, :fallback_margin)),
       reranker_module: Map.get(opts, :reranker_module),
       reranker: Map.get(opts, :reranker)
     }

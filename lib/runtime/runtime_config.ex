@@ -2,39 +2,61 @@ defmodule SpectreKinetic.RuntimeConfig do
   @moduledoc false
 
   @app :spectre_kinetic
-  @default_top_k 5
-  @default_fallback_top_k 3
-  @default_fallback_margin 0.12
+  @built_in_plan_defaults [
+    top_k: 5,
+    tool_threshold: 0.3,
+    mapping_threshold: 0.0,
+    tool_selection_fallback: :disabled,
+    fallback_top_k: 3,
+    fallback_margin: 0.12
+  ]
+
+  @doc """
+  Returns the planner defaults before application config or environment overrides.
+  """
+  @spec built_in_plan_defaults() :: keyword()
+  def built_in_plan_defaults, do: @built_in_plan_defaults
 
   @doc """
   Returns planner defaults merged from application config and environment.
   """
   @spec default_plan_options() :: keyword()
   def default_plan_options do
+    defaults = @built_in_plan_defaults
+
     [
-      top_k: config_integer(:top_k, "SPECTRE_KINETIC_TOP_K", @default_top_k),
-      tool_threshold: config_float(:tool_threshold, "SPECTRE_KINETIC_TOOL_THRESHOLD"),
-      mapping_threshold: config_float(:mapping_threshold, "SPECTRE_KINETIC_MAPPING_THRESHOLD"),
+      top_k: config_integer(:top_k, "SPECTRE_KINETIC_TOP_K", Keyword.fetch!(defaults, :top_k)),
+      tool_threshold:
+        config_float(
+          :tool_threshold,
+          "SPECTRE_KINETIC_TOOL_THRESHOLD",
+          Keyword.fetch!(defaults, :tool_threshold)
+        ),
+      mapping_threshold:
+        config_float(
+          :mapping_threshold,
+          "SPECTRE_KINETIC_MAPPING_THRESHOLD",
+          Keyword.fetch!(defaults, :mapping_threshold)
+        ),
       tool_selection_fallback:
         config_fallback_mode(
           :tool_selection_fallback,
           "SPECTRE_KINETIC_TOOL_SELECTION_FALLBACK",
-          :disabled
+          Keyword.fetch!(defaults, :tool_selection_fallback)
         ),
       fallback_top_k:
         config_integer(
           :fallback_top_k,
           "SPECTRE_KINETIC_FALLBACK_TOP_K",
-          @default_fallback_top_k
+          Keyword.fetch!(defaults, :fallback_top_k)
         ),
       fallback_margin:
         config_float(
           :fallback_margin,
           "SPECTRE_KINETIC_FALLBACK_MARGIN",
-          @default_fallback_margin
+          Keyword.fetch!(defaults, :fallback_margin)
         )
     ]
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
 
   @doc """
@@ -131,7 +153,9 @@ defmodule SpectreKinetic.RuntimeConfig do
     |> put_optional_request_fields(request)
   end
 
-  def normalize_request(_request), do: %{"al" => "", "slots" => %{}, "top_k" => @default_top_k}
+  def normalize_request(_request) do
+    %{"al" => "", "slots" => %{}, "top_k" => built_in_default!(:top_k)}
+  end
 
   @doc """
   Formats a readable error message for missing required paths.
@@ -166,7 +190,7 @@ defmodule SpectreKinetic.RuntimeConfig do
     first_present_integer([Application.get_env(@app, app_key), System.get_env(env_var), default])
   end
 
-  defp config_float(app_key, env_var, default \\ nil) do
+  defp config_float(app_key, env_var, default) do
     first_present_float([Application.get_env(@app, app_key), System.get_env(env_var), default])
   end
 
@@ -245,6 +269,8 @@ defmodule SpectreKinetic.RuntimeConfig do
   end
 
   defp default_top_k do
-    Keyword.get(default_plan_options(), :top_k, @default_top_k)
+    Keyword.get(default_plan_options(), :top_k, built_in_default!(:top_k))
   end
+
+  defp built_in_default!(key), do: Keyword.fetch!(@built_in_plan_defaults, key)
 end

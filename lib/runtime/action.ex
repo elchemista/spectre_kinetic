@@ -97,6 +97,15 @@ defmodule SpectreKinetic.Action do
     }
   end
 
+  @doc false
+  @spec from_planner_reply(binary(), {:ok, map()} | {:error, term()}) ::
+          {:ok, t()} | {:error, term()}
+  def from_planner_reply(al_text, {:ok, plan}) when is_map(plan) do
+    {:ok, from_plan(al_text, plan)}
+  end
+
+  def from_planner_reply(_al_text, {:error, reason}), do: {:error, reason}
+
   @doc """
   Builds an error action for extraction or wrapper failures.
   """

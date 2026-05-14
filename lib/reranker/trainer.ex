@@ -9,8 +9,8 @@ defmodule SpectreKinetic.Reranker.Trainer do
     * `metadata.json` with training hyperparameters
     * `calibration.json` with derived acceptance thresholds
 
-  The runtime fallback remains ONNX-oriented, but this provides the Elixir-side
-  training and calibration pipeline for v2 artifact generation.
+  Use `SpectreKinetic.Reranker.Runtime.Axon` to load these artifacts at runtime.
+  The separate ONNX runtime is for externally exported pair-scoring models.
   """
 
   alias SpectreKinetic.Planner.EmbeddingRuntime

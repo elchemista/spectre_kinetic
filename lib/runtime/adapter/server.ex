@@ -85,27 +85,14 @@ defmodule SpectreKinetic.Adapter.Server do
   end
 
   def handle_call({:plan_request, request}, _from, state) do
-    normalized = RuntimeConfig.normalize_request(request)
-
-    reply =
-      planner_reply(
-        normalized["al"],
-        Planner.plan_request(normalized, PlannerRuntime.plan_opts(state.runtime))
-      )
-
-    {:reply, reply, state}
+    {:reply, do_plan_request(state.runtime, request), state}
   end
 
   def handle_call({:plan_json, request_json}, _from, state) do
     reply =
       case Jason.decode(request_json) do
         {:ok, request} ->
-          normalized = RuntimeConfig.normalize_request(request)
-
-          planner_reply(
-            normalized["al"],
-            Planner.plan_request(normalized, PlannerRuntime.plan_opts(state.runtime))
-          )
+          do_plan_request(state.runtime, request)
 
         {:error, %Jason.DecodeError{} = reason} ->
           {:error, {:json_decode, reason}}
@@ -143,11 +130,15 @@ defmodule SpectreKinetic.Adapter.Server do
     planner_reply(al_text, Planner.plan(runtime, al_text, opts))
   end
 
-  @dialyzer {:nowarn_function, planner_reply: 2}
-  defp planner_reply(al_text, planner_result) do
-    case planner_result do
-      {:error, reason} -> {:error, reason}
-      result -> {:ok, Action.from_plan(al_text, elem(result, 1))}
-    end
+  defp do_plan_request(runtime, request) do
+    normalized = RuntimeConfig.normalize_request(request)
+
+    planner_reply(
+      normalized["al"],
+      Planner.plan_request(normalized, PlannerRuntime.plan_opts(runtime))
+    )
   end
+
+  defp planner_reply(al_text, planner_result),
+    do: Action.from_planner_reply(al_text, planner_result)
 end

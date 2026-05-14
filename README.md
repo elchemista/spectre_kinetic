@@ -243,6 +243,20 @@ artifacts/encoder/
 └── tokenizer.json
 ```
 
+`BAAI/bge-small-en-v1.5` is the default because it is small and fast enough for
+local planner use. If you want higher retrieval quality and can afford more CPU
+and memory, use the same task with `BAAI/bge-base-en-v1.5` or
+`BAAI/bge-large-en-v1.5`:
+
+```bash
+mix spectre.download_encoder \
+  --model BAAI/bge-base-en-v1.5 \
+  --out artifacts/encoder
+```
+
+The runtime expects Hugging Face/ONNX encoder artifacts. It does not currently
+run model2vec static embedding artifacts directly.
+
 ## Reranker Training
 
 Reranker training is Elixir-native via `Nx` and `Axon`:
