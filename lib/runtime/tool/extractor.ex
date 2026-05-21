@@ -12,6 +12,24 @@ defmodule SpectreKinetic.Tool.Extractor do
           | {:module_not_loaded, module()}
           | {:invalid_action, module(), atom(), non_neg_integer(), term()}
 
+  @typep tool_identity :: %{
+           required(:module) => module(),
+           required(:function) => atom(),
+           required(:arity) => non_neg_integer(),
+           required(:params) => [binary()],
+           required(:canonical_al) => binary()
+         }
+
+  @typep doc_info :: %{
+           required(:text) => binary(),
+           required(:examples) => [binary()]
+         }
+
+  @typep spec_info :: %{
+           required(:text) => binary(),
+           required(:arg_types) => [binary()]
+         }
+
   @spec extract_app(atom()) :: {:ok, [Registry.action()]} | {:error, tool_error()}
   def extract_app(app) when is_atom(app) do
     case Application.spec(app, :modules) do
@@ -59,34 +77,76 @@ defmodule SpectreKinetic.Tool.Extractor do
   end
 
   defp build_action(module, tool, docs, specs) do
-    function = tool.function
-    arity = tool.arity
-    params = tool.params
-    canonical_al = tool.al
-    {doc_text, doc_examples} = split_doc_examples(Map.get(docs, {function, arity}, ""))
-    examples = uniq_preserve([canonical_al | doc_examples])
-    aliases = aliases_by_param(params, examples)
-    spec_entries = Map.get(specs, {function, arity}, [])
-    spec_text = spec_text(function, spec_entries)
-    arg_types = arg_types(function, spec_entries, length(params))
+    identity = tool_identity(module, tool)
+    doc_info = action_doc_info(identity, docs)
+    spec_info = action_spec_info(identity, specs)
 
-    action = %{
-      "id" => "#{Atom.to_string(module)}.#{function}/#{arity}",
-      "module" => Atom.to_string(module),
-      "name" => Atom.to_string(function),
-      "arity" => arity,
-      "doc" => doc_text,
-      "spec" => spec_text,
-      "args" => build_args(params, arg_types, aliases),
-      "examples" => examples
+    identity
+    |> action_map(doc_info, spec_info)
+    |> normalize_built_action(identity)
+  end
+
+  @spec tool_identity(module(), map()) :: tool_identity()
+  defp tool_identity(module, tool) do
+    %{
+      module: module,
+      function: tool.function,
+      arity: tool.arity,
+      params: tool.params,
+      canonical_al: tool.al
     }
+  end
 
+  @spec action_doc_info(tool_identity(), map()) :: doc_info()
+  defp action_doc_info(%{function: function, arity: arity, canonical_al: canonical_al}, docs) do
+    {text, examples} = split_doc_examples(Map.get(docs, {function, arity}, ""))
+
+    %{
+      text: text,
+      examples: uniq_preserve([canonical_al | examples])
+    }
+  end
+
+  @spec action_spec_info(tool_identity(), map()) :: spec_info()
+  defp action_spec_info(%{function: function, arity: arity, params: params}, specs) do
+    entries = Map.get(specs, {function, arity}, [])
+
+    %{
+      text: spec_text(function, entries),
+      arg_types: arg_types(function, entries, length(params))
+    }
+  end
+
+  @spec action_map(tool_identity(), doc_info(), spec_info()) :: map()
+  defp action_map(identity, doc_info, spec_info) do
+    aliases = aliases_by_param(identity.params, doc_info.examples)
+
+    %{
+      "id" => action_id(identity),
+      "module" => Atom.to_string(identity.module),
+      "name" => Atom.to_string(identity.function),
+      "arity" => identity.arity,
+      "doc" => doc_info.text,
+      "spec" => spec_info.text,
+      "args" => build_args(identity.params, spec_info.arg_types, aliases),
+      "examples" => doc_info.examples
+    }
+  end
+
+  @spec action_id(tool_identity()) :: binary()
+  defp action_id(%{module: module, function: function, arity: arity}) do
+    "#{Atom.to_string(module)}.#{function}/#{arity}"
+  end
+
+  @spec normalize_built_action(map(), tool_identity()) ::
+          {:ok, Registry.action()} | {:error, tool_error()}
+  defp normalize_built_action(action, identity) do
     case Registry.normalize_action(action) do
       {:ok, normalized} ->
         {:ok, normalized}
 
       {:error, reason} ->
-        {:error, {:invalid_action, module, function, arity, reason}}
+        {:error, {:invalid_action, identity.module, identity.function, identity.arity, reason}}
     end
   end
 
@@ -202,48 +262,105 @@ defmodule SpectreKinetic.Tool.Extractor do
   end
 
   defp map_slots_to_params(slots, params) do
-    indexed_params = Enum.with_index(params)
+    indexed_params = indexed_params(params)
 
-    param_by_name =
-      Map.new(indexed_params, fn {param, index} -> {String.downcase(param), index} end)
+    {exact_matches, used_indexes} =
+      exact_slot_matches(slots, param_index_by_name(indexed_params), params)
 
-    {matched, used_indexes} = exact_slot_matches(slots, param_by_name, params)
+    positional_matches =
+      positional_slot_matches(slots, indexed_params, exact_matches, used_indexes)
 
-    remaining_slots =
-      Enum.reject(slots, fn slot ->
-        Enum.any?(matched, fn {matched_slot, _param, _index} -> matched_slot == slot end)
-      end)
+    exact_matches
+    |> Kernel.++(positional_matches)
+    |> ordered_slot_param_pairs()
+  end
 
-    remaining_params =
-      indexed_params
-      |> Enum.reject(fn {_param, index} -> MapSet.member?(used_indexes, index) end)
+  @spec indexed_params([binary()]) :: [{binary(), non_neg_integer()}]
+  defp indexed_params(params), do: Enum.with_index(params)
 
-    positional =
-      Enum.zip(remaining_slots, remaining_params)
-      |> Enum.map(fn {slot, {param, index}} -> {slot, param, index} end)
+  @spec param_index_by_name([{binary(), non_neg_integer()}]) :: map()
+  defp param_index_by_name(indexed_params) do
+    Map.new(indexed_params, fn {param, index} -> {String.downcase(param), index} end)
+  end
 
-    (matched ++ positional)
+  @spec positional_slot_matches(
+          [binary()],
+          [{binary(), non_neg_integer()}],
+          [{binary(), binary(), non_neg_integer()}],
+          MapSet.t(non_neg_integer())
+        ) :: [{binary(), binary(), non_neg_integer()}]
+  defp positional_slot_matches(slots, indexed_params, exact_matches, used_indexes) do
+    slots
+    |> unmatched_slots(exact_matches)
+    |> Enum.zip(unused_params(indexed_params, used_indexes))
+    |> Enum.map(fn {slot, {param, index}} -> {slot, param, index} end)
+  end
+
+  @spec unmatched_slots([binary()], [{binary(), binary(), non_neg_integer()}]) :: [binary()]
+  defp unmatched_slots(slots, exact_matches) do
+    matched_slots = MapSet.new(exact_matches, fn {slot, _param, _index} -> slot end)
+    Enum.reject(slots, &MapSet.member?(matched_slots, &1))
+  end
+
+  @spec unused_params([{binary(), non_neg_integer()}], MapSet.t(non_neg_integer())) ::
+          [{binary(), non_neg_integer()}]
+  defp unused_params(indexed_params, used_indexes) do
+    Enum.reject(indexed_params, fn {_param, index} -> MapSet.member?(used_indexes, index) end)
+  end
+
+  @spec ordered_slot_param_pairs([{binary(), binary(), non_neg_integer()}]) ::
+          [{binary(), binary()}]
+  defp ordered_slot_param_pairs(matches) do
+    matches
     |> Enum.sort_by(&elem(&1, 2))
     |> Enum.map(fn {slot, param, _index} -> {slot, param} end)
   end
 
+  @spec exact_slot_matches([binary()], map(), [binary()]) ::
+          {[{binary(), binary(), non_neg_integer()}], MapSet.t(non_neg_integer())}
   defp exact_slot_matches(slots, param_by_name, params) do
     Enum.reduce(slots, {[], MapSet.new()}, fn slot, {matched, used_indexes} ->
       maybe_add_exact_match(slot, matched, used_indexes, param_by_name, params)
     end)
   end
 
+  @spec maybe_add_exact_match(
+          binary(),
+          [{binary(), binary(), non_neg_integer()}],
+          MapSet.t(non_neg_integer()),
+          map(),
+          [binary()]
+        ) :: {[{binary(), binary(), non_neg_integer()}], MapSet.t(non_neg_integer())}
   defp maybe_add_exact_match(slot, matched, used_indexes, param_by_name, params) do
-    case Map.get(param_by_name, String.downcase(slot)) do
-      nil ->
-        {matched, used_indexes}
+    case exact_param_index(slot, param_by_name) do
+      {:ok, index} ->
+        add_exact_match(slot, index, matched, used_indexes, params)
 
-      index ->
-        if MapSet.member?(used_indexes, index) do
-          {matched, used_indexes}
-        else
-          {[{slot, Enum.at(params, index), index} | matched], MapSet.put(used_indexes, index)}
-        end
+      :error ->
+        {matched, used_indexes}
+    end
+  end
+
+  @spec add_exact_match(
+          binary(),
+          non_neg_integer(),
+          [{binary(), binary(), non_neg_integer()}],
+          MapSet.t(non_neg_integer()),
+          [binary()]
+        ) :: {[{binary(), binary(), non_neg_integer()}], MapSet.t(non_neg_integer())}
+  defp add_exact_match(slot, index, matched, used_indexes, params) do
+    if MapSet.member?(used_indexes, index) do
+      {matched, used_indexes}
+    else
+      {[{slot, Enum.at(params, index), index} | matched], MapSet.put(used_indexes, index)}
+    end
+  end
+
+  @spec exact_param_index(binary(), map()) :: {:ok, non_neg_integer()} | :error
+  defp exact_param_index(slot, param_by_name) do
+    case Map.fetch(param_by_name, String.downcase(slot)) do
+      {:ok, index} -> {:ok, index}
+      :error -> :error
     end
   end
 

@@ -20,6 +20,9 @@ defmodule SpectreKinetic.Action do
              :args,
              :missing,
              :notes,
+             :classifier_results,
+             :warnings,
+             :halted?,
              :alternatives,
              :error
            ]}
@@ -35,6 +38,9 @@ defmodule SpectreKinetic.Action do
             args: %{},
             missing: [],
             notes: [],
+            classifier_results: %{},
+            warnings: [],
+            halted?: false,
             alternatives: [],
             error: nil
 
@@ -70,6 +76,9 @@ defmodule SpectreKinetic.Action do
           args: map(),
           missing: [binary()],
           notes: [binary()],
+          classifier_results: map(),
+          warnings: [binary()],
+          halted?: boolean(),
           alternatives: [alternative()],
           error: term()
         }
@@ -93,6 +102,9 @@ defmodule SpectreKinetic.Action do
       args: repaired["args"] || %{},
       missing: repaired["missing"] || [],
       notes: repaired["notes"] || [],
+      classifier_results: repaired["classifier_results"] || %{},
+      warnings: repaired["warnings"] || [],
+      halted?: Map.get(repaired, "halted?", false),
       alternatives: build_alternatives(repaired)
     }
   end

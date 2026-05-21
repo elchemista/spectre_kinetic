@@ -43,6 +43,7 @@ defmodule SpectreKinetic.MixProject do
       maintainers: ["Yuriy Zhar"],
       files: ~w(
              lib
+             priv/dataset
              mix.exs
              README.md
              TRAIN.md

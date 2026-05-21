@@ -300,6 +300,108 @@ defmodule SpectreKinetic.IntegrationTest do
     assert action.selected_tool == nil
   end
 
+  test "runtime classifiers enrich planned actions and may change status", %{
+    registry_json: registry_json
+  } do
+    runtime =
+      SpectreKinetic.load_runtime!(
+        registry_json: registry_json,
+        classifiers: [{SpectreKinetic.Classifiers.SafetyRisk, fallback: :heuristic}]
+      )
+
+    assert {:ok, %Action{} = action} =
+             SpectreKinetic.plan(runtime, ~s(INSTALL PACKAGE WITH: PACKAGE="nginx"))
+
+    assert action.status == :needs_confirmation
+    assert action.classifier_results.safety_risk.risk == :system_mutation
+    assert action.classifier_results.safety_risk.requires_confirmation
+    assert action.warnings == ["planned action has system_mutation risk"]
+  end
+
+  test "per-call classifiers override runtime classifiers", %{registry_json: registry_json} do
+    runtime =
+      SpectreKinetic.load_runtime!(
+        registry_json: registry_json,
+        classifiers: [{SpectreKinetic.Classifiers.SafetyRisk, fallback: :heuristic}]
+      )
+
+    assert {:ok, %Action{} = action} =
+             SpectreKinetic.plan(runtime, ~s(INSTALL PACKAGE WITH: PACKAGE="nginx"),
+               classifiers: []
+             )
+
+    assert action.status == :ok
+    assert action.classifier_results == %{}
+    assert action.warnings == []
+  end
+
+  test "application-configured classifiers are used when runtime has no override", %{
+    registry_json: registry_json
+  } do
+    previous = Application.get_env(:spectre_kinetic, :classifiers)
+
+    Application.put_env(:spectre_kinetic, :classifiers, [
+      {SpectreKinetic.Classifiers.SafetyRisk, fallback: :heuristic}
+    ])
+
+    on_exit(fn ->
+      if is_nil(previous) do
+        Application.delete_env(:spectre_kinetic, :classifiers)
+      else
+        Application.put_env(:spectre_kinetic, :classifiers, previous)
+      end
+    end)
+
+    runtime = SpectreKinetic.load_runtime!(registry_json: registry_json)
+
+    assert {:ok, %Action{} = action} =
+             SpectreKinetic.plan(runtime, ~s(INSTALL PACKAGE WITH: PACKAGE="nginx"))
+
+    assert action.status == :needs_confirmation
+    assert action.classifier_results.safety_risk.risk == :system_mutation
+  end
+
+  test "server adapter runs configured classifiers", %{registry_json: registry_json} do
+    {:ok, pid} =
+      start_supervised(
+        {SpectreKinetic,
+         registry_json: registry_json,
+         classifiers: [{SpectreKinetic.Classifiers.SafetyRisk, fallback: :heuristic}],
+         name: nil}
+      )
+
+    assert {:ok, %Action{} = action} =
+             SpectreKinetic.plan(pid, ~s(INSTALL PACKAGE WITH: PACKAGE="nginx"))
+
+    assert action.status == :needs_confirmation
+    assert action.classifier_results.safety_risk.risk == :system_mutation
+  end
+
+  test "plan_chain/3 runs action classifiers only for valid extracted actions", %{
+    registry_json: registry_json
+  } do
+    runtime =
+      SpectreKinetic.load_runtime!(
+        registry_json: registry_json,
+        classifiers: [{SpectreKinetic.Classifiers.SafetyRisk, fallback: :heuristic}]
+      )
+
+    response = """
+    AL: 1234
+    <al>INSTALL PACKAGE WITH: PACKAGE="nginx"</al>
+    """
+
+    assert {:ok, %ActionChain{} = chain} =
+             SpectreKinetic.plan_chain(runtime, response, tool_threshold: 0.0)
+
+    assert [
+             %Action{status: :error, classifier_results: %{}},
+             %Action{status: :needs_confirmation, classifier_results: classifier_results}
+           ] = chain.actions
+
+    assert classifier_results.safety_risk.risk == :system_mutation
+  end
+
   test "reload_registry/2 can reload the same registry source", %{
     pid: pid,
     registry_json: registry_json

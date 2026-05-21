@@ -1,0 +1,10 @@
+{"input":"LIST DIRECTORY WITH: PATH=\"/tmp\"","args":{"path":"/tmp"},"missing":[],"arg":{"name":"path","type":"String.t()","required":true,"aliases":["file","dir"]},"label":1}
+{"input":"LIST DIRECTORY WITH: FILE=\"/var/log\"","args":{"path":"/var/log"},"missing":[],"arg":{"name":"path","type":"String.t()","required":true,"aliases":["file","dir"]},"label":1}
+{"input":"SEND EMAIL WITH: TO=\"user@example.com\"","args":{"to":"user@example.com"},"missing":[],"arg":{"name":"to","type":"String.t()","required":true,"aliases":["email","recipient"]},"label":1}
+{"input":"SET FLAG WITH: ENABLED=true","args":{"enabled":true},"missing":[],"arg":{"name":"enabled","type":"boolean()","required":false,"aliases":["active"]},"label":1}
+{"input":"INSTALL PACKAGE","args":{},"missing":["package"],"arg":{"name":"package","type":"String.t()","required":true,"aliases":["pkg"]},"label":0}
+{"input":"SEND EMAIL WITH: BODY=\"hello\"","args":{"body":"hello"},"missing":["to"],"arg":{"name":"to","type":"String.t()","required":true,"aliases":["email","recipient"]},"label":0}
+{"input":"LIST DIRECTORY WITH: PATH=\"not-an-email\"","args":{"email":"not-an-email"},"missing":[],"arg":{"name":"email","type":"String.t()","required":true,"aliases":["to"]},"label":0}
+{"input":"SCHEDULE WITH: DUE=\"tomorrow\"","args":{"due":"tomorrow"},"missing":[],"arg":{"name":"due","type":"Date.t()","required":true,"aliases":["deadline"]},"label":0}
+{"input":"PAY INVOICE WITH: AMOUNT=42.50","args":{"amount":42.5},"missing":[],"arg":{"name":"amount","type":"float()","required":true,"aliases":["price"]},"label":1}
+{"input":"COPY FILE","args":{},"missing":["source","dest"],"arg":{"name":"source","type":"String.t()","required":true,"aliases":["file"]},"label":0}
