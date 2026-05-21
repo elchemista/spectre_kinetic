@@ -73,7 +73,7 @@ candidate with scores, args, missing fields, warnings, and classifier results.
 ```elixir
 def deps do
   [
-    {:spectre_kinetic, path: "../spectre_kinetic"}
+    {:spectre_kinetic, github: "elchemista/spectre_kinetic"}
   ]
 end
 ```
@@ -320,9 +320,9 @@ a governance strategy.
 
 ## Training Built-In Classifiers
 
-The bundled seed datasets live in `priv/dataset/`. They are source examples,
-not hand-written vectors. You edit text, planner scores, args, actions, slot
-definitions, and labels; the training task derives features.
+The bundled seed datasets live in `priv/dataset/`. They are source examples.
+You edit text, planner scores, args, actions, slot definitions, and labels;
+the training task derives features.
 
 ```bash
 mix spectre.train_classifier plan_confidence \
