@@ -1,232 +1,12 @@
 # spectre_kinetic
 
-Elixir-first planning toolkit for Action Language tool selection.
+Elixir-first planning for turning Action Language into real function calls.
 
-`spectre_kinetic` takes Action Language (AL) such as:
-
-```text
-INSTALL PACKAGE WITH: PACKAGE="nginx"
-LIST DIRECTORY WITH: PATH="/var/log"
-WRITE NEW BLOG POST FOR elchemista.com WITH: TITLE="My Post" BODY="Hello world"
-```
-
-and returns the best matching registered tool, mapped args, missing fields, and ranked alternatives.
-
-## What It Owns
-
-- AL extraction, normalization, and validation
-- runtime loading from local artifacts
-- tool retrieval, scoring, and slot mapping
-- code-first tool extraction from Elixir modules
-- registry compilation into `registry.etf`
-- optional prompt and dictionary helpers
-- optional bounded reranker fallback
-
-## What It Does Not Own
-
-- tool execution
-- workflow orchestration
-- retry/state-machine logic
-
-## Installation
-
-```elixir
-def deps do
-  [
-    {:spectre_kinetic, path: "../spectre_kinetic"}
-  ]
-end
-```
-
-## Runtime Configuration
-
-```elixir
-config :spectre_kinetic,
-  encoder_model_dir: "/abs/path/to/artifacts/encoder",
-  compiled_registry: "/abs/path/to/artifacts/registry/registry.etf",
-  registry_json: "/abs/path/to/registry.json",
-  tool_threshold: 0.55,
-  mapping_threshold: 0.0,
-  top_k: 5,
-  tool_selection_fallback: :disabled,
-  fallback_model_dir: "/abs/path/to/artifacts/reranker",
-  fallback_top_k: 3,
-  fallback_margin: 0.12
-```
-
-Environment variables also work:
-
-```bash
-export SPECTRE_KINETIC_ENCODER_MODEL_DIR=/abs/path/to/artifacts/encoder
-export SPECTRE_KINETIC_COMPILED_REGISTRY=/abs/path/to/artifacts/registry/registry.etf
-export SPECTRE_KINETIC_REGISTRY_JSON=/abs/path/to/registry.json
-export SPECTRE_KINETIC_TOOL_THRESHOLD=0.55
-export SPECTRE_KINETIC_MAPPING_THRESHOLD=0.0
-export SPECTRE_KINETIC_TOP_K=5
-export SPECTRE_KINETIC_TOOL_SELECTION_FALLBACK=reranker
-export SPECTRE_KINETIC_FALLBACK_MODEL_DIR=/abs/path/to/artifacts/reranker
-export SPECTRE_KINETIC_FALLBACK_TOP_K=3
-export SPECTRE_KINETIC_FALLBACK_MARGIN=0.12
-```
-
-## Quick Start
-
-Load an explicit runtime and plan directly:
-
-```elixir
-runtime =
-  SpectreKinetic.load_runtime!(
-    registry_json: "/abs/path/to/registry.json"
-  )
-
-{:ok, action} =
-  SpectreKinetic.plan(
-    runtime,
-    ~s(INSTALL PACKAGE WITH: PACKAGE="nginx")
-  )
-
-action.selected_tool
-action.args
-action.status
-```
-
-## Classifier Plug API
-
-Core classifier integration is plug-oriented. The core library owns the
-`SpectreKinetic.Classifier` behaviour, pipeline execution, runtime
-`classifiers:` configuration, and action result enrichment fields. A classifier
-module implements `init/1` and `call/2`; it receives the planner context after
-tool selection and slot mapping, then may add classifier results, warnings, or
-status changes.
-
-Custom classifier plugs can be configured on the runtime:
-
-```elixir
-runtime =
-  SpectreKinetic.load_runtime!(
-    registry_json: "/abs/path/to/registry.json",
-    classifiers: [
-      {MyApp.PlanningClassifier, threshold: 0.75}
-    ]
-  )
-
-{:ok, action} =
-  SpectreKinetic.plan(
-    runtime,
-    ~s(INSTALL PACKAGE WITH: PACKAGE="nginx")
-  )
-
-action.status
-# :ok | :needs_confirmation | :needs_clarification | :rejected
-
-action.classifier_results
-action.warnings
-```
-
-Or override them for a single call:
-
-```elixir
-SpectreKinetic.plan(runtime, al_text,
-  classifiers: [
-    {MyApp.PlanningClassifier, threshold: 0.90}
-  ]
-)
-
-SpectreKinetic.plan(runtime, al_text, classifiers: [])
-```
-
-Classifiers run after the base planner has selected a tool and mapped args.
-They enrich planning output; they do not execute tools, orchestrate workflows,
-call LLMs, or invent arguments.
-
-## Optional Built-In Axon Classifiers
-
-`spectre_kinetic` also ships isolated built-in classifier plugs:
-
-- `SpectreKinetic.Classifiers.PlanConfidence`
-- `SpectreKinetic.Classifiers.SlotConfidence`
-- `SpectreKinetic.Classifiers.SafetyRisk`
-
-These are optional built-ins, not required planner core. They require external
-model artifacts unless explicitly configured with `fallback: :heuristic`.
-Artifacts are never packaged with the library; training writes them wherever you
-choose. Their Axon runtime, feature specs, and training registry live under the
-classifier namespace rather than the planner core.
-
-```elixir
-runtime =
-  SpectreKinetic.load_runtime!(
-    registry_json: "/abs/path/to/registry.json",
-    classifiers: [
-      {SpectreKinetic.Classifiers.PlanConfidence,
-       model_dir: "/abs/path/to/artifacts/classifiers/plan_confidence",
-       accept_threshold: 0.80,
-       clarify_threshold: 0.55},
-      {SpectreKinetic.Classifiers.SlotConfidence,
-       model_dir: "/abs/path/to/artifacts/classifiers/slot_confidence",
-       min_slot_confidence: 0.70},
-      {SpectreKinetic.Classifiers.SafetyRisk,
-       model_dir: "/abs/path/to/artifacts/classifiers/safety_risk"}
-    ]
-  )
-```
-
-Train one built-in classifier from JSONL source examples:
-
-```bash
-mix spectre.train_classifier plan_confidence \
-  --dataset data/plan_confidence.jsonl \
-  --out artifacts/classifiers/plan_confidence
-```
-
-The bundled seed datasets are registered as defaults, so this also works:
-
-```bash
-mix spectre.train_classifier plan_confidence \
-  --out artifacts/classifiers/plan_confidence
-```
-
-Each JSONL line contains editable source fields such as `input`, planner scores,
-mapped args, selected action text, slot definitions, and `label`. The training
-task derives the numeric feature vector, then writes `params.etf`,
-`metadata.json`, and `calibration.json` to the selected output directory.
-
-Use the optional server adapter:
-
-```elixir
-{:ok, pid} =
-  SpectreKinetic.start_link(
-    registry_json: "/abs/path/to/registry.json"
-  )
-
-{:ok, action} = SpectreKinetic.plan(pid, ~s(LIST DIRECTORY WITH: PATH="/tmp"))
-```
-
-Plan a noisy LLM response:
-
-```elixir
-{:ok, chain} =
-  SpectreKinetic.plan_chain(runtime, """
-  I will do this in order.
-
-  <al>INSTALL PACKAGE WITH: PACKAGE="nginx"</al>
-
-  ```al
-  LIST DIRECTORY WITH: PATH="/var/log"
-  ``
-  """)
-```
-
-## Code-First Tool Registration
-
-You mark planner-visible functions with:
-
-- `use SpectreKinetic`
-
-`@al` holds the canonical AL declaration for the next public function.
-Any `AL:` lines inside `@doc` are collected as extra examples.
-
-Example:
+Instead of teaching a model to emit a giant JSON object and then politely
+pretending it will never forget a field, you describe your tools in Elixir,
+give the planner examples, and let `spectre_kinetic` find the best matching
+tool, map the arguments, report missing fields, and leave execution to your
+application.
 
 ```elixir
 defmodule MyApp.Emailer do
@@ -247,49 +27,124 @@ defmodule MyApp.Emailer do
 end
 ```
 
-What gets inferred from that:
+That one module gives the planner:
 
-- canonical example from `@al`
-- extra examples from `@doc`
-- function name and arity
-- parameter names from the function definition
-- types from the typespec when available
-- argument aliases from observed AL slot names
+- a canonical Action Language example from `@al`
+- extra examples from `AL:` lines in the docs
+- the function name, arity, parameter names, and typespec
+- argument aliases like `TO -> email` and `BODY -> text`
 
-Argument mapping rule:
+The result is a registry entry the planner can score, rank, and map from text
+like:
 
-1. exact AL slot name to parameter name match
-2. positional fallback for any remaining slots
-
-So for:
-
-```elixir
-@al ~s(SEND EMAIL TO=email@gmail.com BODY=text)
-def send(email, text), do: ...
+```text
+SEND MAIL TO="ops@example.com" BODY="pager"
 ```
 
-the inferred args are effectively:
+No tool execution happens inside the planner. It plans. Your app decides what
+to execute. This is healthier than giving a language model root access and a
+motivational quote.
 
-- `email` with alias `TO`
-- `text` with alias `BODY`
+## What You Get
 
-If your function is:
+- Code-first tool registration with `use SpectreKinetic`
+- Action Language parsing, normalization, and validation
+- tool retrieval, scoring, and slot mapping
+- compiled registry artifacts with precomputed embeddings
+- runtime planning from JSON or compiled ETF registries
+- optional server adapter for long-lived runtimes
+- optional reranker fallback
+- classifier plug pipeline for confidence, slots, safety, and custom policy
+- trainable built-in Axon classifiers with editable source datasets
+
+## What It Does Not Do
+
+- execute your tools
+- orchestrate workflows
+- retry side effects
+- invent missing arguments
+- hide policy decisions inside planner code
+
+Those are application decisions. The planner gives you a structured action
+candidate with scores, args, missing fields, warnings, and classifier results.
+
+## Installation
 
 ```elixir
-def send(to, body), do: ...
+def deps do
+  [
+    {:spectre_kinetic, path: "../spectre_kinetic"}
+  ]
+end
 ```
 
-then no aliases need to be inferred for those slots because the exact-name rule already matches `TO -> to` and `BODY -> body`.
+## Quick Start
 
-## Extracting Tools
-
-Extract the code-defined tools from a compiled app into source registry JSON:
+Extract tools from your app:
 
 ```bash
-mix extract_kinetic --app my_app --out registry.json
+mix extract_kinetic \
+  --app my_app \
+  --out artifacts/registry/registry.json
 ```
 
-Extract and compile directly into `registry.etf` in one step:
+Load the registry and plan:
+
+```elixir
+runtime =
+  SpectreKinetic.load_runtime!(
+    registry_json: "artifacts/registry/registry.json"
+  )
+
+{:ok, action} =
+  SpectreKinetic.plan(
+    runtime,
+    ~s(SEND MAIL TO="ops@example.com" BODY="pager")
+  )
+
+action.selected_tool
+# "MyApp.Emailer.send/2"
+
+action.args
+# %{"email" => "ops@example.com", "text" => "pager"}
+
+action.status
+# :ok
+```
+
+The planner returns data. It does not call `MyApp.Emailer.send/2` for you.
+That boundary is the whole point.
+
+## Compile A Fast Registry
+
+For production-ish use, download an encoder and compile the registry with
+embeddings:
+
+```bash
+mix spectre.download_encoder \
+  --model BAAI/bge-small-en-v1.5 \
+  --out artifacts/encoder
+```
+
+This writes:
+
+```text
+artifacts/encoder/
+|-- config.json
+|-- model.onnx
+`-- tokenizer.json
+```
+
+Then compile the registry:
+
+```bash
+mix compile_kinetic \
+  --registry artifacts/registry/registry.json \
+  --encoder artifacts/encoder \
+  --out artifacts/registry/registry.etf
+```
+
+Or extract and compile in one pass:
 
 ```bash
 mix extract_kinetic \
@@ -298,69 +153,255 @@ mix extract_kinetic \
   --out artifacts/registry/registry.etf
 ```
 
-This task:
+Use the compiled runtime:
 
-1. compiles the app
-2. finds modules exporting `__spectre_tools__/0`
-3. reads docs and specs from compiled modules
-4. merges `@al` and `AL:` doc examples
-5. normalizes the result into the planner action schema
-6. writes either `registry.json` or `registry.etf`
+```elixir
+runtime =
+  SpectreKinetic.load_runtime!(
+    compiled_registry: "artifacts/registry/registry.etf"
+  )
+```
 
-## Compiling Registry Artifacts
+The ETF stores normalized actions, ordered action IDs, tool-card embeddings,
+and registry metadata. In other words: less runtime ceremony, fewer excuses.
 
-If you already have a `registry.json`, compile it with:
+## Runtime Configuration
+
+You can configure paths and thresholds in application config:
+
+```elixir
+config :spectre_kinetic,
+  encoder_model_dir: "/abs/path/to/artifacts/encoder",
+  compiled_registry: "/abs/path/to/artifacts/registry/registry.etf",
+  registry_json: "/abs/path/to/registry.json",
+  tool_threshold: 0.55,
+  mapping_threshold: 0.0,
+  top_k: 5,
+  tool_selection_fallback: :disabled,
+  fallback_model_dir: "/abs/path/to/artifacts/reranker",
+  fallback_top_k: 3,
+  fallback_margin: 0.12
+```
+
+Environment variables work too:
 
 ```bash
-mix compile_kinetic \
-  --registry registry.json \
-  --encoder artifacts/encoder \
-  --out artifacts/registry/registry.etf
+export SPECTRE_KINETIC_ENCODER_MODEL_DIR=/abs/path/to/artifacts/encoder
+export SPECTRE_KINETIC_COMPILED_REGISTRY=/abs/path/to/artifacts/registry/registry.etf
+export SPECTRE_KINETIC_REGISTRY_JSON=/abs/path/to/registry.json
+export SPECTRE_KINETIC_TOOL_THRESHOLD=0.55
+export SPECTRE_KINETIC_MAPPING_THRESHOLD=0.0
+export SPECTRE_KINETIC_TOP_K=5
+export SPECTRE_KINETIC_TOOL_SELECTION_FALLBACK=reranker
+export SPECTRE_KINETIC_FALLBACK_MODEL_DIR=/abs/path/to/artifacts/reranker
+export SPECTRE_KINETIC_FALLBACK_TOP_K=3
+export SPECTRE_KINETIC_FALLBACK_MARGIN=0.12
 ```
 
-This compiles:
+Explicit options passed to `load_runtime!/1` win over config.
 
-- normalized action definitions
-- ordered action IDs
-- precomputed tool-card embeddings
-- registry metadata
+## Classifier Plugs
 
-## Encoder Artifacts
+The core planner stays small. It selects a tool and maps args. Then classifier
+plugs can inspect the `PlanContext` and enrich the result.
 
-Download encoder artifacts for runtime embedding:
+A classifier can:
+
+- add `classifier_results`
+- add warnings
+- change status to `:needs_confirmation`, `:needs_clarification`, or another policy status
+- halt the classifier pipeline
+
+A classifier should not:
+
+- execute tools
+- call an LLM
+- secretly replace the selected action
+- turn planning into workflow orchestration with a trench coat
+
+Custom classifier plugs implement `SpectreKinetic.Classifier`:
+
+```elixir
+defmodule MyApp.PlanningClassifier do
+  @behaviour SpectreKinetic.Classifier
+
+  alias SpectreKinetic.PlanContext
+
+  @impl true
+  def init(opts), do: opts
+
+  @impl true
+  def call(%PlanContext{} = context, opts) do
+    threshold = Keyword.get(opts, :threshold, 0.75)
+    score = context |> PlanContext.scores() |> Map.get(:combined_score, 0.0)
+
+    context =
+      if score < threshold do
+        context
+        |> Map.put(:status, :needs_confirmation)
+        |> PlanContext.add_warning("low planning confidence")
+      else
+        context
+      end
+
+    {:ok, PlanContext.put_classifier_result(context, :planning, %{score: score})}
+  end
+end
+```
+
+Configure classifiers once on the runtime:
+
+```elixir
+runtime =
+  SpectreKinetic.load_runtime!(
+    compiled_registry: "artifacts/registry/registry.etf",
+    classifiers: [
+      {MyApp.PlanningClassifier, threshold: 0.80}
+    ]
+  )
+```
+
+Or override them for one call:
+
+```elixir
+SpectreKinetic.plan(runtime, al_text,
+  classifiers: [
+    {MyApp.PlanningClassifier, threshold: 0.90}
+  ]
+)
+
+SpectreKinetic.plan(runtime, al_text, classifiers: [])
+```
+
+## Optional Built-In Classifiers
+
+The package ships optional built-in Axon classifiers:
+
+- `SpectreKinetic.Classifiers.PlanConfidence`
+- `SpectreKinetic.Classifiers.SlotConfidence`
+- `SpectreKinetic.Classifiers.SafetyRisk`
+
+They are built-ins, not planner core. Axon support lives under the classifier
+namespace, and trained artifacts are not packaged. You train them and point the
+runtime at the resulting `model_dir`.
+
+```elixir
+runtime =
+  SpectreKinetic.load_runtime!(
+    compiled_registry: "artifacts/registry/registry.etf",
+    classifiers: [
+      {SpectreKinetic.Classifiers.PlanConfidence,
+       model_dir: "artifacts/classifiers/plan_confidence",
+       accept_threshold: 0.80,
+       clarify_threshold: 0.55},
+      {SpectreKinetic.Classifiers.SlotConfidence,
+       model_dir: "artifacts/classifiers/slot_confidence",
+       min_slot_confidence: 0.70},
+      {SpectreKinetic.Classifiers.SafetyRisk,
+       model_dir: "artifacts/classifiers/safety_risk"}
+    ]
+  )
+```
+
+For development, skip artifacts and use deterministic heuristics:
+
+```elixir
+classifiers: [
+  {SpectreKinetic.Classifiers.PlanConfidence, fallback: :heuristic},
+  {SpectreKinetic.Classifiers.SlotConfidence, fallback: :heuristic},
+  {SpectreKinetic.Classifiers.SafetyRisk, fallback: :heuristic}
+]
+```
+
+Safety risk has hard guards. Model predictions can raise risk, and hard guards
+can override a model that says something risky is safe. The reverse is not
+allowed, because "the model thought deleting the database seemed chill" is not
+a governance strategy.
+
+## Training Built-In Classifiers
+
+The bundled seed datasets live in `priv/dataset/`. They are source examples,
+not hand-written vectors. You edit text, planner scores, args, actions, slot
+definitions, and labels; the training task derives features.
 
 ```bash
-mix spectre.download_encoder \
-  --model BAAI/bge-small-en-v1.5 \
-  --out artifacts/encoder
+mix spectre.train_classifier plan_confidence \
+  --out artifacts/classifiers/plan_confidence
+
+mix spectre.train_classifier slot_confidence \
+  --out artifacts/classifiers/slot_confidence
+
+mix spectre.train_classifier safety_risk \
+  --out artifacts/classifiers/safety_risk
 ```
 
-Typical layout:
-
-```text
-artifacts/encoder/
-├── config.json
-├── model.onnx
-└── tokenizer.json
-```
-
-`BAAI/bge-small-en-v1.5` is the default because it is small and fast enough for
-local planner use. If you want higher retrieval quality and can afford more CPU
-and memory, use the same task with `BAAI/bge-base-en-v1.5` or
-`BAAI/bge-large-en-v1.5`:
+Train from your own dataset:
 
 ```bash
-mix spectre.download_encoder \
-  --model BAAI/bge-base-en-v1.5 \
-  --out artifacts/encoder
+mix spectre.train_classifier plan_confidence \
+  --dataset data/classifiers/plan_confidence.jsonl \
+  --out artifacts/classifiers/plan_confidence \
+  --epochs 20 \
+  --hidden-dim 32 \
+  --batch-size 16 \
+  --learning-rate 0.001 \
+  --seed 42
 ```
 
-The runtime expects Hugging Face/ONNX encoder artifacts. It does not currently
-run model2vec static embedding artifacts directly.
+Each classifier training run writes:
 
-## Reranker Training
+- `params.etf`
+- `metadata.json`
+- `calibration.json`
 
-Reranker training is Elixir-native via `Nx` and `Axon`:
+The real workflow is:
+
+1. embed/compile your registry
+2. run the planner on real examples
+3. label the planner output
+4. train classifiers from those source rows
+5. load the classifier artifact directories at runtime
+
+See [priv/dataset/README.md](priv/dataset/README.md) for exact dataset row
+formats and the full command sequence.
+
+## Server Adapter
+
+Use a long-lived runtime process when you do not want to reload artifacts for
+every call:
+
+```elixir
+{:ok, pid} =
+  SpectreKinetic.start_link(
+    compiled_registry: "artifacts/registry/registry.etf"
+  )
+
+{:ok, action} =
+  SpectreKinetic.plan(pid, ~s(LIST DIRECTORY WITH: PATH="/tmp"))
+```
+
+## Planning Chains
+
+LLM responses are often a polite paragraph wrapped around the one useful thing.
+`plan_chain/3` extracts AL blocks and plans each step:
+
+```elixir
+{:ok, chain} =
+  SpectreKinetic.plan_chain(runtime, """
+  I will do this in order.
+
+  <al>INSTALL PACKAGE WITH: PACKAGE="nginx"</al>
+
+  ```al
+  LIST DIRECTORY WITH: PATH="/var/log"
+  ```
+  """)
+```
+
+## Reranker Fallback
+
+The first-stage planner is fast. If top candidates are close, you can train an
+Axon reranker for bounded fallback:
 
 ```bash
 mix spectre.train_reranker \
@@ -369,40 +410,26 @@ mix spectre.train_reranker \
   --out artifacts/reranker
 ```
 
-Each JSONL line must contain:
+Example dataset row:
 
 ```json
-{"query":"send message to dev@example.com","tool_card":"Dynamic.Email.send - ...","label":1}
+{"query":"send message to dev@example.com","tool_card":"MyApp.Emailer.send - ...","label":1}
 ```
 
-The task writes:
-
-- `params.etf`
-- `metadata.json`
-- `calibration.json`
-
-If you want to use the Axon reranker at runtime:
+Load it:
 
 ```elixir
 runtime =
   SpectreKinetic.load_runtime!(
-    registry_json: "/abs/path/to/registry.json",
-    encoder_model_dir: "/abs/path/to/artifacts/encoder",
+    compiled_registry: "artifacts/registry/registry.etf",
+    encoder_model_dir: "artifacts/encoder",
     tool_selection_fallback: :reranker,
-    fallback_model_dir: "/abs/path/to/artifacts/reranker",
+    fallback_model_dir: "artifacts/reranker",
     fallback_runtime_module: SpectreKinetic.Reranker.Runtime.Axon
   )
 ```
 
-For a fuller explanation of:
-
-- how the training matrix is built
-- what the model actually learns
-- when the planner invokes reranking
-- why the fallback stays efficient
-- how Axon reranker artifacts differ from ONNX reranker artifacts
-
-see [TRAIN.md](https://github.com/elchemista/spectre_kinetic/blob/master/TRAIN.md).
+For more detail, see [TRAIN.md](TRAIN.md).
 
 ## Prompt Helpers
 
@@ -410,17 +437,35 @@ Build dictionary text:
 
 ```elixir
 SpectreKinetic.dictionary_text!(
-  registry_json: "/abs/path/to/registry.json",
-  actions: ["Linux.Apt.install/1"]
+  registry_json: "artifacts/registry/registry.json",
+  actions: ["MyApp.Emailer.send/2"]
 )
 ```
 
-Build AL prompt:
+Build an AL prompt:
 
 ```elixir
 SpectreKinetic.al_prompt!(
-  registry_json: "/abs/path/to/registry.json",
-  actions: ["Linux.Apt.install/1"],
-  request: "install nginx"
+  registry_json: "artifacts/registry/registry.json",
+  actions: ["MyApp.Emailer.send/2"],
+  request: "send a message to dev@example.com"
 )
 ```
+
+## Mental Model
+
+Think of `spectre_kinetic` as the planner layer between natural-ish text and
+your actual application code:
+
+```text
+user/LLM text
+  -> Action Language
+  -> planner retrieval
+  -> slot mapping
+  -> classifier plugs
+  -> action candidate
+  -> your application executes or asks for clarification
+```
+
+That last arrow belongs to you. The library helps you make the decision with
+less guessing and more structure.
