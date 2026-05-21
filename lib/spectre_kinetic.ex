@@ -9,6 +9,7 @@ defmodule SpectreKinetic do
   alias SpectreKinetic.Dictionary
   alias SpectreKinetic.Extractor
   alias SpectreKinetic.Parser
+  alias SpectreKinetic.PlanFinalizer
   alias SpectreKinetic.Planner
   alias SpectreKinetic.Planner.Runtime, as: PlannerRuntime
   alias SpectreKinetic.Prompt
@@ -75,6 +76,7 @@ defmodule SpectreKinetic do
           | {:tool_selection_fallback, :disabled | :reranker}
           | {:fallback_top_k, pos_integer()}
           | {:fallback_margin, float()}
+          | {:classifiers, [module() | {module(), keyword()}]}
 
   @doc """
   Returns a child spec for running the supervised planner adapter.
@@ -114,7 +116,8 @@ defmodule SpectreKinetic do
           {:ok, Action.t()} | {:error, term()}
   def plan(%PlannerRuntime{} = runtime, al_text, opts)
       when is_binary(al_text) and is_list(opts) do
-    planner_reply(al_text, Planner.plan(runtime, al_text, opts))
+    mode = Keyword.get(opts, :__spectre_mode__, :plan)
+    planner_reply(runtime, al_text, Planner.plan(runtime, al_text, opts), opts, mode)
   end
 
   def plan(server, al_text, opts) when is_binary(al_text) and is_list(opts) do
@@ -128,7 +131,14 @@ defmodule SpectreKinetic do
           {:ok, Action.t()} | {:error, term()}
   def plan_request(%PlannerRuntime{} = runtime, request) when is_map(request) do
     normalized = SpectreKinetic.RuntimeConfig.normalize_request(request)
-    planner_reply(normalized["al"], Planner.plan_request(runtime, normalized, []))
+
+    planner_reply(
+      runtime,
+      normalized["al"],
+      Planner.plan_request(runtime, normalized, []),
+      [],
+      :plan
+    )
   end
 
   def plan_request(server, request) when is_map(request) do
@@ -326,6 +336,8 @@ defmodule SpectreKinetic do
   end
 
   defp plan_step(target, {al, index}, opts) do
+    opts = Keyword.put(opts, :__spectre_mode__, :plan_chain)
+
     case plan(target, al, opts) do
       {:ok, %Action{} = action} -> %{action | index: index}
       {:error, reason} -> Action.error(al, reason, index)
@@ -338,8 +350,8 @@ defmodule SpectreKinetic do
   defp plan_scan_entry(_target, {%{raw: raw, error: reason}, index}, _opts),
     do: Action.error(raw, reason, index)
 
-  defp planner_reply(al_text, planner_result),
-    do: Action.from_planner_reply(al_text, planner_result)
+  defp planner_reply(runtime, al_text, planner_result, opts, mode),
+    do: PlanFinalizer.to_action(runtime, al_text, planner_result, opts, mode)
 
   defp extract_tool_params(args) do
     args

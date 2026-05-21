@@ -51,21 +51,35 @@ defmodule SpectreKinetic.Reranker.Runtime do
   """
   @spec score_batch(runtime_t(), [input_pair()]) :: {:ok, [float()]} | {:error, term()}
   def score_batch(%__MODULE__{} = runtime, pairs) when is_list(pairs) do
-    encodings =
-      Enum.map(pairs, fn {query, tool_card} ->
-        {:ok, encoding} = Tokenizers.Tokenizer.encode(runtime.tokenizer, {query, tool_card})
-        encoding
-      end)
+    encodings = encode_pairs!(runtime.tokenizer, pairs)
+    inputs = ONNX.input_tensors(encodings)
 
-    {input_ids, attention_mask, token_type_ids} = ONNX.input_tensors(encodings)
-    outputs = Ortex.run(runtime.model, {input_ids, attention_mask, token_type_ids})
-
-    {:ok, outputs |> to_score_tensor() |> Nx.to_flat_list() |> Enum.map(&ONNX.normalize_number/1)}
+    {:ok, runtime.model |> Ortex.run(inputs) |> output_scores()}
   rescue
     error ->
       {:error, {:reranker_failed, Exception.message(error)}}
   end
 
+  @spec encode_pairs!(term(), [input_pair()]) :: [term()]
+  defp encode_pairs!(tokenizer, pairs) do
+    Enum.map(pairs, &encode_pair!(tokenizer, &1))
+  end
+
+  @spec encode_pair!(term(), input_pair()) :: term()
+  defp encode_pair!(tokenizer, {query, tool_card}) do
+    {:ok, encoding} = Tokenizers.Tokenizer.encode(tokenizer, {query, tool_card})
+    encoding
+  end
+
+  @spec output_scores(tuple() | Nx.Tensor.t()) :: [float()]
+  defp output_scores(outputs) do
+    outputs
+    |> to_score_tensor()
+    |> Nx.to_flat_list()
+    |> Enum.map(&ONNX.normalize_number/1)
+  end
+
+  @spec to_score_tensor(tuple() | Nx.Tensor.t()) :: Nx.Tensor.t()
   defp to_score_tensor({tensor}), do: to_score_tensor(tensor)
 
   defp to_score_tensor(tensor) do

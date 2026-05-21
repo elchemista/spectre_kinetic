@@ -7,6 +7,7 @@ defmodule SpectreKinetic.Planner.Runtime do
   planning thresholds.
   """
 
+  alias SpectreKinetic.ClassifierPipeline
   alias SpectreKinetic.Planner.EmbeddingRuntime
   alias SpectreKinetic.Planner.Registry
   alias SpectreKinetic.Planner.Registry.ETS
@@ -19,7 +20,9 @@ defmodule SpectreKinetic.Planner.Runtime do
     :encoder,
     :reranker_module,
     :reranker,
-    :defaults
+    :defaults,
+    :classifiers,
+    :chain_classifiers
   ]
 
   @type t :: %__MODULE__{
@@ -28,7 +31,9 @@ defmodule SpectreKinetic.Planner.Runtime do
           encoder: EmbeddingRuntime.runtime_t() | nil,
           reranker_module: module(),
           reranker: term() | nil,
-          defaults: keyword()
+          defaults: keyword(),
+          classifiers: [module() | {module(), keyword()}],
+          chain_classifiers: [module() | {module(), keyword()}]
         }
 
   @doc """
@@ -44,6 +49,7 @@ defmodule SpectreKinetic.Planner.Runtime do
     * `:tool_selection_fallback` — `:disabled` or `:reranker`
     * `:fallback_model_dir` — path to reranker ONNX directory
     * `:fallback_top_k`, `:fallback_margin` — reranker fallback tuning
+    * `:classifiers` — planning-time classifier pipeline specs
   """
   @spec load(keyword()) :: {:ok, t()} | {:error, term()}
   def load(opts \\ []) do
@@ -52,14 +58,18 @@ defmodule SpectreKinetic.Planner.Runtime do
 
     with {:ok, registry} <- registry_module.new(opts),
          {:ok, encoder} <- maybe_load_encoder(opts),
-         {:ok, reranker} <- maybe_load_reranker(opts, reranker_module) do
+         {:ok, reranker} <- maybe_load_reranker(opts, reranker_module),
+         {:ok, classifiers} <- configured_classifiers(opts, :classifiers),
+         {:ok, chain_classifiers} <- configured_classifiers(opts, :chain_classifiers) do
       runtime = %__MODULE__{
         registry_module: registry_module,
         registry: registry,
         encoder: encoder,
         reranker_module: reranker_module,
         reranker: reranker,
-        defaults: planner_defaults(opts)
+        defaults: planner_defaults(opts),
+        classifiers: classifiers,
+        chain_classifiers: chain_classifiers
       }
 
       maybe_embed_registry(runtime, opts)
@@ -94,6 +104,18 @@ defmodule SpectreKinetic.Planner.Runtime do
     |> maybe_put(:embedder, runtime.encoder)
     |> maybe_put(:reranker_module, runtime.reranker_module)
     |> maybe_put(:reranker, runtime.reranker)
+  end
+
+  @doc """
+  Returns the effective per-action classifier specs for one planning call.
+  """
+  @spec classifiers(t(), keyword()) :: [module() | {module(), keyword()}]
+  def classifiers(%__MODULE__{} = runtime, opts \\ []) do
+    if Keyword.has_key?(opts, :classifiers) do
+      Keyword.get(opts, :classifiers) || []
+    else
+      runtime.classifiers || []
+    end
   end
 
   @doc """
@@ -170,6 +192,17 @@ defmodule SpectreKinetic.Planner.Runtime do
         :fallback_margin
       ])
     )
+  end
+
+  defp configured_classifiers(opts, key) do
+    specs =
+      if Keyword.has_key?(opts, key) do
+        Keyword.get(opts, key) || []
+      else
+        Application.get_env(:spectre_kinetic, key, [])
+      end
+
+    ClassifierPipeline.init_specs(specs)
   end
 
   defp maybe_load_encoder(opts) do

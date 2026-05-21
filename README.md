@@ -90,6 +90,107 @@ action.args
 action.status
 ```
 
+## Classifier Plug API
+
+Core classifier integration is plug-oriented. The core library owns the
+`SpectreKinetic.Classifier` behaviour, pipeline execution, runtime
+`classifiers:` configuration, and action result enrichment fields. A classifier
+module implements `init/1` and `call/2`; it receives the planner context after
+tool selection and slot mapping, then may add classifier results, warnings, or
+status changes.
+
+Custom classifier plugs can be configured on the runtime:
+
+```elixir
+runtime =
+  SpectreKinetic.load_runtime!(
+    registry_json: "/abs/path/to/registry.json",
+    classifiers: [
+      {MyApp.PlanningClassifier, threshold: 0.75}
+    ]
+  )
+
+{:ok, action} =
+  SpectreKinetic.plan(
+    runtime,
+    ~s(INSTALL PACKAGE WITH: PACKAGE="nginx")
+  )
+
+action.status
+# :ok | :needs_confirmation | :needs_clarification | :rejected
+
+action.classifier_results
+action.warnings
+```
+
+Or override them for a single call:
+
+```elixir
+SpectreKinetic.plan(runtime, al_text,
+  classifiers: [
+    {MyApp.PlanningClassifier, threshold: 0.90}
+  ]
+)
+
+SpectreKinetic.plan(runtime, al_text, classifiers: [])
+```
+
+Classifiers run after the base planner has selected a tool and mapped args.
+They enrich planning output; they do not execute tools, orchestrate workflows,
+call LLMs, or invent arguments.
+
+## Optional Built-In Axon Classifiers
+
+`spectre_kinetic` also ships isolated built-in classifier plugs:
+
+- `SpectreKinetic.Classifiers.PlanConfidence`
+- `SpectreKinetic.Classifiers.SlotConfidence`
+- `SpectreKinetic.Classifiers.SafetyRisk`
+
+These are optional built-ins, not required planner core. They require external
+model artifacts unless explicitly configured with `fallback: :heuristic`.
+Artifacts are never packaged with the library; training writes them wherever you
+choose. Their Axon runtime, feature specs, and training registry live under the
+classifier namespace rather than the planner core.
+
+```elixir
+runtime =
+  SpectreKinetic.load_runtime!(
+    registry_json: "/abs/path/to/registry.json",
+    classifiers: [
+      {SpectreKinetic.Classifiers.PlanConfidence,
+       model_dir: "/abs/path/to/artifacts/classifiers/plan_confidence",
+       accept_threshold: 0.80,
+       clarify_threshold: 0.55},
+      {SpectreKinetic.Classifiers.SlotConfidence,
+       model_dir: "/abs/path/to/artifacts/classifiers/slot_confidence",
+       min_slot_confidence: 0.70},
+      {SpectreKinetic.Classifiers.SafetyRisk,
+       model_dir: "/abs/path/to/artifacts/classifiers/safety_risk"}
+    ]
+  )
+```
+
+Train one built-in classifier from JSONL source examples:
+
+```bash
+mix spectre.train_classifier plan_confidence \
+  --dataset data/plan_confidence.jsonl \
+  --out artifacts/classifiers/plan_confidence
+```
+
+The bundled seed datasets are registered as defaults, so this also works:
+
+```bash
+mix spectre.train_classifier plan_confidence \
+  --out artifacts/classifiers/plan_confidence
+```
+
+Each JSONL line contains editable source fields such as `input`, planner scores,
+mapped args, selected action text, slot definitions, and `label`. The training
+task derives the numeric feature vector, then writes `params.etf`,
+`metadata.json`, and `calibration.json` to the selected output directory.
+
 Use the optional server adapter:
 
 ```elixir

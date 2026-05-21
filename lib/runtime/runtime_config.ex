@@ -11,6 +11,22 @@ defmodule SpectreKinetic.RuntimeConfig do
     fallback_margin: 0.12
   ]
 
+  @plan_option_sources [
+    {:top_k, :integer, "SPECTRE_KINETIC_TOP_K"},
+    {:tool_threshold, :float, "SPECTRE_KINETIC_TOOL_THRESHOLD"},
+    {:mapping_threshold, :float, "SPECTRE_KINETIC_MAPPING_THRESHOLD"},
+    {:tool_selection_fallback, :fallback_mode, "SPECTRE_KINETIC_TOOL_SELECTION_FALLBACK"},
+    {:fallback_top_k, :integer, "SPECTRE_KINETIC_FALLBACK_TOP_K"},
+    {:fallback_margin, :float, "SPECTRE_KINETIC_FALLBACK_MARGIN"}
+  ]
+
+  @runtime_path_sources [
+    {:encoder_model_dir, "SPECTRE_KINETIC_ENCODER_MODEL_DIR"},
+    {:compiled_registry, "SPECTRE_KINETIC_COMPILED_REGISTRY"},
+    {:registry_json, "SPECTRE_KINETIC_REGISTRY_JSON"},
+    {:fallback_model_dir, "SPECTRE_KINETIC_FALLBACK_MODEL_DIR"}
+  ]
+
   @doc """
   Returns the planner defaults before application config or environment overrides.
   """
@@ -22,41 +38,7 @@ defmodule SpectreKinetic.RuntimeConfig do
   """
   @spec default_plan_options() :: keyword()
   def default_plan_options do
-    defaults = @built_in_plan_defaults
-
-    [
-      top_k: config_integer(:top_k, "SPECTRE_KINETIC_TOP_K", Keyword.fetch!(defaults, :top_k)),
-      tool_threshold:
-        config_float(
-          :tool_threshold,
-          "SPECTRE_KINETIC_TOOL_THRESHOLD",
-          Keyword.fetch!(defaults, :tool_threshold)
-        ),
-      mapping_threshold:
-        config_float(
-          :mapping_threshold,
-          "SPECTRE_KINETIC_MAPPING_THRESHOLD",
-          Keyword.fetch!(defaults, :mapping_threshold)
-        ),
-      tool_selection_fallback:
-        config_fallback_mode(
-          :tool_selection_fallback,
-          "SPECTRE_KINETIC_TOOL_SELECTION_FALLBACK",
-          Keyword.fetch!(defaults, :tool_selection_fallback)
-        ),
-      fallback_top_k:
-        config_integer(
-          :fallback_top_k,
-          "SPECTRE_KINETIC_FALLBACK_TOP_K",
-          Keyword.fetch!(defaults, :fallback_top_k)
-        ),
-      fallback_margin:
-        config_float(
-          :fallback_margin,
-          "SPECTRE_KINETIC_FALLBACK_MARGIN",
-          Keyword.fetch!(defaults, :fallback_margin)
-        )
-    ]
+    Enum.map(@plan_option_sources, &resolve_plan_option/1)
   end
 
   @doc """
@@ -71,37 +53,12 @@ defmodule SpectreKinetic.RuntimeConfig do
              fallback_model_dir: binary() | nil
            }}
   def resolve_runtime_paths(opts \\ []) do
-    {:ok,
-     %{
-       encoder_model_dir:
-         resolve_optional_path(
-           opts,
-           :encoder_model_dir,
-           :encoder_model_dir,
-           "SPECTRE_KINETIC_ENCODER_MODEL_DIR"
-         ),
-       compiled_registry:
-         resolve_optional_path(
-           opts,
-           :compiled_registry,
-           :compiled_registry,
-           "SPECTRE_KINETIC_COMPILED_REGISTRY"
-         ),
-       registry_json:
-         resolve_optional_path(
-           opts,
-           :registry_json,
-           :registry_json,
-           "SPECTRE_KINETIC_REGISTRY_JSON"
-         ),
-       fallback_model_dir:
-         resolve_optional_path(
-           opts,
-           :fallback_model_dir,
-           :fallback_model_dir,
-           "SPECTRE_KINETIC_FALLBACK_MODEL_DIR"
-         )
-     }}
+    paths =
+      Map.new(@runtime_path_sources, fn {key, env_var} ->
+        {key, resolve_optional_path(opts, key, key, env_var)}
+      end)
+
+    {:ok, paths}
   end
 
   @doc """
@@ -186,15 +143,19 @@ defmodule SpectreKinetic.RuntimeConfig do
 
   defp stringify_value(value), do: to_string(value)
 
-  defp config_integer(app_key, env_var, default) do
+  defp resolve_plan_option({key, parser, env_var}) do
+    {key, config_value(key, parser, env_var, built_in_default!(key))}
+  end
+
+  defp config_value(app_key, :integer, env_var, default) do
     first_present_integer([Application.get_env(@app, app_key), System.get_env(env_var), default])
   end
 
-  defp config_float(app_key, env_var, default) do
+  defp config_value(app_key, :float, env_var, default) do
     first_present_float([Application.get_env(@app, app_key), System.get_env(env_var), default])
   end
 
-  defp config_fallback_mode(app_key, env_var, default) do
+  defp config_value(app_key, :fallback_mode, env_var, default) do
     [Application.get_env(@app, app_key), System.get_env(env_var), default]
     |> Enum.find_value(&parse_fallback_mode/1)
   end

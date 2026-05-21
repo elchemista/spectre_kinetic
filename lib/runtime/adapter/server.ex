@@ -6,6 +6,7 @@ defmodule SpectreKinetic.Adapter.Server do
   use GenServer
 
   alias SpectreKinetic.Action
+  alias SpectreKinetic.PlanFinalizer
   alias SpectreKinetic.Planner
   alias SpectreKinetic.Planner.Runtime, as: PlannerRuntime
   alias SpectreKinetic.RuntimeConfig
@@ -127,18 +128,22 @@ defmodule SpectreKinetic.Adapter.Server do
   end
 
   defp do_plan(runtime, al_text, opts) do
-    planner_reply(al_text, Planner.plan(runtime, al_text, opts))
+    mode = Keyword.get(opts, :__spectre_mode__, :plan)
+    planner_reply(runtime, al_text, Planner.plan(runtime, al_text, opts), opts, mode)
   end
 
   defp do_plan_request(runtime, request) do
     normalized = RuntimeConfig.normalize_request(request)
 
     planner_reply(
+      runtime,
       normalized["al"],
-      Planner.plan_request(normalized, PlannerRuntime.plan_opts(runtime))
+      Planner.plan_request(normalized, PlannerRuntime.plan_opts(runtime)),
+      [],
+      :plan
     )
   end
 
-  defp planner_reply(al_text, planner_result),
-    do: Action.from_planner_reply(al_text, planner_result)
+  defp planner_reply(runtime, al_text, planner_result, opts, mode),
+    do: PlanFinalizer.to_action(runtime, al_text, planner_result, opts, mode)
 end

@@ -50,4 +50,25 @@ defmodule SpectreKinetic.ActionTest do
     assert action.args["to"] == "ops@example.com"
     assert action.notes == ["unmatched slots: [\"body\"]"]
   end
+
+  test "from_plan includes classifier enrichment fields" do
+    plan = %{
+      "status" => "needs_confirmation",
+      "selected_tool" => "Dynamic.Email.send/2",
+      "args" => %{"to" => "dev@example.com"},
+      "missing" => [],
+      "classifier_results" => %{
+        safety_risk: %{risk: :external_side_effect, requires_confirmation: true}
+      },
+      "warnings" => ["planned action has external_side_effect risk"],
+      "halted?" => true
+    }
+
+    action = Action.from_plan("SEND EMAIL TO=dev@example.com", plan)
+
+    assert action.status == :needs_confirmation
+    assert action.classifier_results.safety_risk.risk == :external_side_effect
+    assert action.warnings == ["planned action has external_side_effect risk"]
+    assert action.halted?
+  end
 end
