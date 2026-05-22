@@ -2,6 +2,50 @@
 
 Elixir-first planning for turning Action Language into real function calls.
 
+## Why Use This?
+
+If you are building an agent, the usual question is:
+
+> "Why do I need this? Can I just give the agent my tools?"
+
+You can, but then every request starts by spending prompt space on tool
+schemas, argument rules, naming conventions, and examples. With
+`spectre_kinetic`, your app keeps that tool knowledge in a compiled registry
+instead.
+
+An agent can turn a messy user request:
+
+```text
+Tell ops the deploy failed and include the log link
+```
+
+into a small Action Language candidate:
+
+```text
+SEND MAIL TO="ops@example.com" BODY="Deploy failed: https://logs.example/run/42"
+```
+
+Then `spectre_kinetic` maps it to your real function:
+
+```elixir
+%SpectreKinetic.ActionPlan{
+  selected_tool: "MyApp.Emailer.send/2",
+  args: %{
+    "email" => "ops@example.com",
+    "text" => "Deploy failed: https://logs.example/run/42"
+  },
+  status: :ok
+}
+```
+
+That means the agent does not need to carry a giant live tool catalog in its
+context window. Compared with exposing the same app surface through MCP, this
+is often much lighter for in-app agents: fewer schema tokens, less ceremony,
+and more context left for the actual user request, source code, logs, or
+conversation history. MCP is useful when you need an external protocol for
+tools. `spectre_kinetic` is for when your Elixir app already owns the tools
+and you want a compact, local planning layer.
+
 Instead of teaching a model to emit a giant JSON object and then politely
 pretending it will never forget a field, you describe your tools in Elixir,
 give the planner examples, and let `spectre_kinetic` find the best matching
