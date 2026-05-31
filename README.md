@@ -1,4 +1,4 @@
-# spectre_kinetic
+# SpectreKinetic
 
 Elixir-first planning for turning Action Language into real function calls.
 
