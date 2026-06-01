@@ -25,7 +25,7 @@ defmodule Mix.Tasks.Spectre.TrainReranker do
     learning_rate: :float
   ]
 
-  @impl true
+  @impl Mix.Task
   def run(argv) do
     Mix.Task.run("app.start")
 

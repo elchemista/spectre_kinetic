@@ -25,7 +25,7 @@ defmodule Mix.Tasks.Spectre.Show do
     format: :string
   ]
 
-  @impl true
+  @impl Mix.Task
   def run(argv) do
     Mix.Task.run("app.start")
 

@@ -5,6 +5,21 @@ defmodule SpectreKinetic.Action do
   This struct intentionally stays close to the planner result payload.
   It keeps only the fields that are usually needed to decide whether
   a tool can be executed, retried, or shown back to an LLM.
+
+  `Action` is the public boundary object. Inside the planner we keep rich maps
+  because ranking and mapping features are assembled from several sources. At
+  the API boundary, those maps are normalized into this struct so callers can
+  pattern match on a stable shape:
+
+      {:ok, %SpectreKinetic.Action{status: :ok, args: args}} =
+        SpectreKinetic.plan(runtime, "SEND EMAIL WITH: TO=dev@example.com")
+
+      {:ok, %SpectreKinetic.Action{status: :no_tool, alternatives: suggestions}} =
+        SpectreKinetic.plan(runtime, "DO SOMETHING UNKNOWN", tool_threshold: 0.99)
+
+  The module also performs small boundary repairs. For example, when the planner
+  reports a missing `to` argument but the AL text contains `RECIPIENT=...`, the
+  action can recover the canonical `to` arg and remove the stale diagnostic.
   """
 
   @derive {Jason.Encoder,
@@ -43,6 +58,17 @@ defmodule SpectreKinetic.Action do
             halted?: false,
             alternatives: [],
             error: nil
+
+  @known_statuses %{
+    "ok" => :ok,
+    "no_tool" => :no_tool,
+    "missing_args" => :missing_args,
+    "ambiguous_mapping" => :ambiguous_mapping,
+    "needs_confirmation" => :needs_confirmation,
+    "needs_clarification" => :needs_clarification,
+    "rejected" => :rejected,
+    "error" => :error
+  }
 
   @typedoc """
   One alternative returned when the planner has either:
@@ -85,6 +111,24 @@ defmodule SpectreKinetic.Action do
 
   @doc """
   Builds an action struct from the decoded planner payload.
+
+  The input `plan` is the external map shape produced by the planner. This
+  function is intentionally the place where string statuses, JSON-style keys,
+  and compatibility repairs are converted into the Elixir struct shape.
+
+  ## Examples
+
+      iex> plan = %{
+      ...>   "status" => "ok",
+      ...>   "selected_tool" => "Mail.send/1",
+      ...>   "args" => %{"to" => "dev@example.com"}
+      ...> }
+      iex> action = SpectreKinetic.Action.from_plan("SEND EMAIL TO=dev@example.com", plan)
+      iex> {action.status, action.selected_tool, action.args["to"]}
+      {:ok, "Mail.send/1", "dev@example.com"}
+
+  Unknown string statuses are treated as `:error` instead of being converted
+  to atoms. That keeps foreign planner payloads from growing the VM atom table.
   """
   @spec from_plan(binary(), map(), non_neg_integer() | nil) :: t()
   def from_plan(al, plan, index \\ nil) when is_binary(al) and is_map(plan) do
@@ -120,6 +164,15 @@ defmodule SpectreKinetic.Action do
 
   @doc """
   Builds an error action for extraction or wrapper failures.
+
+  Use this when planning could not produce a planner payload at all, for
+  example when AL extraction fails before tool selection starts.
+
+  ## Example
+
+      iex> action = SpectreKinetic.Action.error("???", :invalid_al_verb, 0)
+      iex> {action.status, action.error, action.index}
+      {:error, :invalid_al_verb, 0}
   """
   @spec error(binary() | nil, term(), non_neg_integer() | nil) :: t()
   def error(al, reason, index \\ nil) do
@@ -131,13 +184,11 @@ defmodule SpectreKinetic.Action do
     }
   end
 
-  defp normalize_status("ok"), do: :ok
-  defp normalize_status("NO_TOOL"), do: :no_tool
-  defp normalize_status("MISSING_ARGS"), do: :missing_args
-  defp normalize_status("AMBIGUOUS_MAPPING"), do: :ambiguous_mapping
-
-  defp normalize_status(other) when is_binary(other),
-    do: other |> String.downcase() |> String.to_atom()
+  # Status text crosses a boundary from planner maps and JSON. Keep the allowed
+  # set explicit so unexpected strings cannot create atoms at runtime.
+  defp normalize_status(other) when is_binary(other) do
+    Map.get(@known_statuses, String.downcase(other), :error)
+  end
 
   defp normalize_status(other), do: other
 
@@ -195,6 +246,8 @@ defmodule SpectreKinetic.Action do
     end)
   end
 
+  # The parser intentionally accepts common natural-language aliases at the
+  # boundary. The action payload still exposes canonical registry arg names.
   defp repair_aliases("to"),
     do: ["recipient", "email", "phone", "number", "target", "destination", "dest"]
 

@@ -18,7 +18,7 @@ defmodule SpectreKinetic.Classifiers.PlanConfidence do
   @default_clarify_threshold 0.55
   @terminal_statuses [:no_tool, :missing_args, :error]
 
-  @impl true
+  @impl SpectreKinetic.Classifier
   def call(%PlanContext{} = context, %{mode: :axon, runtime: runtime, opts: opts}) do
     with {:ok, [confidence]} <- AxonClassifier.predict_one(runtime, Features.build(context)) do
       write_result(context, confidence, opts)

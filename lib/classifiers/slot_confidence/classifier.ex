@@ -16,7 +16,7 @@ defmodule SpectreKinetic.Classifiers.SlotConfidence do
 
   @default_min_slot_confidence 0.70
 
-  @impl true
+  @impl SpectreKinetic.Classifier
   def call(%PlanContext{} = context, state) do
     case PlanContext.selected_action(context) do
       nil ->

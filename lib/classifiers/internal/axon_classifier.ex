@@ -37,7 +37,7 @@ defmodule SpectreKinetic.Classifiers.Internal.AxonClassifier do
       @axon_opt_keys opt_keys
       @axon_output output
 
-      @impl true
+      @impl SpectreKinetic.Classifier
       @doc false
       @spec init(keyword()) :: AxonClassifier.state()
       def init(opts) do

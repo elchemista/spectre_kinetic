@@ -6,10 +6,46 @@ defmodule SpectreKinetic.PlanContext do
   selection or argument mapping. Classifiers may enrich this struct and adjust
   status, warnings, or classifier results before it is converted back into the
   public action payload.
+
+  This is the classifier boundary object. The planner keeps its raw result map,
+  while classifiers work with named accessors such as `selected_tool/1`,
+  `args/1`, `scores/1`, and `selected_action/1`. That keeps classifier modules
+  focused on decision rules instead of on the planner's map layout.
+
+  ## Example
+
+      context =
+        SpectreKinetic.PlanContext.from_planner_result(
+          runtime,
+          "INSTALL PACKAGE WITH: PACKAGE=nginx",
+          :plan,
+          %{
+            "status" => "ok",
+            "selected_tool" => "Linux.Apt.install/1",
+            "args" => %{"package" => "nginx"}
+          }
+        )
+
+      context
+      |> SpectreKinetic.PlanContext.put_classifier_result(:safety_risk, %{
+        risk: :system_mutation
+      })
+      |> SpectreKinetic.PlanContext.add_warning("requires confirmation")
   """
 
   alias SpectreKinetic.Parser
   alias SpectreKinetic.Planner.Runtime, as: PlannerRuntime
+
+  @known_statuses %{
+    "ok" => :ok,
+    "no_tool" => :no_tool,
+    "missing_args" => :missing_args,
+    "ambiguous_mapping" => :ambiguous_mapping,
+    "needs_confirmation" => :needs_confirmation,
+    "needs_clarification" => :needs_clarification,
+    "rejected" => :rejected,
+    "error" => :error
+  }
 
   defstruct [
     :runtime,
@@ -48,6 +84,10 @@ defmodule SpectreKinetic.PlanContext do
 
   @doc """
   Builds a classifier context from one base planner result.
+
+  `planner_result` is deliberately kept intact in the struct. Classifiers can
+  enrich the context through helper functions, and `to_planner_result/1` later
+  merges those enrichments back into the public map consumed by `Action`.
   """
   @spec from_planner_result(PlannerRuntime.t(), binary(), :plan | :plan_chain, map()) :: t()
   def from_planner_result(%PlannerRuntime{} = runtime, input, mode, planner_result)
@@ -67,6 +107,10 @@ defmodule SpectreKinetic.PlanContext do
 
   @doc """
   Converts a classifier context back into the planner payload consumed by `Action`.
+
+  This is the only direction classifiers should use to write back to the public
+  action payload. It preserves the original planner result and overlays the
+  classifier-owned fields: status, classifier results, warnings, and halted flag.
   """
   @spec to_planner_result(t()) :: map()
   def to_planner_result(%__MODULE__{} = context) do
@@ -85,6 +129,10 @@ defmodule SpectreKinetic.PlanContext do
 
   @doc """
   Returns parsed AL args from the normalized context input.
+
+  Classifiers use this when they need to compare what the user wrote with what
+  the planner mapped. For example, slot confidence checks can inspect whether a
+  mapped argument came from an exact key or from an alias.
   """
   @spec parsed_args(t()) :: map()
   def parsed_args(%__MODULE__{} = context), do: Parser.args(normalized_al(context))
@@ -125,6 +173,16 @@ defmodule SpectreKinetic.PlanContext do
 
   @doc """
   Adds one classifier result under `key`.
+
+  Classifier results are namespaced by key so independent plugs can add their
+  own diagnostics without rewriting each other's output.
+
+  ## Example
+
+      iex> context = %SpectreKinetic.PlanContext{classifier_results: %{}}
+      iex> context = SpectreKinetic.PlanContext.put_classifier_result(context, :risk, %{score: 0.8})
+      iex> context.classifier_results
+      %{risk: %{score: 0.8}}
   """
   @spec put_classifier_result(t(), atom() | binary(), map()) :: t()
   def put_classifier_result(%__MODULE__{} = context, key, value) when is_map(value) do
@@ -133,6 +191,10 @@ defmodule SpectreKinetic.PlanContext do
 
   @doc """
   Appends a human-readable warning unless it is empty.
+
+  Warnings are intended for explainability at the API boundary. Empty strings
+  and non-binary values are ignored so classifiers can call this helper after
+  optional checks without adding noise.
   """
   @spec add_warning(t(), binary() | nil) :: t()
   def add_warning(%__MODULE__{} = context, warning) when is_binary(warning) do
@@ -141,7 +203,7 @@ defmodule SpectreKinetic.PlanContext do
     if warning == "" do
       context
     else
-      %{context | warnings: (context.warnings || []) ++ [warning]}
+      %{context | warnings: Enum.concat(List.wrap(context.warnings), [warning])}
     end
   end
 
@@ -149,6 +211,10 @@ defmodule SpectreKinetic.PlanContext do
 
   @doc """
   Returns the registry action selected by the base planner, when available.
+
+  The live registry is preferred because it contains the normalized action
+  currently used by the runtime. Embedded action snapshots are only a fallback
+  for tests and serialized planner results that already include the action data.
   """
   @spec selected_action(t()) :: map() | nil
   def selected_action(%__MODULE__{} = context) do
@@ -212,13 +278,11 @@ defmodule SpectreKinetic.PlanContext do
   defp score_margin(score, next) when is_number(score) and is_number(next), do: score - next
   defp score_margin(_score, _next), do: nil
 
-  defp normalize_status("ok"), do: :ok
-  defp normalize_status("NO_TOOL"), do: :no_tool
-  defp normalize_status("MISSING_ARGS"), do: :missing_args
-  defp normalize_status("AMBIGUOUS_MAPPING"), do: :ambiguous_mapping
-
-  defp normalize_status(status) when is_binary(status),
-    do: status |> String.downcase() |> String.to_atom()
+  # Status enters this context from planner maps and serialized payloads. Keep
+  # the translation explicit so arbitrary external strings do not create atoms.
+  defp normalize_status(status) when is_binary(status) do
+    Map.get(@known_statuses, String.downcase(status), :error)
+  end
 
   defp normalize_status(status) when is_atom(status), do: status
   defp normalize_status(_status), do: :ok

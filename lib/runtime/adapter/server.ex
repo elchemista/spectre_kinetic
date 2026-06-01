@@ -65,7 +65,7 @@ defmodule SpectreKinetic.Adapter.Server do
   @spec action_count(GenServer.server()) :: non_neg_integer()
   def action_count(server), do: GenServer.call(server, :action_count)
 
-  @impl true
+  @impl GenServer
   def init(opts) do
     case PlannerRuntime.load(opts) do
       {:ok, runtime} ->
@@ -80,7 +80,7 @@ defmodule SpectreKinetic.Adapter.Server do
     end
   end
 
-  @impl true
+  @impl GenServer
   def handle_call({:plan, al_text, opts}, _from, state) do
     {:reply, do_plan(state.runtime, al_text, opts), state}
   end

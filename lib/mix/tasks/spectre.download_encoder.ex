@@ -24,7 +24,7 @@ defmodule Mix.Tasks.Spectre.DownloadEncoder do
 
   @switches [model: :string, out: :string, force: :boolean]
 
-  @impl true
+  @impl Mix.Task
   def run(argv) do
     {opts, _args, invalid} = OptionParser.parse(argv, strict: @switches)
     invalid == [] || Mix.raise("invalid options: #{inspect(invalid)}")

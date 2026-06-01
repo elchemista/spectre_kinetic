@@ -1,6 +1,32 @@
 defmodule SpectreKinetic.Tool.Extractor do
   @moduledoc """
   Extracts planner registry actions from compiled Elixir modules using `@al`.
+
+  This module is an adapter between compiled Elixir code and the planner's
+  registry format. Tool authors describe intent with `@al`, `@doc`, and
+  `@spec`; the extractor turns that metadata into normalized registry actions.
+
+  Keeping this translation at the boundary means the planner does not need to
+  know how Elixir stores docs/specs, and runtime code does not need to inspect
+  modules while planning.
+
+  ## How examples become aliases
+
+  Action docs may include AL examples:
+
+      @al "SEND EMAIL"
+      @doc \"\"\"
+      Sends one email.
+
+      AL: SEND EMAIL WITH: TO=dev@example.com SUBJECT='Hello'
+      AL: SEND EMAIL WITH: RECIPIENT=ops@example.com TITLE='Alert'
+      \"\"\"
+      @spec send_email(String.t(), String.t()) :: :ok
+      def send_email(to, subject), do: :ok
+
+  The canonical parameter names still come from the function arguments, while
+  slots such as `RECIPIENT` and `TITLE` are learned as aliases when they line up
+  positionally or exactly with those parameters.
   """
 
   alias SpectreKinetic.Planner.Registry
@@ -30,6 +56,13 @@ defmodule SpectreKinetic.Tool.Extractor do
            required(:arg_types) => [binary()]
          }
 
+  @doc """
+  Extracts all SpectreKinetic tools from one loaded OTP application.
+
+  The application must already be known to the VM. Mix tasks call
+  `Application.load/1` before reaching this function so unknown app names are
+  handled as clear CLI errors instead of creating new atoms.
+  """
   @spec extract_app(atom()) :: {:ok, [Registry.action()]} | {:error, tool_error()}
   def extract_app(app) when is_atom(app) do
     case Application.spec(app, :modules) do
@@ -38,16 +71,29 @@ defmodule SpectreKinetic.Tool.Extractor do
     end
   end
 
+  @doc """
+  Extracts tools from a list of modules, preserving module order.
+
+  Extraction stops at the first invalid tool so the caller gets a focused error
+  with the module, function, arity, and normalization reason.
+  """
   @spec extract_modules([module()]) :: {:ok, [Registry.action()]} | {:error, tool_error()}
   def extract_modules(modules) when is_list(modules) do
     Enum.reduce_while(modules, {:ok, []}, fn module, {:ok, acc} ->
       case extract_module(module) do
-        {:ok, actions} -> {:cont, {:ok, acc ++ actions}}
+        {:ok, actions} -> {:cont, {:ok, prepend_reversed(actions, acc)}}
         {:error, _reason} = error -> {:halt, error}
       end
     end)
+    |> reverse_actions()
   end
 
+  @doc """
+  Extracts tools from one module.
+
+  Modules without `__spectre_tools__/0` are valid and return an empty list. This
+  lets callers pass an entire application's module list without pre-filtering.
+  """
   @spec extract_module(module()) :: {:ok, [Registry.action()]} | {:error, tool_error()}
   def extract_module(module) when is_atom(module) do
     case Code.ensure_loaded(module) do
@@ -177,6 +223,9 @@ defmodule SpectreKinetic.Tool.Extractor do
   defp doc_text(text) when is_binary(text), do: text
   defp doc_text(_), do: ""
 
+  # Docs are a boundary format for humans, not a registry format. Examples are
+  # pulled out so retrieval has concrete AL phrases while the visible doc text
+  # stays clean and readable.
   defp split_doc_examples(doc) do
     {clean_lines, examples} =
       doc
@@ -190,19 +239,20 @@ defmodule SpectreKinetic.Tool.Extractor do
             |> String.trim_leading("AL:")
             |> String.trim()
 
-          {clean_lines, examples ++ [example]}
+          {clean_lines, [example | examples]}
         else
-          {clean_lines ++ [line], examples}
+          {[line | clean_lines], examples}
         end
       end)
 
     clean_doc =
       clean_lines
+      |> Enum.reverse()
       |> Enum.join("\n")
       |> String.trim()
       |> String.replace(~r/\n{3,}/, "\n\n")
 
-    {clean_doc, examples}
+    {clean_doc, Enum.reverse(examples)}
   end
 
   defp spec_text(_function, []), do: ""
@@ -270,9 +320,7 @@ defmodule SpectreKinetic.Tool.Extractor do
     positional_matches =
       positional_slot_matches(slots, indexed_params, exact_matches, used_indexes)
 
-    exact_matches
-    |> Kernel.++(positional_matches)
-    |> ordered_slot_param_pairs()
+    ordered_slot_param_pairs(exact_matches, positional_matches)
   end
 
   @spec indexed_params([binary()]) :: [{binary(), non_neg_integer()}]
@@ -306,6 +354,16 @@ defmodule SpectreKinetic.Tool.Extractor do
           [{binary(), non_neg_integer()}]
   defp unused_params(indexed_params, used_indexes) do
     Enum.reject(indexed_params, fn {_param, index} -> MapSet.member?(used_indexes, index) end)
+  end
+
+  @spec ordered_slot_param_pairs(
+          [{binary(), binary(), non_neg_integer()}],
+          [{binary(), binary(), non_neg_integer()}]
+        ) :: [{binary(), binary()}]
+  defp ordered_slot_param_pairs(exact_matches, positional_matches) do
+    positional_matches
+    |> prepend_reversed(exact_matches)
+    |> ordered_slot_param_pairs()
   end
 
   @spec ordered_slot_param_pairs([{binary(), binary(), non_neg_integer()}]) ::
@@ -376,6 +434,12 @@ defmodule SpectreKinetic.Tool.Extractor do
     else
       Map.update!(alias_map, param, &uniq_preserve([slot | &1]))
     end
+  end
+
+  # We prepend for cheap accumulation and reverse once at the boundary. This
+  # keeps extraction stable for callers while avoiding repeated list appends.
+  defp prepend_reversed(actions, acc) do
+    Enum.reduce(actions, acc, fn action, acc -> [action | acc] end)
   end
 
   defp reverse_actions({:ok, actions}), do: {:ok, Enum.reverse(actions)}

@@ -22,7 +22,7 @@ defmodule Mix.Tasks.ExtractKinetic do
     batch_size: :integer
   ]
 
-  @impl true
+  @impl Mix.Task
   def run(argv) do
     Mix.Task.run("compile")
     Mix.Task.run("app.start")
@@ -50,13 +50,20 @@ defmodule Mix.Tasks.ExtractKinetic do
   end
 
   defp extract_actions!(app) do
-    app_atom = String.to_atom(app)
+    app_atom = existing_app_atom!(app)
     _ = Application.load(app_atom)
 
     case Extractor.extract_app(app_atom) do
       {:ok, actions} -> actions
       {:error, reason} -> Mix.raise("tool extraction failed: #{inspect(reason)}")
     end
+  end
+
+  defp existing_app_atom!(app) do
+    String.to_existing_atom(app)
+  rescue
+    ArgumentError ->
+      Mix.raise("unknown app #{inspect(app)}")
   end
 
   defp write_output!(out, actions, opts) do

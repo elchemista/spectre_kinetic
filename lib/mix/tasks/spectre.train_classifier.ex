@@ -26,7 +26,7 @@ defmodule Mix.Tasks.Spectre.TrainClassifier do
     seed: :integer
   ]
 
-  @impl true
+  @impl Mix.Task
   def run(argv) do
     Mix.Task.run("app.start")
 

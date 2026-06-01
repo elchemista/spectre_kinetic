@@ -71,4 +71,10 @@ defmodule SpectreKinetic.ActionTest do
     assert action.warnings == ["planned action has external_side_effect risk"]
     assert action.halted?
   end
+
+  test "from_plan rejects unknown string statuses without creating atoms" do
+    action = Action.from_plan("SEND EMAIL", %{"status" => "UNEXPECTED_STATUS"})
+
+    assert action.status == :error
+  end
 end
