@@ -45,7 +45,7 @@ defmodule SpectreKinetic.Classifiers.SafetyRisk do
     :unknown_risk
   ]
 
-  @impl true
+  @impl SpectreKinetic.Classifier
   def call(%PlanContext{} = context, %{mode: :axon, runtime: runtime, opts: opts}) do
     with {:ok, probabilities} <- AxonClassifier.predict_one(runtime, Features.build(context)) do
       labels = AxonRuntime.labels(runtime)

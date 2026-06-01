@@ -8,7 +8,7 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
   defmodule CountingPlug do
     @behaviour SpectreKinetic.Classifier
 
-    @impl true
+    @impl SpectreKinetic.Classifier
     def init(opts) do
       init_agent = Keyword.fetch!(opts, :init_agent)
       Agent.update(init_agent, &(&1 + 1))
@@ -19,7 +19,7 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
       }
     end
 
-    @impl true
+    @impl SpectreKinetic.Classifier
     def call(%PlanContext{} = context, state) do
       Agent.update(state.call_agent, &(&1 + 1))
 
@@ -37,10 +37,10 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
   defmodule StatusPlug do
     @behaviour SpectreKinetic.Classifier
 
-    @impl true
+    @impl SpectreKinetic.Classifier
     def init(opts), do: Keyword.fetch!(opts, :status)
 
-    @impl true
+    @impl SpectreKinetic.Classifier
     def call(%PlanContext{} = context, status) do
       {:ok, %{context | status: status}}
     end
@@ -49,10 +49,10 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
   defmodule HaltPlug do
     @behaviour SpectreKinetic.Classifier
 
-    @impl true
+    @impl SpectreKinetic.Classifier
     def init(opts), do: Keyword.fetch!(opts, :warning)
 
-    @impl true
+    @impl SpectreKinetic.Classifier
     def call(%PlanContext{} = context, warning) do
       {:halt, PlanContext.add_warning(context, warning)}
     end
@@ -61,10 +61,10 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
   defmodule InitErrorPlug do
     @behaviour SpectreKinetic.Classifier
 
-    @impl true
+    @impl SpectreKinetic.Classifier
     def init(_opts), do: raise(ArgumentError, "bad plug config")
 
-    @impl true
+    @impl SpectreKinetic.Classifier
     def call(%PlanContext{} = context, _state), do: {:ok, context}
   end
 

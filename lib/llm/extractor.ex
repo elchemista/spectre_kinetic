@@ -12,6 +12,20 @@ defmodule SpectreKinetic.Extractor do
 
   Use `scan/1` when you need validation diagnostics. `extract/1` keeps the old
   compact `{clean_text, actions}` API and returns only validated AL strings.
+
+  The extractor is a primary adapter for noisy LLM text. It accepts foreign
+  presentation details such as Markdown fences, XML-ish tags, bullet prefixes,
+  and inline `AL:` markers, then hands the rest of the system normalized AL.
+  That keeps planner modules from knowing about prompt formatting quirks.
+
+  ## Examples
+
+      iex> SpectreKinetic.Extractor.extract("Please do this:\\n```al\\nSEND EMAIL\\n```")
+      {"Please do this:", ["SEND EMAIL"]}
+
+      iex> result = SpectreKinetic.Extractor.scan("<al>SEND EMAIL</al> then explain")
+      iex> Enum.map(result.entries, & &1.al)
+      ["SEND EMAIL"]
   """
 
   @type entry :: %{
@@ -27,6 +41,10 @@ defmodule SpectreKinetic.Extractor do
 
   @doc """
   Extracts validated AL strings from a noisy text response.
+
+  Returns `{clean_text, actions}` for callers that only need executable AL.
+  Invalid AL candidates are omitted from `actions`; use `scan/1` when the caller
+  needs to show diagnostics for those invalid candidates.
   """
   @spec extract(binary()) :: {binary(), [binary()]}
   def extract(text) when is_binary(text) do
@@ -38,6 +56,17 @@ defmodule SpectreKinetic.Extractor do
 
   @doc """
   Scans a text response for AL candidates and returns validation diagnostics.
+
+  This function preserves enough information to explain parser decisions:
+  `:raw` is the extracted candidate, `:al` is the normalized candidate when it
+  validates, and `:error` contains the validation reason when it does not.
+
+  ## Example
+
+      iex> result = SpectreKinetic.Extractor.scan("AL: 123")
+      iex> [%{raw: "123", al: nil, error: :invalid_al_verb}] = result.entries
+      iex> result.clean_text
+      ""
   """
   @spec scan(binary()) :: scan_result()
   def scan(text) when is_binary(text) do
@@ -49,6 +78,9 @@ defmodule SpectreKinetic.Extractor do
 
   def scan(_), do: %{clean_text: "", entries: []}
 
+  # The scanner uses reversed accumulators while reading line by line. That is
+  # the idiomatic O(1) list-building shape; `build_result/2` restores the public
+  # order once all input has been consumed.
   defp consume_line(line, %{mode: :normal} = state) do
     trimmed = String.trim_leading(line)
     fence_candidate = drop_list_prefix(trimmed)
@@ -74,8 +106,8 @@ defmodule SpectreKinetic.Extractor do
     case parse_fence_close(line, delimiter) do
       {:close, before_close, after_close} ->
         raw =
-          [parts, [before_close]]
-          |> List.flatten()
+          [before_close | parts]
+          |> Enum.reverse()
           |> Enum.reject(&(&1 == ""))
           |> Enum.join("\n")
 
@@ -84,7 +116,7 @@ defmodule SpectreKinetic.Extractor do
         |> continue_after_close(after_close)
 
       :continue ->
-        %{state | mode: {:al_fence, delimiter, parts ++ [line]}}
+        %{state | mode: {:al_fence, delimiter, [line | parts]}}
     end
   end
 
@@ -92,8 +124,8 @@ defmodule SpectreKinetic.Extractor do
     case split_al_close(line) do
       {:ok, before_close, after_close} ->
         raw =
-          [parts, [before_close]]
-          |> List.flatten()
+          [before_close | parts]
+          |> Enum.reverse()
           |> Enum.reject(&(&1 == ""))
           |> Enum.join("\n")
 
@@ -102,7 +134,7 @@ defmodule SpectreKinetic.Extractor do
         |> continue_after_tag_close(after_close)
 
       :not_found ->
-        %{state | mode: {:al_tag, parts ++ [line]}}
+        %{state | mode: {:al_tag, [line | parts]}}
     end
   end
 
@@ -124,14 +156,17 @@ defmodule SpectreKinetic.Extractor do
        }) do
     build_result(
       clean_lines,
-      entries ++ [invalid_entry(Enum.join(parts, "\n"), :unterminated_al_fence)]
+      [
+        invalid_entry(parts |> Enum.reverse() |> Enum.join("\n"), :unterminated_al_fence)
+        | entries
+      ]
     )
   end
 
   defp finalize_scan(%{mode: {:al_tag, parts}, clean_lines: clean_lines, entries: entries}) do
     build_result(
       clean_lines,
-      entries ++ [invalid_entry(Enum.join(parts, "\n"), :unterminated_al_tag)]
+      [invalid_entry(parts |> Enum.reverse() |> Enum.join("\n"), :unterminated_al_tag) | entries]
     )
   end
 
@@ -143,10 +178,11 @@ defmodule SpectreKinetic.Extractor do
     %{
       clean_text:
         clean_lines
+        |> Enum.reverse()
         |> Enum.join("\n")
         |> collapse_blank_lines()
         |> String.trim(),
-      entries: entries
+      entries: Enum.reverse(entries)
     }
   end
 
@@ -164,7 +200,8 @@ defmodule SpectreKinetic.Extractor do
         clean_line = IO.iodata_to_binary(Enum.reverse(clean_parts))
 
         state =
-          (entries ++ inline_entries)
+          entries
+          |> Enum.concat(inline_entries)
           |> Enum.reduce(state, &append_entry/2)
 
         case al_prefixed_candidate(clean_line) do
@@ -227,10 +264,10 @@ defmodule SpectreKinetic.Extractor do
   defp continue_after_tag_close(state, ""), do: keep_clean(state, "")
   defp continue_after_tag_close(state, after_close), do: handle_normal_line(after_close, state)
 
-  defp keep_clean(state, line), do: %{state | clean_lines: state.clean_lines ++ [line]}
+  defp keep_clean(state, line), do: %{state | clean_lines: [line | state.clean_lines]}
 
   defp add_entry(state, raw), do: append_entry(build_entry(raw), state)
-  defp append_entry(entry, state), do: %{state | entries: state.entries ++ [entry]}
+  defp append_entry(entry, state), do: %{state | entries: [entry | state.entries]}
 
   defp build_entry(raw) do
     case SpectreKinetic.Parser.validate(raw) do
@@ -453,10 +490,11 @@ defmodule SpectreKinetic.Extractor do
     |> String.split("\n", trim: false)
     |> Enum.reduce({[], false}, fn
       "", {acc, true} -> {acc, true}
-      "", {acc, false} -> {acc ++ [""], true}
-      line, {acc, _blank?} -> {acc ++ [line], false}
+      "", {acc, false} -> {["" | acc], true}
+      line, {acc, _blank?} -> {[line | acc], false}
     end)
     |> elem(0)
+    |> Enum.reverse()
     |> Enum.join("\n")
   end
 end

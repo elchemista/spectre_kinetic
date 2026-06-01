@@ -80,7 +80,7 @@ defmodule SpectreKinetic.PlannerExamplesTest do
   end
 
   defp maybe_add_failure(failures, true, _message), do: failures
-  defp maybe_add_failure(failures, false, message), do: failures ++ [message]
+  defp maybe_add_failure(failures, false, message), do: Enum.concat(failures, [message])
 
   defp arg_failures(example, action) do
     Enum.flat_map(example.expected_args, fn {key, value} ->

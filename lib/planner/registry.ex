@@ -4,6 +4,30 @@ defmodule SpectreKinetic.Planner.Registry do
 
   The planner depends on this behavior instead of directly depending on ETS so
   alternate backends can provide the same registry operations.
+
+  Registry adapters own storage and lookup mechanics. The planner owns ranking
+  and mapping. This behaviour keeps that dependency direction explicit:
+
+  - runtime code may call any module that implements this behaviour
+  - registry implementations can be ETS, compiled files, test doubles, or a
+    future persistent backend
+  - shared normalization stays here so every backend receives the same action
+    shape
+
+  ## Canonical action shape
+
+      %{
+        "id" => "Mail.send/2",
+        "module" => "Mail",
+        "name" => "send",
+        "arity" => 2,
+        "doc" => "Sends one email.",
+        "spec" => "send(to :: String.t(), subject :: String.t()) :: :ok",
+        "args" => [
+          %{"name" => "to", "type" => "String.t()", "required" => true, "aliases" => []}
+        ],
+        "examples" => ["SEND EMAIL WITH: TO=dev@example.com"]
+      }
   """
 
   @type action :: map()
@@ -25,6 +49,27 @@ defmodule SpectreKinetic.Planner.Registry do
 
   @doc """
   Normalizes one raw registry action into the planner's canonical action shape.
+
+  Input may use atom or string keys because actions can come from Elixir code,
+  JSON, or ETF bundles. Normalization converts keys to strings and fills in
+  harmless defaults so downstream scoring code can be small and predictable.
+
+  ## Examples
+
+      iex> {:ok, action} =
+      ...>   SpectreKinetic.Planner.Registry.normalize_action(%{
+      ...>     module: "Mail",
+      ...>     name: "send",
+      ...>     arity: 1,
+      ...>     args: [%{name: "to"}]
+      ...>   })
+      iex> action["id"]
+      "Mail.send/1"
+      iex> action["args"]
+      [%{"name" => "to", "type" => "String.t()", "required" => true, "aliases" => []}]
+
+      iex> SpectreKinetic.Planner.Registry.normalize_action(%{})
+      {:error, :missing_id}
   """
   @spec normalize_action(map()) :: {:ok, action()} | {:error, term()}
   def normalize_action(raw) when is_map(raw) do
@@ -54,6 +99,21 @@ defmodule SpectreKinetic.Planner.Registry do
 
   @doc """
   Builds a compact retrieval card from one normalized action definition.
+
+  Retrieval cards are intentionally plain text. Embedding models and lexical
+  scoring both work better when the card contains the searchable facts a human
+  would use: module/function, docs, argument names, and a few examples.
+
+  ## Example
+
+      iex> SpectreKinetic.Planner.Registry.build_tool_card(%{
+      ...>   "module" => "Mail",
+      ...>   "name" => "send",
+      ...>   "doc" => "Sends one email.",
+      ...>   "args" => [%{"name" => "to"}],
+      ...>   "examples" => ["SEND EMAIL WITH: TO=dev@example.com"]
+      ...> })
+      "Mail.send - Sends one email. - args: to - examples: SEND EMAIL WITH: TO=dev@example.com"
   """
   @spec build_tool_card(action()) :: binary()
   def build_tool_card(action) do

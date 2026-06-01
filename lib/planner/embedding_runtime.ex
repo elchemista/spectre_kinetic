@@ -116,7 +116,7 @@ defmodule SpectreKinetic.Planner.EmbeddingRuntime do
 
   # --- Server callbacks ---
 
-  @impl true
+  @impl GenServer
   def init(opts) do
     case load(opts) do
       {:ok, runtime} -> {:ok, runtime}
@@ -124,7 +124,7 @@ defmodule SpectreKinetic.Planner.EmbeddingRuntime do
     end
   end
 
-  @impl true
+  @impl GenServer
   def handle_call({:embed_batch, texts}, _from, state) do
     result = do_embed_batch(state, texts)
     {:reply, result, state}

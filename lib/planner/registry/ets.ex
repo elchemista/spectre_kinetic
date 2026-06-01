@@ -18,7 +18,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
           meta: :ets.tid()
         }
 
-  @impl true
+  @impl Registry
   def new(opts \\ []) do
     registry = %__MODULE__{
       actions: :ets.new(__MODULE__, [:set, :protected]),
@@ -33,7 +33,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     end
   end
 
-  @impl true
+  @impl Registry
   def load_json(%__MODULE__{} = registry, path) do
     with {:ok, payload} <- File.read(path),
          {:ok, decoded} <- Jason.decode(payload) do
@@ -45,7 +45,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     end
   end
 
-  @impl true
+  @impl Registry
   def load_compiled(%__MODULE__{} = registry, path) do
     case File.read(path) do
       {:ok, binary} ->
@@ -79,7 +79,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     end
   end
 
-  @impl true
+  @impl Registry
   def all_actions(%__MODULE__{} = registry) do
     registry.actions
     |> :ets.tab2list()
@@ -87,7 +87,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     |> Enum.sort_by(& &1["id"])
   end
 
-  @impl true
+  @impl Registry
   def get_action(%__MODULE__{} = registry, action_id) do
     case :ets.lookup(registry.actions, action_id) do
       [{^action_id, action}] -> action
@@ -95,10 +95,10 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     end
   end
 
-  @impl true
+  @impl Registry
   def action_count(%__MODULE__{} = registry), do: :ets.info(registry.actions, :size)
 
-  @impl true
+  @impl Registry
   def add_action(%__MODULE__{} = registry, action) do
     case Registry.normalize_action(action) do
       {:ok, normalized} ->
@@ -110,7 +110,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     end
   end
 
-  @impl true
+  @impl Registry
   def delete_action(%__MODULE__{} = registry, action_id) do
     existed = :ets.member(registry.actions, action_id)
     :ets.delete(registry.actions, action_id)
@@ -119,7 +119,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     {{:ok, existed}, registry}
   end
 
-  @impl true
+  @impl Registry
   def embedding_matrix(%__MODULE__{} = registry) do
     entries =
       registry.embeddings
@@ -136,20 +136,20 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     end
   end
 
-  @impl true
+  @impl Registry
   def put_embedding(%__MODULE__{} = registry, action_id, tensor) do
     :ets.insert(registry.embeddings, {action_id, tensor})
     {:ok, registry}
   end
 
-  @impl true
+  @impl Registry
   def tool_cards(%__MODULE__{} = registry) do
     registry
     |> all_actions()
     |> Enum.map(fn action -> {action["id"], Registry.build_tool_card(action)} end)
   end
 
-  @impl true
+  @impl Registry
   def resolve_alias(%__MODULE__{} = registry, alias_name) do
     alias_name
     |> String.downcase()
@@ -157,7 +157,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     |> Enum.map(fn {_key, action_id, canonical} -> {action_id, canonical} end)
   end
 
-  @impl true
+  @impl Registry
   def close(%__MODULE__{} = registry) do
     Enum.each(
       [registry.actions, registry.aliases, registry.embeddings, registry.meta],

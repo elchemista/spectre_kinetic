@@ -23,7 +23,7 @@ defmodule Mix.Tasks.CompileKinetic do
     batch_size: :integer
   ]
 
-  @impl true
+  @impl Mix.Task
   def run(argv) do
     {opts, _args, invalid} = OptionParser.parse(argv, strict: @switches)
     invalid == [] || Mix.raise("invalid options: #{inspect(invalid)}")

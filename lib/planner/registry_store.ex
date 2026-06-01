@@ -97,7 +97,7 @@ defmodule SpectreKinetic.Planner.RegistryStore do
   @spec build_tool_card(map()) :: binary()
   def build_tool_card(action), do: Registry.build_tool_card(action)
 
-  @impl true
+  @impl GenServer
   def init(opts) do
     registry_module = Keyword.get(opts, :registry_module, ETS)
 
@@ -110,7 +110,7 @@ defmodule SpectreKinetic.Planner.RegistryStore do
     end
   end
 
-  @impl true
+  @impl GenServer
   def handle_call({:load_json, path}, _from, state) do
     reply_with_registry_update(state, fn module, registry -> module.load_json(registry, path) end)
   end
@@ -169,7 +169,7 @@ defmodule SpectreKinetic.Planner.RegistryStore do
     {:reply, state.registry_module.resolve_alias(state.registry, alias_name), state}
   end
 
-  @impl true
+  @impl GenServer
   def terminate(_reason, state) do
     state.registry_module.close(state.registry)
     :ok

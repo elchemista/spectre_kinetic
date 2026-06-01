@@ -11,7 +11,7 @@ defmodule SpectreKinetic.TestFakeAxonClassifier do
     opts: [:threshold],
     load_error: "failed to load fake classifier"
 
-  @impl true
+  @impl SpectreKinetic.Classifier
   @doc false
   @spec call(PlanContext.t(), SpectreKinetic.Classifiers.Internal.AxonClassifier.state()) ::
           {:ok, PlanContext.t()}
