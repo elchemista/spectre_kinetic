@@ -112,14 +112,6 @@ defmodule SpectreKinetic.Prompt do
   defp output_rule(:lines), do: "- Output only `AL: ...` lines and nothing else."
 
   defp dictionary_section(%Dictionary{} = dictionary, output) do
-    examples =
-      dictionary.examples
-      |> Enum.map(&format_example(&1, output))
-      |> case do
-        [] -> ["- none"]
-        items -> Enum.map(items, &("- " <> &1))
-      end
-
     [
       "Allowed action ids:",
       list_or_none(dictionary.action_ids),
@@ -128,9 +120,17 @@ defmodule SpectreKinetic.Prompt do
       "Allowed slots:",
       list_or_none(dictionary.slots),
       "Examples:",
-      Enum.join(examples, "\n")
+      dictionary_examples(dictionary.examples, output)
     ]
     |> Enum.join("\n")
+  end
+
+  defp dictionary_examples([], _output), do: "- none"
+
+  defp dictionary_examples(examples, output) do
+    examples
+    |> Enum.map(&format_example(&1, output))
+    |> Enum.map_join("\n", &("- " <> &1))
   end
 
   defp request_section(nil), do: nil

@@ -119,32 +119,38 @@ defmodule SpectreKinetic.Classifiers.Internal.AxonRuntime do
 
   defp validate_features(runtime, features) do
     expected_dim = feature_dim(runtime)
-
-    case Nx.shape(features) do
-      {_rows, ^expected_dim} -> :ok
-      {_rows, dim} -> {:error, {:feature_dim_mismatch, expected_dim, dim}}
-      shape -> {:error, {:invalid_feature_shape, shape}}
-    end
+    validate_feature_shape(Nx.shape(features), expected_dim)
   end
 
+  defp validate_feature_shape({_rows, expected_dim}, expected_dim), do: :ok
+
+  defp validate_feature_shape({_rows, dim}, expected_dim) do
+    {:error, {:feature_dim_mismatch, expected_dim, dim}}
+  end
+
+  defp validate_feature_shape(shape, _expected_dim), do: {:error, {:invalid_feature_shape, shape}}
+
   defp rows(%Nx.Tensor{} = output) do
-    case Nx.shape(output) do
-      {_rows, 1} ->
-        output
-        |> Nx.to_flat_list()
-        |> Enum.map(&[normalize_number(&1)])
+    output
+    |> Nx.shape()
+    |> rows_for_shape(output)
+  end
 
-      {_rows, cols} ->
-        output
-        |> Nx.to_flat_list()
-        |> Enum.map(&normalize_number/1)
-        |> Enum.chunk_every(cols)
+  defp rows_for_shape({_rows, 1}, output), do: scalar_rows(output)
 
-      {_rows} ->
-        output
-        |> Nx.to_flat_list()
-        |> Enum.map(&[normalize_number(&1)])
-    end
+  defp rows_for_shape({_rows, cols}, output) do
+    output
+    |> Nx.to_flat_list()
+    |> Enum.map(&normalize_number/1)
+    |> Enum.chunk_every(cols)
+  end
+
+  defp rows_for_shape({_rows}, output), do: scalar_rows(output)
+
+  defp scalar_rows(output) do
+    output
+    |> Nx.to_flat_list()
+    |> Enum.map(&[normalize_number(&1)])
   end
 
   defp normalize_number(value) when is_number(value) do

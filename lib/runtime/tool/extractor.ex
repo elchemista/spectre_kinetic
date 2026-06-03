@@ -80,13 +80,17 @@ defmodule SpectreKinetic.Tool.Extractor do
   @spec extract_modules([module()]) :: {:ok, [Registry.action()]} | {:error, tool_error()}
   def extract_modules(modules) when is_list(modules) do
     Enum.reduce_while(modules, {:ok, []}, fn module, {:ok, acc} ->
-      case extract_module(module) do
-        {:ok, actions} -> {:cont, {:ok, prepend_reversed(actions, acc)}}
-        {:error, _reason} = error -> {:halt, error}
-      end
+      module
+      |> extract_module()
+      |> extract_module_result(acc)
     end)
     |> reverse_actions()
   end
+
+  defp extract_module_result({:ok, actions}, acc),
+    do: {:cont, {:ok, prepend_reversed(actions, acc)}}
+
+  defp extract_module_result({:error, _reason} = error, _acc), do: {:halt, error}
 
   @doc """
   Extracts tools from one module.
@@ -96,11 +100,13 @@ defmodule SpectreKinetic.Tool.Extractor do
   """
   @spec extract_module(module()) :: {:ok, [Registry.action()]} | {:error, tool_error()}
   def extract_module(module) when is_atom(module) do
-    case Code.ensure_loaded(module) do
-      {:module, ^module} -> extract_loaded_module(module)
-      _other -> {:error, {:module_not_loaded, module}}
-    end
+    module
+    |> Code.ensure_loaded()
+    |> ensure_loaded_result(module)
   end
+
+  defp ensure_loaded_result({:module, module}, module), do: extract_loaded_module(module)
+  defp ensure_loaded_result(_other, module), do: {:error, {:module_not_loaded, module}}
 
   defp extract_loaded_module(module) do
     if function_exported?(module, :__spectre_tools__, 0) do
@@ -114,13 +120,15 @@ defmodule SpectreKinetic.Tool.Extractor do
 
   defp extract_module_tools(module, docs, specs) do
     Enum.reduce_while(module.__spectre_tools__(), {:ok, []}, fn tool, {:ok, acc} ->
-      case build_action(module, tool, docs, specs) do
-        {:ok, action} -> {:cont, {:ok, [action | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
+      module
+      |> build_action(tool, docs, specs)
+      |> build_action_result(acc)
     end)
     |> reverse_actions()
   end
+
+  defp build_action_result({:ok, action}, acc), do: {:cont, {:ok, [action | acc]}}
+  defp build_action_result({:error, reason}, _acc), do: {:halt, {:error, reason}}
 
   defp build_action(module, tool, docs, specs) do
     identity = tool_identity(module, tool)
@@ -187,30 +195,34 @@ defmodule SpectreKinetic.Tool.Extractor do
   @spec normalize_built_action(map(), tool_identity()) ::
           {:ok, Registry.action()} | {:error, tool_error()}
   defp normalize_built_action(action, identity) do
-    case Registry.normalize_action(action) do
-      {:ok, normalized} ->
-        {:ok, normalized}
+    action
+    |> Registry.normalize_action()
+    |> normalize_built_action_result(identity)
+  end
 
-      {:error, reason} ->
-        {:error, {:invalid_action, identity.module, identity.function, identity.arity, reason}}
-    end
+  defp normalize_built_action_result({:ok, normalized}, _identity), do: {:ok, normalized}
+
+  defp normalize_built_action_result({:error, reason}, identity) do
+    {:error, {:invalid_action, identity.module, identity.function, identity.arity, reason}}
   end
 
   defp docs_by_function(module) do
-    case Code.fetch_docs(module) do
-      {:docs_v1, _anno, _lang, _format, _module_doc, _metadata, docs} ->
-        Enum.reduce(docs, %{}, fn
-          {{:function, name, arity}, _line, _signatures, doc, _metadata}, acc ->
-            Map.put(acc, {name, arity}, doc_text(doc))
-
-          _entry, acc ->
-            acc
-        end)
-
-      _ ->
-        %{}
-    end
+    module
+    |> Code.fetch_docs()
+    |> docs_by_function_result()
   end
+
+  defp docs_by_function_result({:docs_v1, _anno, _lang, _format, _module_doc, _metadata, docs}) do
+    Enum.reduce(docs, %{}, &doc_entry/2)
+  end
+
+  defp docs_by_function_result(_result), do: %{}
+
+  defp doc_entry({{:function, name, arity}, _line, _signatures, doc, _metadata}, acc) do
+    Map.put(acc, {name, arity}, doc_text(doc))
+  end
+
+  defp doc_entry(_entry, acc), do: acc
 
   defp specs_by_function(module) do
     case Code.Typespec.fetch_specs(module) do

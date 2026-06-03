@@ -1,5 +1,13 @@
 defmodule SpectreKinetic.PlanFinalizer do
-  @moduledoc false
+  @moduledoc """
+  Converts raw planner replies into public `SpectreKinetic.Action` structs.
+
+  The planner returns a JSON-compatible map because retrieval, mapping, and
+  reranker stages are easier to compose as data. The public API returns
+  `Action` structs. This module owns that final boundary and is also where
+  classifier plugs run, so the core planner does not need to know about policy
+  enrichment, confirmation rules, or classifier pipeline state.
+  """
 
   alias SpectreKinetic.Action
   alias SpectreKinetic.ClassifierPipeline
@@ -13,6 +21,12 @@ defmodule SpectreKinetic.PlanFinalizer do
           keyword(),
           :plan | :plan_chain
         ) :: {:ok, Action.t()} | {:error, term()}
+  @doc """
+  Finalizes a planner result for one API call.
+
+  Successful planner maps are optionally enriched by configured classifiers and
+  then converted to `Action`. Planner errors pass through unchanged.
+  """
   def to_action(%PlannerRuntime{} = runtime, al_text, {:ok, planner_result}, opts, mode)
       when is_binary(al_text) and is_map(planner_result) do
     classifiers = PlannerRuntime.classifiers(runtime, opts)

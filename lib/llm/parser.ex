@@ -36,6 +36,9 @@ defmodule SpectreKinetic.Parser do
   @loose_value_stopwords ~w(with via using into onto in on at by for as and or)
 
   @explicit_arg_pattern ~r/(^|[\s,;])(?<key>[A-Za-z0-9_]+)\s*(?:=|:)\s*(?<value>"[^"]*"|'[^']*'|\{[^}]*\}|[^\s,;]+)/u
+  @whitespace_chars [?\s, ?\n, ?\r, ?\t]
+  @fence_delimiters ["```", "~~~"]
+  @al_fence_languages ["al", "action", "action-language"]
 
   @doc """
   Normalizes AL text by unwrapping common LLM wrappers and collapsing whitespace.
@@ -105,31 +108,42 @@ defmodule SpectreKinetic.Parser do
   defp unwrap_all(""), do: {:ok, ""}
 
   defp unwrap_all(text) do
-    case unwrap_once(text) do
-      {:ok, ^text} -> {:ok, text}
-      {:ok, next} -> next |> String.trim() |> unwrap_all()
-      {:error, reason} -> {:error, reason}
-    end
+    text
+    |> unwrap_once()
+    |> unwrap_all_result(text)
   end
 
+  defp unwrap_all_result({:ok, text}, text), do: {:ok, text}
+  defp unwrap_all_result({:ok, next}, _text), do: next |> String.trim() |> unwrap_all()
+  defp unwrap_all_result({:error, reason}, _text), do: {:error, reason}
+
   defp unwrap_once(text) do
-    cond do
-      prefixed_al?(text) -> {:ok, text |> strip_prefix_marker() |> String.trim()}
-      wrapped_tag?(text) -> unwrap_tag(text)
-      wrapped_al_fence?(text) -> unwrap_al_fence(text)
-      true -> {:ok, text}
-    end
+    text
+    |> unwrap_prefixed_al(prefixed_al?(text))
+    |> unwrap_wrapped_tag(wrapped_tag?(text))
+    |> unwrap_wrapped_al_fence(wrapped_al_fence?(text))
   end
+
+  defp unwrap_prefixed_al(text, true), do: {:ok, text |> strip_prefix_marker() |> String.trim()}
+  defp unwrap_prefixed_al(text, false), do: {:ok, text}
+
+  defp unwrap_wrapped_tag({:ok, text}, true), do: unwrap_tag(text)
+  defp unwrap_wrapped_tag(result, _wrapped?), do: result
+
+  defp unwrap_wrapped_al_fence({:ok, text}, true), do: unwrap_al_fence(text)
+  defp unwrap_wrapped_al_fence(result, _wrapped?), do: result
 
   defp validate_normalized(""), do: {:error, :empty_al}
 
   defp validate_normalized(normalized) do
-    case first_token(normalized) do
-      nil -> {:error, :empty_al}
-      <<char, _::binary>> = _token when char in ?A..?Z or char in ?a..?z -> :ok
-      _ -> {:error, :invalid_al_verb}
-    end
+    normalized
+    |> first_token()
+    |> validate_first_token()
   end
+
+  defp validate_first_token(nil), do: {:error, :empty_al}
+  defp validate_first_token(<<char, _::binary>>) when char in ?A..?Z or char in ?a..?z, do: :ok
+  defp validate_first_token(_token), do: {:error, :invalid_al_verb}
 
   defp prefixed_al?(text) do
     upcase_prefix(text, 3) == "AL:"
@@ -149,39 +163,43 @@ defmodule SpectreKinetic.Parser do
     open_end = :binary.match(lower, ">")
     close_start = :binary.match(lower, "</al>")
 
-    case {open_end, close_start} do
-      {{open_index, 1}, {close_index, 5}} when close_index > open_index ->
-        inner_start = open_index + 1
-        inner_size = close_index - inner_start
-        {:ok, binary_part(text, inner_start, inner_size)}
-
-      {{_open_index, 1}, :nomatch} ->
-        {:error, :unterminated_al_tag}
-
-      _ ->
-        {:ok, text}
-    end
+    unwrap_tag_result(text, open_end, close_start)
   end
+
+  defp unwrap_tag_result(text, {open_index, 1}, {close_index, 5})
+       when close_index > open_index do
+    inner_start = open_index + 1
+    inner_size = close_index - inner_start
+    {:ok, binary_part(text, inner_start, inner_size)}
+  end
+
+  defp unwrap_tag_result(_text, {_open_index, 1}, :nomatch), do: {:error, :unterminated_al_tag}
+  defp unwrap_tag_result(text, _open_end, _close_start), do: {:ok, text}
 
   defp wrapped_al_fence?(text) do
-    case opening_fence(text) do
-      {delimiter, _language, _rest} when delimiter in ["```", "~~~"] -> true
-      _ -> false
-    end
+    text
+    |> opening_fence()
+    |> wrapped_al_fence_result?()
   end
+
+  defp wrapped_al_fence_result?({delimiter, _language, _rest})
+       when delimiter in @fence_delimiters,
+       do: true
+
+  defp wrapped_al_fence_result?(_result), do: false
 
   defp unwrap_al_fence(text) do
-    case opening_fence(text) do
-      {delimiter, language, rest} when language in ["al", "action", "action-language"] ->
-        unwrap_known_al_fence(rest, delimiter)
-
-      {_delimiter, _language, _rest} ->
-        {:ok, text}
-
-      :error ->
-        {:ok, text}
-    end
+    text
+    |> opening_fence()
+    |> unwrap_al_fence_result(text)
   end
+
+  defp unwrap_al_fence_result({delimiter, language, rest}, _text)
+       when language in @al_fence_languages do
+    unwrap_known_al_fence(rest, delimiter)
+  end
+
+  defp unwrap_al_fence_result(_result, text), do: {:ok, text}
 
   defp unwrap_known_al_fence(rest, delimiter) do
     close_token = "\n" <> delimiter
@@ -218,35 +236,50 @@ defmodule SpectreKinetic.Parser do
   defp parse_fence_info(info_line) do
     trimmed = String.trim_leading(info_line)
 
-    case split_first_word(trimmed) do
-      {language, rest} -> {String.downcase(language), String.trim_leading(rest)}
-      nil -> {"", ""}
-    end
+    trimmed
+    |> split_first_word()
+    |> parse_fence_info_result()
   end
+
+  defp parse_fence_info_result({language, rest}),
+    do: {String.downcase(language), String.trim_leading(rest)}
+
+  defp parse_fence_info_result(nil), do: {"", ""}
 
   defp split_with_section(text), do: do_split_with_section(text, 0, nil)
 
   defp do_split_with_section(text, index, _quote) when index >= byte_size(text), do: {text, nil}
 
   defp do_split_with_section(text, index, nil) do
-    case :binary.at(text, index) do
-      quote when quote in [?\", ?'] ->
-        do_split_with_section(text, index + 1, quote)
-
-      _char ->
-        if with_token_at?(text, index) do
-          {binary_part(text, 0, index) |> String.trim(), consume_with_tail(text, index + 4)}
-        else
-          do_split_with_section(text, index + 1, nil)
-        end
-    end
+    text
+    |> :binary.at(index)
+    |> split_with_section_char(text, index)
   end
 
   defp do_split_with_section(text, index, quote) do
-    case :binary.at(text, index) do
-      ^quote -> do_split_with_section(text, index + 1, nil)
-      _ -> do_split_with_section(text, index + 1, quote)
+    text
+    |> :binary.at(index)
+    |> split_quoted_with_section_char(text, index, quote)
+  end
+
+  defp split_with_section_char(quote, text, index) when quote in [?\", ?'] do
+    do_split_with_section(text, index + 1, quote)
+  end
+
+  defp split_with_section_char(_char, text, index) do
+    if with_token_at?(text, index) do
+      {binary_part(text, 0, index) |> String.trim(), consume_with_tail(text, index + 4)}
+    else
+      do_split_with_section(text, index + 1, nil)
     end
+  end
+
+  defp split_quoted_with_section_char(quote, text, index, quote) do
+    do_split_with_section(text, index + 1, nil)
+  end
+
+  defp split_quoted_with_section_char(_char, text, index, quote) do
+    do_split_with_section(text, index + 1, quote)
   end
 
   defp with_token_at?(text, index) do
@@ -292,21 +325,27 @@ defmodule SpectreKinetic.Parser do
   end
 
   defp parse_verb_object(head) do
-    case String.split(String.trim(head), " ", parts: 2) do
-      [verb] -> {String.upcase(verb), nil}
-      [verb, rest] -> {String.upcase(verb), normalize_object(rest)}
-    end
+    head
+    |> String.trim()
+    |> String.split(" ", parts: 2)
+    |> parse_verb_object_parts()
+  end
+
+  defp parse_verb_object_parts([verb]), do: {String.upcase(verb), nil}
+
+  defp parse_verb_object_parts([verb, rest]) do
+    {String.upcase(verb), normalize_object(rest)}
   end
 
   defp normalize_object(rest) do
     rest
     |> String.trim()
     |> trim_terminal_punctuation()
-    |> case do
-      "" -> nil
-      object -> object
-    end
+    |> normalize_object_result()
   end
+
+  defp normalize_object_result(""), do: nil
+  defp normalize_object_result(object), do: object
 
   defp parse_args(""), do: %{}
 
@@ -326,19 +365,26 @@ defmodule SpectreKinetic.Parser do
     text
     |> split_arg_tokens()
     |> Enum.chunk_every(2, 1, :discard)
-    |> Enum.reduce(explicit_args, fn [key, value], acc ->
-      upper_key = String.upcase(key)
-      lower_key = String.downcase(key)
-      parsed_value = parse_arg_value(value)
+    |> Enum.reduce(explicit_args, &put_loose_space_arg/2)
+  end
 
-      cond do
-        Map.has_key?(acc, upper_key) -> acc
-        lower_key not in @space_assign_keys -> acc
-        parsed_value == "" -> acc
-        String.downcase(parsed_value) in @loose_value_stopwords -> acc
-        true -> Map.put(acc, upper_key, parsed_value)
-      end
-    end)
+  defp put_loose_space_arg([key, value], acc) do
+    upper_key = String.upcase(key)
+    lower_key = String.downcase(key)
+    parsed_value = parse_arg_value(value)
+
+    if loose_space_arg?(acc, upper_key, lower_key, parsed_value) do
+      Map.put(acc, upper_key, parsed_value)
+    else
+      acc
+    end
+  end
+
+  defp loose_space_arg?(acc, upper_key, lower_key, parsed_value) do
+    not Map.has_key?(acc, upper_key) and
+      lower_key in @space_assign_keys and
+      parsed_value != "" and
+      String.downcase(parsed_value) not in @loose_value_stopwords
   end
 
   defp split_arg_tokens(text) do
@@ -412,57 +458,58 @@ defmodule SpectreKinetic.Parser do
   defp collapse_whitespace(text) do
     text
     |> String.to_charlist()
-    |> Enum.reduce({[], nil, false}, fn char, {acc, quote, spaced?} ->
-      cond do
-        quote && char == quote ->
-          {[char | acc], nil, false}
-
-        quote ->
-          {[char | acc], quote, false}
-
-        char in [?", ?'] ->
-          {[char | acc], char, false}
-
-        char in [?\s, ?\n, ?\r, ?\t] and spaced? ->
-          {acc, nil, true}
-
-        char in [?\s, ?\n, ?\r, ?\t] ->
-          {[?\s | acc], nil, true}
-
-        true ->
-          {[char | acc], nil, false}
-      end
-    end)
+    |> Enum.reduce({[], nil, false}, &collapse_char/2)
     |> elem(0)
     |> Enum.reverse()
     |> List.to_string()
     |> String.trim()
   end
 
+  defp collapse_char(char, {acc, quote, _spaced?}) when quote in [?", ?'] and char == quote,
+    do: {[char | acc], nil, false}
+
+  defp collapse_char(char, {acc, quote, _spaced?}) when quote in [?", ?'],
+    do: {[char | acc], quote, false}
+
+  defp collapse_char(char, {acc, nil, _spaced?}) when char in [?", ?'],
+    do: {[char | acc], char, false}
+
+  defp collapse_char(char, {acc, nil, true}) when char in @whitespace_chars,
+    do: {acc, nil, true}
+
+  defp collapse_char(char, {acc, nil, false}) when char in @whitespace_chars,
+    do: {[?\s | acc], nil, true}
+
+  defp collapse_char(char, {acc, nil, _spaced?}), do: {[char | acc], nil, false}
+
   defp trim_terminal_punctuation(text), do: String.trim(text, " ;,.")
 
   defp split_once(text, separator) do
-    case :binary.match(text, separator) do
-      {index, size} ->
-        {
-          binary_part(text, 0, index),
-          binary_part(text, index + size, byte_size(text) - index - size)
-        }
-
-      :nomatch ->
-        {text, ""}
-    end
+    text
+    |> :binary.match(separator)
+    |> split_once_result(text)
   end
+
+  defp split_once_result({index, size}, text) do
+    {
+      binary_part(text, 0, index),
+      binary_part(text, index + size, byte_size(text) - index - size)
+    }
+  end
+
+  defp split_once_result(:nomatch, text), do: {text, ""}
 
   defp split_first_word(""), do: nil
 
   defp split_first_word(text) do
-    case String.split(text, " ", parts: 2, trim: true) do
-      [word, rest] -> {word, rest}
-      [word] -> {word, ""}
-      _ -> nil
-    end
+    text
+    |> String.split(" ", parts: 2, trim: true)
+    |> split_first_word_result()
   end
+
+  defp split_first_word_result([word, rest]), do: {word, rest}
+  defp split_first_word_result([word]), do: {word, ""}
+  defp split_first_word_result(_parts), do: nil
 
   defp upcase_prefix(text, size) when byte_size(text) >= size do
     text
@@ -472,6 +519,6 @@ defmodule SpectreKinetic.Parser do
 
   defp upcase_prefix(_text, _size), do: ""
 
-  defp whitespace?(text, index), do: :binary.at(text, index) in [?\s, ?\n, ?\r, ?\t]
+  defp whitespace?(text, index), do: :binary.at(text, index) in @whitespace_chars
   defp enough_bytes?(text, index, size), do: byte_size(text) - index >= size
 end

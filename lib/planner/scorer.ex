@@ -66,12 +66,10 @@ defmodule SpectreKinetic.Planner.Scorer do
         0.0
 
       n_slots ->
-        # Build set of all known names + aliases for this tool
         known =
-          Enum.flat_map(arg_defs, fn arg ->
-            [String.downcase(arg["name"])] ++
-              Enum.map(arg["aliases"] || [], &String.downcase/1)
-          end)
+          arg_defs
+          |> Enum.flat_map(&arg_names/1)
+          |> Enum.map(&String.downcase/1)
           |> MapSet.new()
 
         matched =
@@ -93,13 +91,27 @@ defmodule SpectreKinetic.Planner.Scorer do
     n_required = action["args"] |> List.wrap() |> Enum.count(& &1["required"])
     n_total = action["args"] |> List.wrap() |> length()
 
-    cond do
-      n_total == 0 and n_provided == 0 -> 1.0
-      n_total == 0 -> 0.5
-      n_provided >= n_required and n_provided <= n_total -> 1.0
-      n_provided >= n_required -> 0.8
-      true -> max(0.0, 1.0 - (n_required - n_provided) / max(n_required, 1))
-    end
+    shape_score_for_counts(n_provided, n_required, n_total)
+  end
+
+  defp arg_names(arg) do
+    aliases = arg["aliases"] || []
+    [arg["name"] | aliases]
+  end
+
+  defp shape_score_for_counts(0, _n_required, 0), do: 1.0
+  defp shape_score_for_counts(_n_provided, _n_required, 0), do: 0.5
+
+  defp shape_score_for_counts(n_provided, n_required, n_total)
+       when n_provided >= n_required and n_provided <= n_total,
+       do: 1.0
+
+  defp shape_score_for_counts(n_provided, n_required, _n_total)
+       when n_provided >= n_required,
+       do: 0.8
+
+  defp shape_score_for_counts(n_provided, n_required, _n_total) do
+    max(0.0, 1.0 - (n_required - n_provided) / max(n_required, 1))
   end
 
   @doc """

@@ -22,26 +22,41 @@ defmodule SpectreKinetic.Reranker.Trainer do
   @default_epochs 5
   @default_learning_rate 1.0e-3
 
+  @artifact_files %{
+    params: "params.etf",
+    metadata: "metadata.json",
+    calibration: "calibration.json"
+  }
+
   @type example :: %{
           required(:query) => binary(),
           required(:tool_card) => binary(),
           required(:label) => 0 | 1
         }
 
+  @typep train_config :: %{
+           encoder_model_dir: binary(),
+           output_dir: binary(),
+           hidden_dim: pos_integer(),
+           batch_size: pos_integer(),
+           epochs: pos_integer(),
+           learning_rate: float(),
+           loop_opts: keyword()
+         }
+
   @spec train([example()], keyword()) :: {:ok, map()} | {:error, term()}
   def train(examples, opts) when is_list(examples) do
     embedding_module = Keyword.get(opts, :embedding_module, EmbeddingRuntime)
 
-    with {:ok, encoder_model_dir} <- fetch_opt(opts, :encoder_model_dir),
-         {:ok, output_dir} <- fetch_opt(opts, :output_dir),
-         {:ok, embedder} <- embedding_module.load(encoder_model_dir: encoder_model_dir),
+    with {:ok, config} <- training_config(opts),
+         {:ok, embedder} <- embedding_module.load(encoder_model_dir: config.encoder_model_dir),
          {:ok, features} <-
            FeatureBuilder.build_matrix(
              embedder,
              examples,
              embedding_module: embedding_module
            ) do
-      {:ok, train_and_persist(examples, features, encoder_model_dir, output_dir, opts)}
+      train_and_persist(examples, features, config)
     end
   end
 
@@ -90,42 +105,57 @@ defmodule SpectreKinetic.Reranker.Trainer do
     end
   end
 
-  defp train_and_persist(examples, features, encoder_model_dir, output_dir, opts) do
+  @spec training_config(keyword()) :: {:ok, train_config()} | {:error, term()}
+  defp training_config(opts) do
+    with {:ok, encoder_model_dir} <- fetch_opt(opts, :encoder_model_dir),
+         {:ok, output_dir} <- fetch_opt(opts, :output_dir) do
+      {:ok,
+       %{
+         encoder_model_dir: encoder_model_dir,
+         output_dir: output_dir,
+         hidden_dim: Keyword.get(opts, :hidden_dim, @default_hidden_dim),
+         batch_size: Keyword.get(opts, :batch_size, @default_batch_size),
+         epochs: Keyword.get(opts, :epochs, @default_epochs),
+         learning_rate: Keyword.get(opts, :learning_rate, @default_learning_rate),
+         loop_opts: trainer_loop_opts(opts)
+       }}
+    end
+  end
+
+  @spec train_and_persist([example()], Nx.Tensor.t(), train_config()) ::
+          {:ok, map()} | {:error, term()}
+  defp train_and_persist(examples, features, config) do
     labels = label_tensor(examples)
     feature_dim = Nx.axis_size(features, 1)
-    hidden_dim = Keyword.get(opts, :hidden_dim, @default_hidden_dim)
-    epochs = Keyword.get(opts, :epochs, @default_epochs)
-    batch_size = Keyword.get(opts, :batch_size, @default_batch_size)
-    learning_rate = Keyword.get(opts, :learning_rate, @default_learning_rate)
-    loop_opts = trainer_loop_opts(opts)
 
-    model = build_model(feature_dim, hidden_dim)
-    train_data = batch_data(features, labels, batch_size)
+    model = build_model(feature_dim, config.hidden_dim)
+    train_data = batch_data(features, labels, config.batch_size)
 
     model_state =
       model
       |> Axon.Loop.trainer(
         :binary_cross_entropy,
-        Polaris.Optimizers.adamw(learning_rate: learning_rate),
-        loop_opts
+        Polaris.Optimizers.adamw(learning_rate: config.learning_rate),
+        config.loop_opts
       )
-      |> Axon.Loop.run(train_data, Axon.ModelState.empty(), epochs: epochs)
+      |> Axon.Loop.run(train_data, Axon.ModelState.empty(), epochs: config.epochs)
 
     calibration = build_calibration(model, model_state, features, labels)
 
     metadata = %{
-      encoder_model_dir: encoder_model_dir,
+      encoder_model_dir: config.encoder_model_dir,
       feature_dim: feature_dim,
-      hidden_dim: hidden_dim,
-      batch_size: batch_size,
-      epochs: epochs,
-      learning_rate: learning_rate,
+      hidden_dim: config.hidden_dim,
+      batch_size: config.batch_size,
+      epochs: config.epochs,
+      learning_rate: config.learning_rate,
       example_count: length(examples),
       generated_at: DateTime.utc_now() |> DateTime.to_iso8601()
     }
 
-    persist_artifacts(output_dir, model_state, metadata, calibration)
-    %{metadata: metadata, calibration: calibration}
+    with :ok <- persist_artifacts(config.output_dir, model_state, metadata, calibration) do
+      {:ok, %{metadata: metadata, calibration: calibration}}
+    end
   end
 
   defp build_calibration(model, model_state, features, labels) do
@@ -138,14 +168,18 @@ defmodule SpectreKinetic.Reranker.Trainer do
   end
 
   defp persist_artifacts(output_dir, model_state, metadata, calibration) do
-    File.mkdir_p!(output_dir)
-    File.write!(Path.join(output_dir, "params.etf"), :erlang.term_to_binary(model_state))
-    File.write!(Path.join(output_dir, "metadata.json"), Jason.encode!(metadata, pretty: true))
+    with :ok <- File.mkdir_p(output_dir),
+         :ok <-
+           write_artifact(output_dir, @artifact_files.params, :erlang.term_to_binary(model_state)),
+         {:ok, metadata_json} <- Jason.encode(metadata, pretty: true),
+         :ok <- write_artifact(output_dir, @artifact_files.metadata, metadata_json),
+         {:ok, calibration_json} <- Jason.encode(calibration, pretty: true) do
+      write_artifact(output_dir, @artifact_files.calibration, calibration_json)
+    end
+  end
 
-    File.write!(
-      Path.join(output_dir, "calibration.json"),
-      Jason.encode!(calibration, pretty: true)
-    )
+  defp write_artifact(output_dir, file_name, content) do
+    File.write(Path.join(output_dir, file_name), content)
   end
 
   defp trainer_loop_opts(opts) do

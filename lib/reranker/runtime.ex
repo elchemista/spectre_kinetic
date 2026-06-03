@@ -84,12 +84,11 @@ defmodule SpectreKinetic.Reranker.Runtime do
 
   defp to_score_tensor(tensor) do
     tensor = Nx.backend_transfer(tensor)
-
-    case Nx.shape(tensor) do
-      {batch, 1} -> Nx.reshape(tensor, {batch})
-      {_batch} -> tensor
-      {_batch, _classes} -> tensor[[.., 0]]
-      _ -> Nx.reshape(tensor, {Nx.size(tensor)})
-    end
+    score_tensor_for_shape(tensor, Nx.shape(tensor))
   end
+
+  defp score_tensor_for_shape(tensor, {batch, 1}), do: Nx.reshape(tensor, {batch})
+  defp score_tensor_for_shape(tensor, {_batch}), do: tensor
+  defp score_tensor_for_shape(tensor, {_batch, _classes}), do: tensor[[.., 0]]
+  defp score_tensor_for_shape(tensor, _shape), do: Nx.reshape(tensor, {Nx.size(tensor)})
 end
