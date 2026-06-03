@@ -85,6 +85,11 @@ like:
 SEND MAIL TO="ops@example.com" BODY="pager"
 ```
 
+In tests, that exact module shape is exercised end to end: extraction produces
+`MyApp.Emailer.send/2`, the `AL:` doc examples are kept as examples, `TO` maps
+to `email`, `BODY` maps to `text`, and planning `SEND MAIL ...` returns an
+`:ok` action with those canonical argument names.
+
 No tool execution happens inside the planner. It plans. Your app decides what
 to execute. This is healthier than giving a language model root access and a
 motivational quote.

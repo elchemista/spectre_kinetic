@@ -59,6 +59,45 @@ defmodule SpectreKinetic.ToolExtractorTest do
            ]
   end
 
+  test "MyApp.Emailer @al module extracts and plans SEND MAIL end to end" do
+    assert {:ok, [action]} = Extractor.extract_module(MyApp.Emailer)
+
+    assert action["id"] == "Elixir.MyApp.Emailer.send/2"
+    assert action["doc"] == "Send an email to a recipient."
+
+    assert action["examples"] == [
+             "SEND EMAIL TO=email@gmail.com BODY=text",
+             ~s(SEND EMAIL TO="dev@example.com" BODY="hello"),
+             ~s(SEND MAIL TO="ops@example.com" BODY="pager")
+           ]
+
+    assert action["args"] == [
+             %{
+               "name" => "email",
+               "type" => "String.t()",
+               "required" => true,
+               "aliases" => ["TO"]
+             },
+             %{
+               "name" => "text",
+               "type" => "String.t()",
+               "required" => true,
+               "aliases" => ["BODY"]
+             }
+           ]
+
+    registry_json = write_registry_json([action])
+
+    runtime = SpectreKinetic.load_runtime!(registry_json: registry_json)
+
+    assert {:ok, plan} =
+             SpectreKinetic.plan(runtime, ~s(SEND MAIL TO="ops@example.com" BODY="pager"))
+
+    assert plan.selected_tool == "Elixir.MyApp.Emailer.send/2"
+    assert plan.status == :ok
+    assert plan.args == %{"email" => "ops@example.com", "text" => "pager"}
+  end
+
   test "mix extract_kinetic writes registry json from compiled tool modules" do
     path =
       Path.join(
@@ -75,5 +114,16 @@ defmodule SpectreKinetic.ToolExtractorTest do
 
     assert "Elixir.SpectreKinetic.ToolFixtures.Emailer.send/2" in ids
     assert "Elixir.SpectreKinetic.ToolFixtures.Sms.send/2" in ids
+  end
+
+  defp write_registry_json(actions) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "spectre_my_app_emailer_#{System.unique_integer([:positive])}.json"
+      )
+
+    File.write!(path, Jason.encode!(%{"actions" => actions}))
+    path
   end
 end

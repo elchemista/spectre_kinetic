@@ -31,3 +31,21 @@ defmodule SpectreKinetic.ToolFixtures.Sms do
     :ok
   end
 end
+
+defmodule MyApp.Emailer do
+  @moduledoc false
+  use SpectreKinetic
+
+  @al ~s(SEND EMAIL TO=email@gmail.com BODY=text)
+  @doc """
+  Send an email to a recipient.
+
+  AL: SEND EMAIL TO="dev@example.com" BODY="hello"
+  AL: SEND MAIL TO="ops@example.com" BODY="pager"
+  """
+  @spec send(email :: String.t(), text :: String.t()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send(email, text) do
+    {:ok, "#{email}:#{text}"}
+  end
+end
