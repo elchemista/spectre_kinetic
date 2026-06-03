@@ -2,6 +2,16 @@ defmodule SpectreKinetic.Planner do
   @moduledoc """
   Elixir-native planner pipeline for AL normalization, retrieval, scoring,
   bounded reranker fallback, and deterministic slot mapping.
+
+  The planner is intentionally effect-light. Registry and embedding work comes
+  through injected runtime handles, while this module coordinates the pure
+  planning stages:
+
+    * normalize AL text and parse provided slots
+    * retrieve candidate tools by embedding or lexical fallback
+    * score candidates with deterministic features
+    * optionally consult a reranker for close or incomplete matches
+    * map slots to the selected tool's canonical arguments
   """
 
   alias SpectreKinetic.Parser
@@ -28,18 +38,32 @@ defmodule SpectreKinetic.Planner do
           optional(:reranker) => term()
         }
 
-  @type plan_result :: %{
-          status: binary(),
-          selected_tool: binary() | nil,
-          confidence: float() | nil,
-          tool_score: float() | nil,
-          mapping_score: float() | nil,
-          combined_score: float() | nil,
-          args: map(),
-          missing: [binary()],
-          notes: [binary()],
-          candidates: [map()]
-        }
+  @typep retrieval_opts :: %{
+           registry_module: module(),
+           registry: GenServer.server(),
+           embedder: GenServer.server() | nil,
+           top_k: pos_integer()
+         }
+
+  @typep selection_opts :: %{
+           tool_threshold: float(),
+           mapping_threshold: float(),
+           tool_selection_fallback: :disabled | :reranker,
+           fallback_top_k: pos_integer(),
+           fallback_margin: float(),
+           reranker_module: module() | nil,
+           reranker: term() | nil
+         }
+
+  @type plan_result_value ::
+          binary()
+          | float()
+          | map()
+          | [binary()]
+          | [map()]
+          | nil
+
+  @type plan_result :: %{optional(binary()) => plan_result_value()}
 
   @spec plan(PlannerRuntime.t(), binary(), keyword()) :: {:ok, plan_result()} | {:error, term()}
   def plan(%PlannerRuntime{} = runtime, al_text, opts) do
@@ -48,32 +72,14 @@ defmodule SpectreKinetic.Planner do
 
   @spec plan(binary(), plan_opts()) :: {:ok, plan_result()} | {:error, term()}
   def plan(al_text, opts \\ %{}) do
-    registry_module = Map.get(opts, :registry_module, RegistryStore)
-    registry = Map.get(opts, :registry, RegistryStore)
-    embedder = Map.get(opts, :embedder)
-    defaults = RuntimeConfig.built_in_plan_defaults()
-    top_k = Map.get(opts, :top_k, Keyword.fetch!(defaults, :top_k))
-    tool_threshold = Map.get(opts, :tool_threshold, Keyword.fetch!(defaults, :tool_threshold))
-
-    mapping_threshold =
-      Map.get(opts, :mapping_threshold, Keyword.fetch!(defaults, :mapping_threshold))
-
-    selection_opts = %{
-      tool_threshold: tool_threshold,
-      mapping_threshold: mapping_threshold,
-      tool_selection_fallback: Map.get(opts, :tool_selection_fallback, :disabled),
-      fallback_top_k: Map.get(opts, :fallback_top_k, Keyword.fetch!(defaults, :fallback_top_k)),
-      fallback_margin:
-        Map.get(opts, :fallback_margin, Keyword.fetch!(defaults, :fallback_margin)),
-      reranker_module: Map.get(opts, :reranker_module),
-      reranker: Map.get(opts, :reranker)
-    }
+    retrieval_opts = retrieval_options(opts)
+    selection_opts = selection_options(opts)
 
     with {:ok, normalized} <- normalize_al(al_text),
          parsed_args <- Parser.args(normalized),
          provided_slots <- Map.get(opts, :slots, parsed_args),
          {:ok, candidates} <-
-           retrieve_candidates(normalized, registry_module, registry, embedder, top_k),
+           retrieve_candidates(normalized, retrieval_opts),
          {:ok, scored} <- score_candidates(normalized, provided_slots, candidates) do
       select_and_map(normalized, scored, provided_slots, selection_opts)
     end
@@ -108,7 +114,13 @@ defmodule SpectreKinetic.Planner do
     end
   end
 
-  defp retrieve_candidates(al_text, registry_module, registry, embedder, top_k) do
+  @spec retrieve_candidates(binary(), retrieval_opts()) :: {:ok, [map()]} | {:error, term()}
+  defp retrieve_candidates(al_text, %{
+         registry_module: registry_module,
+         registry: registry,
+         embedder: embedder,
+         top_k: top_k
+       }) do
     case registry_module.embedding_matrix(registry) do
       {matrix, action_ids} ->
         retrieve_embedded_candidates(
@@ -169,30 +181,44 @@ defmodule SpectreKinetic.Planner do
 
   defp select_and_map(_al_text, [], _slots, _selection_opts), do: {:ok, empty_registry_result()}
 
+  @spec select_and_map(binary(), [map()], map(), selection_opts()) ::
+          {:ok, plan_result()} | {:error, term()}
   defp select_and_map(al_text, scored_candidates, slots, selection_opts) do
-    tool_threshold = selection_opts.tool_threshold
-
     with {:ok, %{candidate: chosen, mapping: mapping, notes: reranker_notes}} <-
            choose_candidate(al_text, scored_candidates, slots, selection_opts) do
-      if chosen.fused_score >= tool_threshold or reranker_notes != [] do
-        {:ok,
-         %{
-           "status" => if(mapping.missing == [], do: "ok", else: "MISSING_ARGS"),
-           "selected_tool" => chosen.action["id"],
-           "confidence" => chosen.fused_score,
-           "tool_score" => chosen.embedding_score,
-           "mapping_score" => mapping.mapping_score,
-           "combined_score" => chosen.fused_score,
-           "args" => mapping.args,
-           "missing" => mapping.missing,
-           "notes" => mapping.notes ++ reranker_notes,
-           "candidates" => build_candidate_list(scored_candidates)
-         }}
-      else
-        no_tool_result(scored_candidates, tool_threshold)
-      end
+      build_selection_result(chosen, mapping, reranker_notes, scored_candidates, selection_opts)
     end
   end
+
+  defp build_selection_result(chosen, mapping, reranker_notes, scored_candidates, selection_opts) do
+    if selected_tool_accepted?(chosen, reranker_notes, selection_opts.tool_threshold) do
+      {:ok, mapped_tool_result(chosen, mapping, reranker_notes, scored_candidates)}
+    else
+      no_tool_result(scored_candidates, selection_opts.tool_threshold)
+    end
+  end
+
+  defp selected_tool_accepted?(chosen, reranker_notes, tool_threshold) do
+    chosen.fused_score >= tool_threshold or reranker_notes != []
+  end
+
+  defp mapped_tool_result(chosen, mapping, reranker_notes, scored_candidates) do
+    %{
+      "status" => mapped_status(mapping),
+      "selected_tool" => chosen.action["id"],
+      "confidence" => chosen.fused_score,
+      "tool_score" => chosen.embedding_score,
+      "mapping_score" => mapping.mapping_score,
+      "combined_score" => chosen.fused_score,
+      "args" => mapping.args,
+      "missing" => mapping.missing,
+      "notes" => mapping.notes ++ reranker_notes,
+      "candidates" => build_candidate_list(scored_candidates)
+    }
+  end
+
+  defp mapped_status(%{missing: []}), do: "ok"
+  defp mapped_status(_mapping), do: "MISSING_ARGS"
 
   defp retrieve_embedded_candidates(
          al_text,
@@ -282,19 +308,12 @@ defmodule SpectreKinetic.Planner do
 
         mapping = SlotMapper.map_slots(slots, chosen.action)
 
-        notes =
-          cond do
-            chosen.action["id"] != primary.action["id"] ->
-              ["reranker fallback selected #{chosen.action["id"]} over #{primary.action["id"]}"]
-
-            mapping.missing != primary_mapping.missing ->
-              ["reranker fallback revalidated tool selection"]
-
-            true ->
-              ["reranker fallback confirmed tool selection"]
-          end
-
-        {:ok, %{candidate: chosen, mapping: mapping, notes: notes}}
+        {:ok,
+         %{
+           candidate: chosen,
+           mapping: mapping,
+           notes: reranker_notes(chosen, primary, mapping, primary_mapping)
+         }}
 
       {:error, _reason} ->
         {:ok, %{candidate: primary, mapping: primary_mapping, notes: []}}
@@ -357,8 +376,52 @@ defmodule SpectreKinetic.Planner do
   defp candidate_margin(_best, []), do: 1.0
   defp candidate_margin(best, [next | _rest]), do: best.fused_score - next.fused_score
 
+  defp reranker_notes(
+         %{action: %{"id" => chosen_id}},
+         %{action: %{"id" => primary_id}},
+         _mapping,
+         _primary_mapping
+       )
+       when chosen_id != primary_id do
+    ["reranker fallback selected #{chosen_id} over #{primary_id}"]
+  end
+
+  defp reranker_notes(_chosen, _primary, %{missing: missing}, %{missing: primary_missing})
+       when missing != primary_missing do
+    ["reranker fallback revalidated tool selection"]
+  end
+
+  defp reranker_notes(_chosen, _primary, _mapping, _primary_mapping) do
+    ["reranker fallback confirmed tool selection"]
+  end
+
   defp maybe_embed_query(nil, _al_text), do: {:error, :embedder_unavailable}
   defp maybe_embed_query(embedder, al_text), do: EmbeddingRuntime.embed(embedder, al_text)
+
+  defp retrieval_options(opts) do
+    %{
+      registry_module: Map.get(opts, :registry_module, RegistryStore),
+      registry: Map.get(opts, :registry, RegistryStore),
+      embedder: Map.get(opts, :embedder),
+      top_k: plan_option(opts, :top_k)
+    }
+  end
+
+  defp selection_options(opts) do
+    %{
+      tool_threshold: plan_option(opts, :tool_threshold),
+      mapping_threshold: plan_option(opts, :mapping_threshold),
+      tool_selection_fallback: Map.get(opts, :tool_selection_fallback, :disabled),
+      fallback_top_k: plan_option(opts, :fallback_top_k),
+      fallback_margin: plan_option(opts, :fallback_margin),
+      reranker_module: Map.get(opts, :reranker_module),
+      reranker: Map.get(opts, :reranker)
+    }
+  end
+
+  defp plan_option(opts, key) do
+    Map.get(opts, key, Keyword.fetch!(RuntimeConfig.built_in_plan_defaults(), key))
+  end
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)

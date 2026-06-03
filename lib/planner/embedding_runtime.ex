@@ -153,11 +153,11 @@ defmodule SpectreKinetic.Planner.EmbeddingRuntime do
       |> Nx.backend_transfer()
       |> extract_cls_embeddings()
 
-    case Nx.shape(output_nx) do
-      {_batch, dim} -> dim
-      {dim} -> dim
-    end
+    output_dim(Nx.shape(output_nx))
   end
+
+  defp output_dim({_batch, dim}), do: dim
+  defp output_dim({dim}), do: dim
 
   defp do_embed_batch(state, texts) do
     {:ok, batch_encoding} = Tokenizers.Tokenizer.encode_batch(state.tokenizer, texts)
@@ -177,10 +177,17 @@ defmodule SpectreKinetic.Planner.EmbeddingRuntime do
   end
 
   defp run_encoder(model, input_ids, attention_mask, token_type_ids) do
-    case try_run_encoder(model, {input_ids, attention_mask, token_type_ids}) do
-      {:ok, output} -> output
-      {:error, _reason} -> Ortex.run(model, {input_ids, attention_mask}) |> ONNX.first_output()
-    end
+    model
+    |> try_run_encoder({input_ids, attention_mask, token_type_ids})
+    |> encoder_output_or_fallback(model, input_ids, attention_mask)
+  end
+
+  defp encoder_output_or_fallback({:ok, output}, _model, _input_ids, _attention_mask), do: output
+
+  defp encoder_output_or_fallback({:error, _reason}, model, input_ids, attention_mask) do
+    model
+    |> Ortex.run({input_ids, attention_mask})
+    |> ONNX.first_output()
   end
 
   defp try_run_encoder(model, inputs) do
@@ -190,16 +197,14 @@ defmodule SpectreKinetic.Planner.EmbeddingRuntime do
   end
 
   defp extract_cls_embeddings(output) do
-    # output is {batch, seq_len, dim} — CLS token is at position 0
-    case Nx.shape(output) do
-      {_batch, _seq, _dim} ->
-        output[[.., 0, ..]]
-
-      {_batch, _dim} ->
-        # Some models output pooled embeddings directly
-        output
-    end
+    extract_cls_embeddings_for_shape(output, Nx.shape(output))
   end
+
+  # output is {batch, seq_len, dim} — CLS token is at position 0
+  defp extract_cls_embeddings_for_shape(output, {_batch, _seq, _dim}), do: output[[.., 0, ..]]
+
+  # Some models output pooled embeddings directly.
+  defp extract_cls_embeddings_for_shape(output, {_batch, _dim}), do: output
 
   defp l2_normalize(tensor) do
     norms = Nx.LinAlg.norm(tensor, ord: 2, axes: [-1], keep_axes: true)

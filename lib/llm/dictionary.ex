@@ -62,7 +62,11 @@ defmodule SpectreKinetic.Dictionary do
   Builds compact prompt text from the scoped dictionary.
   """
   @spec text(keyword()) :: {:ok, binary()} | {:error, term()}
-  def text(opts \\ []), do: with({:ok, dictionary} <- build(opts), do: {:ok, to_text(dictionary)})
+  def text(opts \\ []) do
+    with {:ok, dictionary} <- build(opts) do
+      {:ok, to_text(dictionary)}
+    end
+  end
 
   @doc """
   Builds compact prompt text and raises on failure.
@@ -105,13 +109,7 @@ defmodule SpectreKinetic.Dictionary do
 
   defp collect_keywords(actions, top_n) do
     actions
-    |> Enum.flat_map(fn action ->
-      texts =
-        [action["module"], action["name"], action["doc"], action["spec"]]
-        |> Kernel.++(action["examples"] || [])
-
-      Enum.flat_map(texts, &split_tokens/1)
-    end)
+    |> Enum.flat_map(&action_tokens/1)
     |> Enum.map(&String.upcase/1)
     |> Enum.filter(&(String.length(&1) >= 2 and String.match?(&1, ~r/[A-Z]/)))
     |> Enum.frequencies()
@@ -122,15 +120,34 @@ defmodule SpectreKinetic.Dictionary do
 
   defp collect_slots(actions) do
     actions
-    |> Enum.flat_map(fn action ->
-      Enum.flat_map(action["args"] || [], fn arg ->
-        [String.downcase(arg["name"] || "")]
-        |> Kernel.++(Enum.map(arg["aliases"] || [], &String.downcase/1))
-      end)
-    end)
+    |> Enum.flat_map(&action_slots/1)
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
     |> Enum.sort()
+  end
+
+  defp action_tokens(action) do
+    action
+    |> action_text_sources()
+    |> Enum.flat_map(&split_tokens/1)
+  end
+
+  defp action_text_sources(action) do
+    examples = action["examples"] || []
+    [action["module"], action["name"], action["doc"], action["spec"] | examples]
+  end
+
+  defp action_slots(action) do
+    action
+    |> Map.get("args", [])
+    |> Enum.flat_map(&arg_slots/1)
+  end
+
+  defp arg_slots(arg) do
+    aliases = arg["aliases"] || []
+
+    [arg["name"] | aliases]
+    |> Enum.map(&String.downcase(&1 || ""))
   end
 
   defp collect_examples(actions, limit) do

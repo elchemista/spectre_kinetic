@@ -1,5 +1,20 @@
 defmodule SpectreKinetic.RuntimeConfig do
-  @moduledoc false
+  @moduledoc """
+  Normalizes runtime configuration at the library boundary.
+
+  Planner code accepts clean Elixir options. Callers, config files, and
+  deployment environments often provide the same values through different
+  shapes:
+
+    * per-call keyword options
+    * `Application` config under `:spectre_kinetic`
+    * `SPECTRE_KINETIC_*` environment variables
+    * JSON-like request maps with string keys
+
+  This module is the adapter for those external shapes. It resolves paths,
+  parses scalar config values, and converts request payloads before they enter
+  the planner pipeline.
+  """
 
   @app :spectre_kinetic
   @built_in_plan_defaults [
@@ -63,6 +78,9 @@ defmodule SpectreKinetic.RuntimeConfig do
 
   @doc """
   Resolves one optional path from opts, config, or environment.
+
+  Precedence is explicit option, application config, then environment. Blank
+  strings are treated as missing values and non-blank paths are expanded.
   """
   @spec resolve_optional_path(keyword(), atom(), atom(), binary()) :: binary() | nil
   def resolve_optional_path(opts, opt_key, app_key, env_var) do
@@ -86,6 +104,10 @@ defmodule SpectreKinetic.RuntimeConfig do
 
   @doc """
   Recursively stringifies map keys for request payloads.
+
+  Values are kept JSON-compatible where possible. Booleans and `nil` are
+  preserved, while non-boolean atom values become strings so normalized request
+  maps can safely cross JSON-style boundaries.
   """
   @spec stringify_map(map()) :: map()
   def stringify_map(map) when is_map(map) do
@@ -99,6 +121,9 @@ defmodule SpectreKinetic.RuntimeConfig do
 
   @doc """
   Normalizes a plan request map into the runtime-first request shape.
+
+  The result always contains string keys for `"al"`, `"slots"`, and `"top_k"`.
+  Optional thresholds and fallback tuning are copied only when present.
   """
   @spec normalize_request(map()) :: map()
   def normalize_request(request) when is_map(request) do
@@ -133,12 +158,14 @@ defmodule SpectreKinetic.RuntimeConfig do
   defp wrap_required_path(nil, opt_key, env_var), do: {:error, {:missing_path, opt_key, env_var}}
   defp wrap_required_path(path, _opt_key, _env_var), do: {:ok, path}
 
+  defp stringify_value(nil), do: nil
+  defp stringify_value(value) when is_boolean(value), do: value
   defp stringify_value(value) when is_binary(value), do: value
-  defp stringify_value(value) when is_atom(value), do: Atom.to_string(value)
   defp stringify_value(value) when is_map(value), do: stringify_map(value)
   defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
+  defp stringify_value(value) when is_atom(value), do: Atom.to_string(value)
 
-  defp stringify_value(value) when is_integer(value) or is_float(value) or is_boolean(value),
+  defp stringify_value(value) when is_integer(value) or is_float(value),
     do: value
 
   defp stringify_value(value), do: to_string(value)
@@ -171,37 +198,41 @@ defmodule SpectreKinetic.RuntimeConfig do
   defp parse_integer(value) when is_integer(value), do: value
 
   defp parse_integer(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {parsed, ""} -> parsed
-      _ -> nil
-    end
+    value
+    |> Integer.parse()
+    |> parse_integer_result()
   end
 
   defp parse_integer(_value), do: nil
+  defp parse_integer_result({parsed, ""}), do: parsed
+  defp parse_integer_result(_result), do: nil
 
   defp parse_float(value) when is_float(value), do: value
   defp parse_float(value) when is_integer(value), do: value / 1
 
   defp parse_float(value) when is_binary(value) do
-    case Float.parse(value) do
-      {parsed, ""} -> parsed
-      _ -> nil
-    end
+    value
+    |> Float.parse()
+    |> parse_float_result()
   end
 
   defp parse_float(_value), do: nil
+  defp parse_float_result({parsed, ""}), do: parsed
+  defp parse_float_result(_result), do: nil
 
   defp parse_fallback_mode(value) when value in [:disabled, :reranker], do: value
 
   defp parse_fallback_mode(value) when is_binary(value) do
-    case String.downcase(String.trim(value)) do
-      "disabled" -> :disabled
-      "reranker" -> :reranker
-      _ -> nil
-    end
+    value
+    |> String.trim()
+    |> String.downcase()
+    |> parse_fallback_mode_result()
   end
 
   defp parse_fallback_mode(_value), do: nil
+  defp parse_fallback_mode_result("disabled"), do: :disabled
+  defp parse_fallback_mode_result("reranker"), do: :reranker
+  defp parse_fallback_mode_result(_value), do: nil
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
@@ -226,7 +257,20 @@ defmodule SpectreKinetic.RuntimeConfig do
   end
 
   defp request_value(request, key, default \\ nil) do
-    Map.get(request, key) || Map.get(request, Atom.to_string(key)) || default
+    case fetch_request_value(request, key) do
+      {:ok, value} -> value
+      :error -> default
+    end
+  end
+
+  defp fetch_request_value(request, key) do
+    [key, Atom.to_string(key)]
+    |> Enum.find_value(:error, fn request_key ->
+      with true <- Map.has_key?(request, request_key),
+           value when not is_nil(value) <- Map.get(request, request_key) do
+        {:ok, value}
+      end
+    end)
   end
 
   defp default_top_k do

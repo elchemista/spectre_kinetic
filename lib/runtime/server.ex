@@ -1,5 +1,11 @@
 defmodule SpectreKinetic.Server do
-  @moduledoc false
+  @moduledoc """
+  Backward-compatible facade for the optional planner `GenServer` adapter.
+
+  The library-first API works with `SpectreKinetic.Planner.Runtime` structs.
+  This module keeps the older server-oriented entry point available while
+  delegating all behavior to `SpectreKinetic.Adapter.Server`.
+  """
 
   alias SpectreKinetic.Adapter.Server, as: AdapterServer
 

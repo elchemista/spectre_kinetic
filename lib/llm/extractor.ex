@@ -39,6 +39,8 @@ defmodule SpectreKinetic.Extractor do
           entries: [entry()]
         }
 
+  @al_fence_languages ["al", "action", "action-language"]
+
   @doc """
   Extracts validated AL strings from a noisy text response.
 
@@ -187,76 +189,106 @@ defmodule SpectreKinetic.Extractor do
   end
 
   defp handle_normal_line(line, state) do
-    case extract_tagged_segments(line, [], []) do
-      {:tag_open, clean_parts, parts} ->
-        state
-        |> keep_clean(IO.iodata_to_binary(Enum.reverse(clean_parts)))
-        |> Map.put(:mode, {:al_tag, [IO.iodata_to_binary(Enum.reverse(parts))]})
-
-      {:ok, clean_parts, entries} ->
-        clean_line = IO.iodata_to_binary(Enum.reverse(clean_parts))
-
-        {:ok, clean_parts, inline_entries} = extract_inline_fence_segments(clean_line, [], [])
-        clean_line = IO.iodata_to_binary(Enum.reverse(clean_parts))
-
-        state =
-          entries
-          |> Enum.concat(inline_entries)
-          |> Enum.reduce(state, &append_entry/2)
-
-        case al_prefixed_candidate(clean_line) do
-          {:ok, raw} -> state |> add_entry(raw) |> keep_clean("")
-          :not_al -> keep_clean(state, clean_line)
-        end
-    end
+    line
+    |> extract_tagged_segments([], [])
+    |> handle_tagged_segments_result(state)
   end
+
+  defp handle_tagged_segments_result({:tag_open, clean_parts, parts}, state) do
+    state
+    |> keep_clean(IO.iodata_to_binary(Enum.reverse(clean_parts)))
+    |> Map.put(:mode, {:al_tag, [IO.iodata_to_binary(Enum.reverse(parts))]})
+  end
+
+  defp handle_tagged_segments_result({:ok, clean_parts, entries}, state) do
+    clean_line = IO.iodata_to_binary(Enum.reverse(clean_parts))
+    {:ok, clean_parts, inline_entries} = extract_inline_fence_segments(clean_line, [], [])
+    clean_line = IO.iodata_to_binary(Enum.reverse(clean_parts))
+
+    state
+    |> append_entries(entries)
+    |> append_entries(inline_entries)
+    |> keep_prefixed_al_or_clean(clean_line)
+  end
+
+  defp append_entries(state, entries), do: Enum.reduce(entries, state, &append_entry/2)
+
+  defp keep_prefixed_al_or_clean(state, clean_line) do
+    clean_line
+    |> al_prefixed_candidate()
+    |> keep_prefixed_al_or_clean_result(state, clean_line)
+  end
+
+  defp keep_prefixed_al_or_clean_result({:ok, raw}, state, _clean_line) do
+    state |> add_entry(raw) |> keep_clean("")
+  end
+
+  defp keep_prefixed_al_or_clean_result(:not_al, state, clean_line),
+    do: keep_clean(state, clean_line)
 
   defp extract_tagged_segments("", clean_parts, entries),
     do: {:ok, clean_parts, Enum.reverse(entries)}
 
   defp extract_tagged_segments(line, clean_parts, entries) do
-    case split_al_open(line) do
-      :not_found ->
-        {:ok, [line | clean_parts], Enum.reverse(entries)}
+    line
+    |> split_al_open()
+    |> extract_tagged_segments_result(line, clean_parts, entries)
+  end
 
-      {:ok, before, inside_open} ->
-        case split_al_close(inside_open) do
-          {:ok, raw, after_close} ->
-            extract_tagged_segments(after_close, [before | clean_parts], [
-              build_entry(raw) | entries
-            ])
+  defp extract_tagged_segments_result(:not_found, line, clean_parts, entries) do
+    {:ok, [line | clean_parts], Enum.reverse(entries)}
+  end
 
-          :not_found ->
-            {:tag_open, [before | clean_parts], [inside_open]}
-        end
-    end
+  defp extract_tagged_segments_result({:ok, before, inside_open}, _line, clean_parts, entries) do
+    inside_open
+    |> split_al_close()
+    |> extract_al_close_result(before, inside_open, clean_parts, entries)
+  end
+
+  defp extract_al_close_result(
+         {:ok, raw, after_close},
+         before,
+         _inside_open,
+         clean_parts,
+         entries
+       ) do
+    extract_tagged_segments(after_close, [before | clean_parts], [build_entry(raw) | entries])
+  end
+
+  defp extract_al_close_result(:not_found, before, inside_open, clean_parts, _entries) do
+    {:tag_open, [before | clean_parts], [inside_open]}
   end
 
   defp extract_inline_fence_segments("", clean_parts, entries),
     do: {:ok, clean_parts, Enum.reverse(entries)}
 
   defp extract_inline_fence_segments(line, clean_parts, entries) do
-    case next_inline_fence(line) do
-      :not_found ->
-        {:ok, [line | clean_parts], Enum.reverse(entries)}
+    line
+    |> next_inline_fence()
+    |> extract_inline_fence_result(line, clean_parts, entries)
+  end
 
-      {index, delimiter} ->
-        before = binary_part(line, 0, index)
-        rest = binary_part(line, index, byte_size(line) - index)
+  defp extract_inline_fence_result(:not_found, line, clean_parts, entries) do
+    {:ok, [line | clean_parts], Enum.reverse(entries)}
+  end
 
-        case parse_inline_al_fence(rest, delimiter) do
-          {:ok, raw, after_close} ->
-            extract_inline_fence_segments(after_close, [before | clean_parts], [
-              build_entry(raw) | entries
-            ])
+  defp extract_inline_fence_result({index, delimiter}, line, clean_parts, entries) do
+    before = binary_part(line, 0, index)
+    rest = binary_part(line, index, byte_size(line) - index)
 
-          :not_al ->
-            {:ok, [line | clean_parts], Enum.reverse(entries)}
+    rest
+    |> parse_inline_al_fence(delimiter)
+    |> extract_inline_al_result(line, before, clean_parts, entries)
+  end
 
-          :not_inline ->
-            {:ok, [line | clean_parts], Enum.reverse(entries)}
-        end
-    end
+  defp extract_inline_al_result({:ok, raw, after_close}, _line, before, clean_parts, entries) do
+    extract_inline_fence_segments(after_close, [before | clean_parts], [
+      build_entry(raw) | entries
+    ])
+  end
+
+  defp extract_inline_al_result(_not_al_or_inline, line, _before, clean_parts, entries) do
+    {:ok, [line | clean_parts], Enum.reverse(entries)}
   end
 
   defp continue_after_close(state, ""), do: keep_clean(state, "")
@@ -298,11 +330,9 @@ defmodule SpectreKinetic.Extractor do
   end
 
   defp parse_fence_language(delimiter, language, content) do
-    if String.downcase(language) in ["al", "action", "action-language"] do
-      parse_fence_body(delimiter, content)
-    else
-      {:plain_open, delimiter}
-    end
+    if al_fence_language?(language),
+      do: parse_fence_body(delimiter, content),
+      else: {:plain_open, delimiter}
   end
 
   defp parse_fence_body(delimiter, content) do
@@ -330,11 +360,9 @@ defmodule SpectreKinetic.Extractor do
   end
 
   defp parse_inline_al_language(language, content, delimiter) do
-    if String.downcase(language) in ["al", "action", "action-language"] do
-      parse_inline_al_content(content, delimiter)
-    else
-      :not_al
-    end
+    if al_fence_language?(language),
+      do: parse_inline_al_content(content, delimiter),
+      else: :not_al
   end
 
   defp parse_inline_al_content(content, delimiter) do
@@ -345,19 +373,20 @@ defmodule SpectreKinetic.Extractor do
   end
 
   defp parse_fence_close(line, delimiter) do
-    trimmed = String.trim_leading(line)
-
-    cond do
-      trimmed == delimiter ->
-        {:close, "", ""}
-
-      String.starts_with?(trimmed, delimiter) ->
-        {:close, "", trimmed |> delimiter_tail(delimiter) |> String.trim_leading()}
-
-      true ->
-        :continue
-    end
+    line
+    |> String.trim_leading()
+    |> fence_close(delimiter)
   end
+
+  defp fence_close(delimiter, delimiter), do: {:close, "", ""}
+
+  defp fence_close(trimmed, delimiter) do
+    if String.starts_with?(trimmed, delimiter),
+      do: {:close, "", trimmed |> delimiter_tail(delimiter) |> String.trim_leading()},
+      else: :continue
+  end
+
+  defp al_fence_language?(language), do: String.downcase(language) in @al_fence_languages
 
   defp plain_fence_close?(line, delimiter) do
     String.starts_with?(String.trim_leading(line), delimiter)
