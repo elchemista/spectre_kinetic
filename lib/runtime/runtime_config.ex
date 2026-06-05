@@ -265,13 +265,17 @@ defmodule SpectreKinetic.RuntimeConfig do
 
   defp fetch_request_value(request, key) do
     [key, Atom.to_string(key)]
-    |> Enum.find_value(:error, fn request_key ->
-      with true <- Map.has_key?(request, request_key),
-           value when not is_nil(value) <- Map.get(request, request_key) do
-        {:ok, value}
-      end
-    end)
+    |> Enum.find_value(:error, &fetch_present_value(request, &1))
   end
+
+  defp fetch_present_value(request, key) do
+    if Map.has_key?(request, key) do
+      non_nil_value(Map.get(request, key))
+    end
+  end
+
+  defp non_nil_value(nil), do: nil
+  defp non_nil_value(value), do: {:ok, value}
 
   defp default_top_k do
     Keyword.get(default_plan_options(), :top_k, built_in_default!(:top_k))

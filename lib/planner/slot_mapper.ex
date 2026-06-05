@@ -82,8 +82,8 @@ defmodule SpectreKinetic.Planner.SlotMapper do
     }
   end
 
-  # --- Resolution stages ---
-
+  # Three passes: names first, then value shape, then the one lonely positional
+  # fallback. More magic here would make the planner look smart and age badly.
   # Stage 1: Exact name and alias matching
   defp resolve_all(slots, arg_defs) do
     {matched, remaining_slots, remaining_params} =
@@ -144,8 +144,8 @@ defmodule SpectreKinetic.Planner.SlotMapper do
     {%{}, slots, params}
   end
 
-  # --- Type detection ---
-
+  # Type guesses are hints, not authority. The registry schema still gets the
+  # last word, because production prefers boring adults in the room.
   defp infer_type_match(value, params) do
     case detect_value_type(value) do
       nil -> :no_match
@@ -158,17 +158,13 @@ defmodule SpectreKinetic.Planner.SlotMapper do
   """
   @spec detect_value_type(binary()) :: atom() | nil
   def detect_value_type(value) when is_binary(value) do
-    value
-    |> detect_textual_type()
-    |> case do
+    case detect_textual_type(value) do
       nil -> detect_scalar_type(value)
       type -> type
     end
   end
 
   def detect_value_type(_), do: nil
-
-  # --- Helpers ---
 
   defp normalize_slot_keys(parsed_args) do
     Map.new(parsed_args, fn {key, value} -> {String.downcase(key), value} end)
@@ -204,9 +200,9 @@ defmodule SpectreKinetic.Planner.SlotMapper do
   end
 
   defp match_param_for_type(params, type) do
-    params
-    |> Enum.find(&(String.downcase(&1["name"]) in Map.get(@type_hints, type, [])))
-    |> case do
+    match = Enum.find(params, &(String.downcase(&1["name"]) in Map.get(@type_hints, type, [])))
+
+    case match do
       nil -> :no_match
       param -> {:ok, param}
     end

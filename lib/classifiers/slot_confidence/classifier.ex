@@ -74,7 +74,8 @@ defmodule SpectreKinetic.Classifiers.SlotConfidence do
   end
 
   defp build_slots(context, arg_defs, %{mode: :axon, runtime: runtime}) do
-    Enum.reduce_while(arg_defs, {:ok, []}, fn arg_def, {:ok, acc} ->
+    arg_defs
+    |> Enum.reduce_while({:ok, []}, fn arg_def, {:ok, acc} ->
       name = arg_def["name"]
       source = Features.exact_or_alias_source(PlanContext.parsed_args(context), arg_def)
 
@@ -87,10 +88,7 @@ defmodule SpectreKinetic.Classifiers.SlotConfidence do
           {:halt, {:error, reason}}
       end
     end)
-    |> case do
-      {:ok, slots} -> {:ok, Enum.reverse(slots)}
-      {:error, _reason} = error -> error
-    end
+    |> built_slots()
   end
 
   defp build_slots(context, arg_defs, %{mode: :heuristic}) do
@@ -101,6 +99,9 @@ defmodule SpectreKinetic.Classifiers.SlotConfidence do
        {name, slot_result(confidence, source, arg_def)}
      end)}
   end
+
+  defp built_slots({:ok, slots}), do: {:ok, Enum.reverse(slots)}
+  defp built_slots({:error, _reason} = error), do: error
 
   defp slot_confidence(context, arg_def) do
     name = arg_def["name"]

@@ -45,10 +45,7 @@ defmodule SpectreKinetic.Parser do
   """
   @spec normalize(binary()) :: {:ok, binary()} | {:error, validation_error()}
   def normalize(al_text) when is_binary(al_text) do
-    al_text
-    |> String.trim()
-    |> unwrap_all()
-    |> case do
+    case unwrap_all(String.trim(al_text)) do
       {:ok, text} -> {:ok, collapse_whitespace(text)}
       {:error, reason} -> {:error, reason}
     end
