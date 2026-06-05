@@ -4,6 +4,21 @@ defmodule SpectreKinetic.PlannerTest do
   alias SpectreKinetic.Planner
   alias SpectreKinetic.Planner.RegistryStore
 
+  defmodule FakeEmbedder do
+    use GenServer
+
+    def start_link(vector), do: GenServer.start_link(__MODULE__, vector)
+
+    @impl GenServer
+    def init(vector), do: {:ok, vector}
+
+    @impl GenServer
+    def handle_call({:embed_batch, texts}, _from, vector) do
+      rows = Enum.map(texts, fn _text -> vector end)
+      {:reply, {:ok, Nx.tensor(rows, type: :f32)}, vector}
+    end
+  end
+
   setup do
     {:ok, store} = RegistryStore.start_link(name: nil)
 
@@ -84,6 +99,21 @@ defmodule SpectreKinetic.PlannerTest do
 
       assert is_list(result["candidates"])
       assert result["candidates"] != []
+    end
+
+    test "uses embedding matrix when registry and embedder provide one", %{store: store} do
+      :ok = RegistryStore.put_embedding(store, "Dynamic.Email.send/3", Nx.tensor([0.0, 1.0]))
+      :ok = RegistryStore.put_embedding(store, "Dynamic.Sms.send/2", Nx.tensor([1.0, 0.0]))
+      {:ok, embedder} = FakeEmbedder.start_link([1.0, 0.0])
+
+      {:ok, result} =
+        Planner.plan(
+          "ROUTE MESSAGE SOMEWHERE WITH: TO=+15551234567 BODY=\"Code 123\"",
+          %{registry: store, embedder: embedder, tool_threshold: 0.0}
+        )
+
+      assert result["selected_tool"] == "Dynamic.Sms.send/2"
+      assert result["tool_score"] == 1.0
     end
   end
 

@@ -4,6 +4,10 @@ defmodule SpectreKinetic.RuntimeTest do
   alias SpectreKinetic.Planner.Registry.ETS
   alias SpectreKinetic.Planner.Runtime, as: PlannerRuntime
 
+  defmodule ExplicitReranker do
+    def load(_opts), do: {:error, :should_not_load_when_runtime_is_explicit}
+  end
+
   test "load_runtime/1 builds a persistent runtime that can plan directly" do
     registry_json = write_registry_json([email_action(), note_delete_action()])
 
@@ -34,6 +38,7 @@ defmodule SpectreKinetic.RuntimeTest do
 
     assert {:ok, runtime} = SpectreKinetic.add_action(runtime, note_delete_action())
     assert SpectreKinetic.action_count(runtime) == 2
+    assert runtime.registry_module.embedding_matrix(runtime.registry) == nil
 
     assert {:ok, action} = SpectreKinetic.plan(runtime, "DELETE NOTE ENTRY WITH: ID=note-42")
     assert action.selected_tool == "Dynamic.Note.delete/1"
@@ -56,6 +61,40 @@ defmodule SpectreKinetic.RuntimeTest do
 
     assert {:ok, action} = SpectreKinetic.plan(runtime, "DELETE NOTE ENTRY WITH: ID=note-1")
     assert action.selected_tool == "Dynamic.Note.delete/1"
+  end
+
+  test "load_runtime/1 accepts compiled registries without requiring an encoder" do
+    compiled_registry = write_compiled_registry([email_action()])
+
+    assert {:ok, %PlannerRuntime{} = runtime} =
+             SpectreKinetic.load_runtime(compiled_registry: compiled_registry)
+
+    assert SpectreKinetic.action_count(runtime) == 1
+    assert runtime.encoder == nil
+    assert runtime.registry_module.embedding_matrix(runtime.registry) == nil
+  end
+
+  test "explicit reranker runtime wins over fallback model loading" do
+    registry_json = write_registry_json([email_action()])
+
+    assert {:ok, %PlannerRuntime{} = runtime} =
+             SpectreKinetic.load_runtime(
+               registry_json: registry_json,
+               tool_selection_fallback: :reranker,
+               reranker: :already_loaded,
+               fallback_runtime_module: ExplicitReranker
+             )
+
+    assert runtime.reranker == :already_loaded
+    assert runtime.reranker_module == ExplicitReranker
+  end
+
+  test "reload_registry/2 rejects unknown registry formats" do
+    registry_json = write_registry_json([email_action()])
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)
+
+    assert {:error, :unknown_registry_format} =
+             SpectreKinetic.reload_registry(runtime, "/tmp/registry.txt")
   end
 
   test "ETS registry backend can be used directly without the compatibility server" do
@@ -83,6 +122,23 @@ defmodule SpectreKinetic.RuntimeTest do
       Path.join(System.tmp_dir!(), "spectre_runtime_#{System.unique_integer([:positive])}.json")
 
     File.write!(path, Jason.encode!(%{"actions" => actions}))
+    path
+  end
+
+  defp write_compiled_registry(actions) do
+    path =
+      Path.join(System.tmp_dir!(), "spectre_runtime_#{System.unique_integer([:positive])}.etf")
+
+    bundle = %{
+      version: 1,
+      actions: actions,
+      action_ids: [],
+      tool_embeddings: [],
+      embedding_dim: nil,
+      compiled_at: DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    File.write!(path, :erlang.term_to_binary(bundle, [:compressed]))
     path
   end
 
