@@ -3,7 +3,10 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
 
   alias SpectreKinetic.Action
   alias SpectreKinetic.PlanContext
+  alias SpectreKinetic.TelemetryHelper
   alias SpectreKinetic.TestRegistryHelper
+
+  @classifier_run_event [:spectre_kinetic, :classifier, :run]
 
   defmodule CountingPlug do
     @behaviour SpectreKinetic.Classifier
@@ -56,6 +59,16 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
     def call(%PlanContext{} = context, warning) do
       {:halt, PlanContext.add_warning(context, warning)}
     end
+  end
+
+  defmodule ErrorPlug do
+    @behaviour SpectreKinetic.Classifier
+
+    @impl SpectreKinetic.Classifier
+    def init(opts), do: opts
+
+    @impl SpectreKinetic.Classifier
+    def call(%PlanContext{} = _context, _opts), do: {:error, :classifier_boom}
   end
 
   defmodule InitErrorPlug do
@@ -156,6 +169,28 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
     assert action.status == :needs_clarification
   end
 
+  test "classifier run emits success telemetry" do
+    runtime =
+      SpectreKinetic.load_runtime!(
+        registry_json: TestRegistryHelper.registry_json(),
+        classifiers: [{StatusPlug, status: :needs_clarification}]
+      )
+
+    {result, events} =
+      TelemetryHelper.capture([@classifier_run_event], fn ->
+        SpectreKinetic.plan(runtime, ~s(INSTALL PACKAGE WITH: PACKAGE="nginx"))
+      end)
+
+    assert {:ok, %Action{} = action} = result
+    assert action.status == :needs_clarification
+
+    assert [%{measurements: measurements, metadata: metadata}] = events
+    assert measurements.classifier_count == 1
+    assert metadata.result == :ok
+    assert metadata.status == :needs_clarification
+    assert metadata.selected_tool == "Linux.Apt.install/1"
+  end
+
   test "halted plugs mark action halted and stop later plugs" do
     {:ok, init_agent} = Agent.start_link(fn -> 0 end)
     {:ok, call_agent} = Agent.start_link(fn -> 0 end)
@@ -178,6 +213,46 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
     assert action.warnings == ["plug halted"]
     assert action.classifier_results == %{}
     assert Agent.get(call_agent, & &1) == 0
+  end
+
+  test "classifier run emits halt telemetry" do
+    runtime =
+      SpectreKinetic.load_runtime!(
+        registry_json: TestRegistryHelper.registry_json(),
+        classifiers: [{HaltPlug, warning: "plug halted"}]
+      )
+
+    {result, events} =
+      TelemetryHelper.capture([@classifier_run_event], fn ->
+        SpectreKinetic.plan(runtime, ~s(INSTALL PACKAGE WITH: PACKAGE="nginx"))
+      end)
+
+    assert {:ok, %Action{} = action} = result
+    assert action.halted?
+
+    assert [%{metadata: metadata}] = events
+    assert metadata.result == :halt
+    assert metadata.status == :ok
+  end
+
+  test "classifier run emits error telemetry" do
+    runtime =
+      SpectreKinetic.load_runtime!(
+        registry_json: TestRegistryHelper.registry_json(),
+        classifiers: [ErrorPlug]
+      )
+
+    {result, events} =
+      TelemetryHelper.capture([@classifier_run_event], fn ->
+        SpectreKinetic.plan(runtime, ~s(INSTALL PACKAGE WITH: PACKAGE="nginx"))
+      end)
+
+    assert {:error, {ErrorPlug, :classifier_boom}} = result
+
+    assert [%{metadata: metadata}] = events
+    assert metadata.result == :error
+    assert metadata.reason == {ErrorPlug, :classifier_boom}
+    assert metadata.status == :ok
   end
 
   test "plug init failures fail runtime loading with the plug module attached" do

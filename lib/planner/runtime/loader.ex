@@ -6,6 +6,10 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
   alias SpectreKinetic.Planner.Registry.ETS
   alias SpectreKinetic.Reranker.Runtime, as: RerankerRuntime
   alias SpectreKinetic.RuntimeConfig
+  alias SpectreKinetic.Telemetry
+
+  @encoder_load_event [:spectre_kinetic, :runtime, :encoder, :load]
+  @reranker_load_event [:spectre_kinetic, :runtime, :reranker, :load]
 
   @plan_default_keys [
     :top_k,
@@ -74,17 +78,39 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
            :encoder_model_dir,
            "SPECTRE_KINETIC_ENCODER_MODEL_DIR"
          ) do
-      nil -> {:ok, nil}
-      encoder_model_dir -> EmbeddingRuntime.load(encoder_model_dir: encoder_model_dir)
+      nil ->
+        Telemetry.execute(@encoder_load_event, %{duration: 0}, %{
+          result: :skipped,
+          reason: :missing_encoder_model_dir
+        })
+
+        {:ok, nil}
+
+      encoder_model_dir ->
+        timed_result(@encoder_load_event, %{path: encoder_model_dir}, fn ->
+          EmbeddingRuntime.load(encoder_model_dir: encoder_model_dir)
+        end)
     end
   end
 
   defp load_reranker(opts, reranker_module) do
     case {Keyword.get(opts, :reranker), fallback_mode(opts)} do
       {runtime, _mode} when not is_nil(runtime) ->
+        Telemetry.execute(@reranker_load_event, %{duration: 0}, %{
+          result: :ok,
+          reason: :explicit_runtime,
+          mode: :reranker
+        })
+
         {:ok, runtime}
 
       {_runtime, mode} when mode != :reranker ->
+        Telemetry.execute(@reranker_load_event, %{duration: 0}, %{
+          result: :skipped,
+          reason: :fallback_disabled,
+          mode: mode
+        })
+
         {:ok, nil}
 
       {_runtime, :reranker} ->
@@ -104,9 +130,46 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
            :fallback_model_dir,
            "SPECTRE_KINETIC_FALLBACK_MODEL_DIR"
          ) do
-      nil -> {:ok, nil}
-      fallback_model_dir -> reranker_module.load(fallback_model_dir: fallback_model_dir)
+      nil ->
+        Telemetry.execute(@reranker_load_event, %{duration: 0}, %{
+          result: :skipped,
+          reason: :missing_fallback_model_dir,
+          mode: :reranker
+        })
+
+        {:ok, nil}
+
+      fallback_model_dir ->
+        timed_result(
+          @reranker_load_event,
+          %{path: fallback_model_dir, mode: :reranker},
+          fn -> reranker_module.load(fallback_model_dir: fallback_model_dir) end
+        )
     end
+  end
+
+  defp timed_result(event, metadata, fun) do
+    start = System.monotonic_time()
+    result = fun.()
+    duration = System.monotonic_time() - start
+
+    case result do
+      {:ok, _value} ->
+        Telemetry.execute(event, %{duration: duration}, Map.put(metadata, :result, :ok))
+
+      {:error, reason} ->
+        metadata =
+          metadata
+          |> Map.put(:result, :error)
+          |> Map.put(:reason, reason)
+
+        Telemetry.execute(event, %{duration: duration}, metadata)
+
+      _other ->
+        Telemetry.execute(event, %{duration: duration}, Map.put(metadata, :result, :ok))
+    end
+
+    result
   end
 
   defp registry_loader(registry_module, path) do

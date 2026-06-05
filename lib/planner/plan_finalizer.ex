@@ -13,6 +13,9 @@ defmodule SpectreKinetic.PlanFinalizer do
   alias SpectreKinetic.ClassifierPipeline
   alias SpectreKinetic.PlanContext
   alias SpectreKinetic.Planner.Runtime, as: PlannerRuntime
+  alias SpectreKinetic.Telemetry
+
+  @classifier_run_event [:spectre_kinetic, :classifier, :run]
 
   @spec to_action(
           PlannerRuntime.t(),
@@ -36,11 +39,56 @@ defmodule SpectreKinetic.PlanFinalizer do
     else
       context = PlanContext.from_planner_result(runtime, al_text, mode, planner_result)
 
-      with {:ok, context} <- ClassifierPipeline.run(context, classifiers) do
+      with {:ok, context} <- run_classifiers(context, classifiers, mode) do
         {:ok, Action.from_plan(al_text, PlanContext.to_planner_result(context))}
       end
     end
   end
 
   def to_action(_runtime, _al_text, {:error, reason}, _opts, _mode), do: {:error, reason}
+
+  defp run_classifiers(context, classifiers, mode) do
+    start = System.monotonic_time()
+    result = ClassifierPipeline.run(context, classifiers)
+    emit_classifier_run(start, result, context, classifiers, mode)
+    result
+  end
+
+  defp emit_classifier_run(start, {:ok, context}, _original_context, classifiers, mode) do
+    Telemetry.execute(
+      @classifier_run_event,
+      %{
+        duration: System.monotonic_time() - start,
+        classifier_count: length(classifiers),
+        missing_count: length(PlanContext.missing_fields(context))
+      },
+      %{
+        result: classifier_result(context),
+        mode: mode,
+        status: context.status,
+        selected_tool: PlanContext.selected_tool(context)
+      }
+    )
+  end
+
+  defp emit_classifier_run(start, {:error, reason}, original_context, classifiers, mode) do
+    Telemetry.execute(
+      @classifier_run_event,
+      %{
+        duration: System.monotonic_time() - start,
+        classifier_count: length(classifiers),
+        missing_count: length(PlanContext.missing_fields(original_context))
+      },
+      %{
+        result: :error,
+        reason: reason,
+        mode: mode,
+        status: original_context.status,
+        selected_tool: PlanContext.selected_tool(original_context)
+      }
+    )
+  end
+
+  defp classifier_result(%PlanContext{halted?: true}), do: :halt
+  defp classifier_result(_context), do: :ok
 end

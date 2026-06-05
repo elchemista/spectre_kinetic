@@ -63,6 +63,7 @@ defmodule SpectreKinetic.MixProject do
       {:axon, "~> 0.7"},
       {:ortex, "~> 0.1"},
       {:tokenizers, "~> 0.5"},
+      {:telemetry, "~> 1.0"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]

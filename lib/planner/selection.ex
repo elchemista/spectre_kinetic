@@ -4,6 +4,9 @@ defmodule SpectreKinetic.Planner.Selection do
   alias SpectreKinetic.Planner.Registry
   alias SpectreKinetic.Planner.SlotMapper
   alias SpectreKinetic.RuntimeConfig
+  alias SpectreKinetic.Telemetry
+
+  @reranker_fallback_event [:spectre_kinetic, :planner, :reranker, :fallback]
 
   @type opts :: %{
           tool_threshold: float(),
@@ -106,6 +109,7 @@ defmodule SpectreKinetic.Planner.Selection do
          primary,
          primary_mapping
        ) do
+    start = System.monotonic_time()
     pool = Enum.take(scored_candidates, selection_opts.fallback_top_k)
     pairs = reranker_pairs(al_text, pool)
 
@@ -113,15 +117,26 @@ defmodule SpectreKinetic.Planner.Selection do
       {:ok, scores} ->
         chosen = select_reranked_candidate(pool, scores)
         mapping = SlotMapper.map_slots(slots, chosen.action)
+        notes = reranker_notes(chosen, primary, mapping, primary_mapping)
+
+        emit_reranker_event(start, selection_opts, pool, primary, chosen, mapping, %{
+          result: :fallback,
+          reason: reranker_reason(chosen, primary, mapping, primary_mapping)
+        })
 
         {:ok,
          %{
            candidate: chosen,
            mapping: mapping,
-           notes: reranker_notes(chosen, primary, mapping, primary_mapping)
+           notes: notes
          }}
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        emit_reranker_event(start, selection_opts, pool, primary, primary, primary_mapping, %{
+          result: :error,
+          reason: reason
+        })
+
         {:ok, %{candidate: primary, mapping: primary_mapping, notes: []}}
     end
   end
@@ -215,6 +230,38 @@ defmodule SpectreKinetic.Planner.Selection do
 
   defp reranker_notes(_chosen, _primary, _mapping, _primary_mapping) do
     ["reranker fallback confirmed tool selection"]
+  end
+
+  defp reranker_reason(
+         %{action: %{"id" => chosen_id}},
+         %{action: %{"id" => primary_id}},
+         _mapping,
+         _primary_mapping
+       )
+       when chosen_id != primary_id,
+       do: :changed_selection
+
+  defp reranker_reason(_chosen, _primary, %{missing: missing}, %{missing: primary_missing})
+       when missing != primary_missing,
+       do: :revalidated_selection
+
+  defp reranker_reason(_chosen, _primary, _mapping, _primary_mapping), do: :confirmed_selection
+
+  defp emit_reranker_event(start, selection_opts, pool, primary, chosen, mapping, metadata) do
+    Telemetry.execute(
+      @reranker_fallback_event,
+      %{
+        duration: System.monotonic_time() - start,
+        candidate_count: length(pool),
+        fallback_top_k: selection_opts.fallback_top_k,
+        missing_count: length(mapping.missing)
+      },
+      Map.merge(metadata, %{
+        primary_tool: primary.action["id"],
+        chosen_tool: chosen.action["id"],
+        selected_tool: chosen.action["id"]
+      })
+    )
   end
 
   defp plan_option(opts, key) do
