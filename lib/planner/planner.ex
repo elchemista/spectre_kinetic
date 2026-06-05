@@ -110,7 +110,7 @@ defmodule SpectreKinetic.Planner do
             Scorer.fuse_scores(%{
               embedding: emb_score,
               lexical: lex_score,
-              alias: alias_score,
+              arg_alias: alias_score,
               shape: shape
             })
         }

@@ -6,6 +6,13 @@ defmodule SpectreKinetic.Planner.Scorer do
   and action-shape heuristics to produce a final fused score.
   """
 
+  @score_weights [
+    embedding: 0.55,
+    lexical: 0.20,
+    arg_alias: 0.15,
+    shape: 0.10
+  ]
+
   @doc """
   Computes cosine similarity between a query vector `{1, dim}` or `{dim}`
   and a matrix of candidates `{n, dim}`. Returns a `{n}` tensor of scores.
@@ -121,26 +128,19 @@ defmodule SpectreKinetic.Planner.Scorer do
 
     * `:embedding` — cosine similarity weight (default 0.55)
     * `:lexical` — lexical overlap weight (default 0.20)
-    * `:alias` — alias overlap weight (default 0.15)
+    * `:arg_alias` — argument alias overlap weight (default 0.15)
     * `:shape` — shape heuristic weight (default 0.10)
   """
   @spec fuse_scores(map()) :: float()
   def fuse_scores(scores) do
-    w_emb = 0.55
-    w_lex = 0.20
-    w_alias = 0.15
-    w_shape = 0.10
-
-    w_emb * (scores[:embedding] || 0.0) +
-      w_lex * (scores[:lexical] || 0.0) +
-      w_alias * (scores[:alias] || 0.0) +
-      w_shape * (scores[:shape] || 0.0)
+    Enum.reduce(@score_weights, 0.0, fn {key, weight}, acc ->
+      acc + weight * Map.get(scores, key, 0.0)
+    end)
   end
 
   defp tokenize_for_overlap(text) do
-    text
-    |> String.upcase()
-    |> then(&Regex.scan(~r/[A-Z0-9_]+/, &1))
+    ~r/[A-Z0-9_]+/
+    |> Regex.scan(String.upcase(text))
     |> List.flatten()
     |> Enum.filter(&(String.length(&1) >= 2))
     |> MapSet.new()

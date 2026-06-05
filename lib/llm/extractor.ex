@@ -39,7 +39,8 @@ defmodule SpectreKinetic.Extractor do
           entries: [entry()]
         }
 
-  @al_fence_languages ["al", "action", "action-language"]
+  alias SpectreKinetic.Extractor.Fences
+  alias SpectreKinetic.Extractor.Tags
 
   @doc """
   Extracts validated AL strings from a noisy text response.
@@ -86,7 +87,7 @@ defmodule SpectreKinetic.Extractor do
     trimmed = String.trim_leading(line)
     fence_candidate = drop_list_prefix(trimmed)
 
-    case parse_fence_open(fence_candidate) do
+    case Fences.parse_open(fence_candidate) do
       {:al_inline, raw} ->
         state |> add_entry(raw) |> keep_clean("")
 
@@ -104,7 +105,7 @@ defmodule SpectreKinetic.Extractor do
   end
 
   defp consume_line(line, %{mode: {:al_fence, delimiter, parts}} = state) do
-    case parse_fence_close(line, delimiter) do
+    case Fences.parse_close(line, delimiter) do
       {:close, before_close, after_close} ->
         %{state | mode: :normal}
         |> add_entry(multiline_raw(parts, before_close))
@@ -116,7 +117,7 @@ defmodule SpectreKinetic.Extractor do
   end
 
   defp consume_line(line, %{mode: {:al_tag, parts}} = state) do
-    case split_al_close(line) do
+    case Tags.split_close(line) do
       {:ok, before_close, after_close} ->
         %{state | mode: :normal}
         |> add_entry(multiline_raw(parts, before_close))
@@ -129,7 +130,7 @@ defmodule SpectreKinetic.Extractor do
 
   defp consume_line(line, %{mode: {:plain_fence, delimiter}} = state) do
     next_state =
-      if plain_fence_close?(line, delimiter) do
+      if Fences.plain_close?(line, delimiter) do
         %{state | mode: :normal}
       else
         state
@@ -170,28 +171,26 @@ defmodule SpectreKinetic.Extractor do
 
   defp handle_normal_line(line, state) do
     line
-    |> extract_tagged_segments([], [])
+    |> Tags.extract_segments()
     |> handle_tagged_segments_result(state)
   end
 
-  defp handle_tagged_segments_result({:tag_open, clean_parts, parts}, state) do
+  defp handle_tagged_segments_result({:tag_open, clean_line, raw}, state) do
     state
-    |> keep_clean(IO.iodata_to_binary(Enum.reverse(clean_parts)))
-    |> Map.put(:mode, {:al_tag, [IO.iodata_to_binary(Enum.reverse(parts))]})
+    |> keep_clean(clean_line)
+    |> Map.put(:mode, {:al_tag, [raw]})
   end
 
-  defp handle_tagged_segments_result({:ok, clean_parts, entries}, state) do
-    clean_line = IO.iodata_to_binary(Enum.reverse(clean_parts))
-    {:ok, inline_clean_parts, inline_entries} = extract_inline_fence_segments(clean_line, [], [])
-    clean_line = IO.iodata_to_binary(Enum.reverse(inline_clean_parts))
+  defp handle_tagged_segments_result({:ok, clean_line, raws}, state) do
+    {:ok, clean_line, inline_raws} = Fences.extract_inline_segments(clean_line)
 
     state
-    |> append_entries(entries)
-    |> append_entries(inline_entries)
+    |> append_raw_entries(raws)
+    |> append_raw_entries(inline_raws)
     |> keep_prefixed_al_or_clean(clean_line)
   end
 
-  defp append_entries(state, entries), do: Enum.reduce(entries, state, &append_entry/2)
+  defp append_raw_entries(state, raws), do: Enum.reduce(raws, state, &add_entry(&2, &1))
 
   defp keep_prefixed_al_or_clean(state, clean_line) do
     clean_line
@@ -205,71 +204,6 @@ defmodule SpectreKinetic.Extractor do
 
   defp keep_prefixed_al_or_clean_result(:not_al, state, clean_line),
     do: keep_clean(state, clean_line)
-
-  defp extract_tagged_segments("", clean_parts, entries),
-    do: {:ok, clean_parts, Enum.reverse(entries)}
-
-  defp extract_tagged_segments(line, clean_parts, entries) do
-    line
-    |> split_al_open()
-    |> extract_tagged_segments_result(line, clean_parts, entries)
-  end
-
-  defp extract_tagged_segments_result(:not_found, line, clean_parts, entries) do
-    {:ok, [line | clean_parts], Enum.reverse(entries)}
-  end
-
-  defp extract_tagged_segments_result({:ok, before, inside_open}, _line, clean_parts, entries) do
-    inside_open
-    |> split_al_close()
-    |> extract_al_close_result(before, inside_open, clean_parts, entries)
-  end
-
-  defp extract_al_close_result(
-         {:ok, raw, after_close},
-         before,
-         _inside_open,
-         clean_parts,
-         entries
-       ) do
-    extract_tagged_segments(after_close, [before | clean_parts], [build_entry(raw) | entries])
-  end
-
-  defp extract_al_close_result(:not_found, before, inside_open, clean_parts, _entries) do
-    {:tag_open, [before | clean_parts], [inside_open]}
-  end
-
-  defp extract_inline_fence_segments("", clean_parts, entries),
-    do: {:ok, clean_parts, Enum.reverse(entries)}
-
-  defp extract_inline_fence_segments(line, clean_parts, entries) do
-    line
-    |> next_inline_fence()
-    |> extract_inline_fence_result(line, clean_parts, entries)
-  end
-
-  defp extract_inline_fence_result(:not_found, line, clean_parts, entries) do
-    {:ok, [line | clean_parts], Enum.reverse(entries)}
-  end
-
-  defp extract_inline_fence_result({index, delimiter}, line, clean_parts, entries) do
-    before = binary_part(line, 0, index)
-    rest = binary_part(line, index, byte_size(line) - index)
-
-    rest
-    |> parse_inline_al_fence(delimiter)
-    |> extract_inline_al_result(line, before, clean_parts, entries)
-  end
-
-  defp extract_inline_al_result({:ok, raw, after_close}, _line, before, clean_parts, entries) do
-    extract_inline_fence_segments(after_close, [before | clean_parts], [
-      build_entry(raw) | entries
-    ])
-  end
-
-  defp extract_inline_al_result(_not_al_or_inline, line, _before, clean_parts, entries) do
-    {:ok, [line | clean_parts], Enum.reverse(entries)}
-  end
 
   defp continue_after_close(state, ""), do: keep_clean(state, "")
   defp continue_after_close(state, after_close), do: handle_normal_line(after_close, state)
@@ -298,86 +232,6 @@ defmodule SpectreKinetic.Extractor do
   defp invalid_entry(raw, reason), do: %{raw: raw, al: nil, error: reason}
   defp entry_to_actions(%{al: nil}), do: []
   defp entry_to_actions(%{al: al}), do: [al]
-
-  defp parse_fence_open(trimmed_line) do
-    case fence_delimiter(trimmed_line) do
-      {delimiter, rest} ->
-        parse_fence_open_with_delimiter(delimiter, rest)
-
-      :error ->
-        :not_a_fence
-    end
-  end
-
-  defp parse_fence_open_with_delimiter(delimiter, rest) do
-    case split_first_token(String.trim_leading(rest)) do
-      {language, content} -> parse_fence_language(delimiter, language, content)
-      :error -> {:plain_open, delimiter}
-    end
-  end
-
-  defp parse_fence_language(delimiter, language, content) do
-    if al_fence_language?(language),
-      do: parse_fence_body(delimiter, content),
-      else: {:plain_open, delimiter}
-  end
-
-  defp parse_fence_body(delimiter, content) do
-    case split_inline_fence_close(content, delimiter) do
-      {:ok, body, _rest} -> {:al_inline, body}
-      :not_found -> {:al_open, delimiter, String.trim_leading(content)}
-    end
-  end
-
-  defp parse_inline_al_fence(rest, delimiter) do
-    case fence_delimiter(rest) do
-      {^delimiter, after_delimiter} ->
-        parse_inline_al_body(after_delimiter, delimiter)
-
-      :error ->
-        :not_al
-    end
-  end
-
-  defp parse_inline_al_body(after_delimiter, delimiter) do
-    case split_first_token(String.trim_leading(after_delimiter)) do
-      {language, content} -> parse_inline_al_language(language, content, delimiter)
-      :error -> :not_al
-    end
-  end
-
-  defp parse_inline_al_language(language, content, delimiter) do
-    if al_fence_language?(language),
-      do: parse_inline_al_content(content, delimiter),
-      else: :not_al
-  end
-
-  defp parse_inline_al_content(content, delimiter) do
-    case split_inline_fence_close(content, delimiter) do
-      {:ok, body, after_close} -> {:ok, body, after_close}
-      :not_found -> :not_inline
-    end
-  end
-
-  defp parse_fence_close(line, delimiter) do
-    line
-    |> String.trim_leading()
-    |> fence_close(delimiter)
-  end
-
-  defp fence_close(delimiter, delimiter), do: {:close, "", ""}
-
-  defp fence_close(trimmed, delimiter) do
-    if String.starts_with?(trimmed, delimiter),
-      do: {:close, "", trimmed |> delimiter_tail(delimiter) |> String.trim_leading()},
-      else: :continue
-  end
-
-  defp al_fence_language?(language), do: String.downcase(language) in @al_fence_languages
-
-  defp plain_fence_close?(line, delimiter) do
-    String.starts_with?(String.trim_leading(line), delimiter)
-  end
 
   defp al_prefixed_candidate(line) do
     candidate = line |> String.trim_leading() |> drop_list_prefix()
@@ -414,91 +268,6 @@ defmodule SpectreKinetic.Extractor do
     do: take_digits(rest, [char | acc])
 
   defp take_digits(rest, acc), do: {Enum.reverse(acc), rest}
-
-  defp split_al_open(line) do
-    lower = String.downcase(line)
-
-    case :binary.match(lower, "<al") do
-      {open_index, _size} ->
-        rest = binary_part(line, open_index, byte_size(line) - open_index)
-        lower_rest = binary_part(lower, open_index, byte_size(lower) - open_index)
-
-        case :binary.match(lower_rest, ">") do
-          {gt_index, 1} ->
-            {
-              :ok,
-              binary_part(line, 0, open_index),
-              binary_part(rest, gt_index + 1, byte_size(rest) - gt_index - 1)
-            }
-
-          :nomatch ->
-            :not_found
-        end
-
-      :nomatch ->
-        :not_found
-    end
-  end
-
-  defp split_al_close(line) do
-    lower = String.downcase(line)
-
-    case :binary.match(lower, "</al>") do
-      {close_index, 5} ->
-        {
-          :ok,
-          binary_part(line, 0, close_index),
-          binary_part(line, close_index + 5, byte_size(line) - close_index - 5)
-        }
-
-      :nomatch ->
-        :not_found
-    end
-  end
-
-  defp split_inline_fence_close(content, delimiter) do
-    case :binary.match(content, delimiter) do
-      {index, size} ->
-        {:ok, binary_part(content, 0, index),
-         binary_part(content, index + size, byte_size(content) - index - size)}
-
-      :nomatch ->
-        :not_found
-    end
-  end
-
-  defp split_first_token(""), do: :error
-
-  defp split_first_token(text) do
-    case String.split(text, " ", parts: 2, trim: true) do
-      [token, rest] -> {String.trim(token), String.trim_leading(rest)}
-      [token] -> {String.trim(token), ""}
-      _ -> :error
-    end
-  end
-
-  defp fence_delimiter(<<delimiter::binary-size(3), rest::binary>>)
-       when delimiter in ["```", "~~~"], do: {delimiter, rest}
-
-  defp fence_delimiter(_line), do: :error
-
-  defp delimiter_tail(text, delimiter) do
-    offset = byte_size(delimiter)
-    binary_part(text, offset, byte_size(text) - offset)
-  end
-
-  defp next_inline_fence(line) do
-    [find_delimiter(line, "```"), find_delimiter(line, "~~~")]
-    |> Enum.reject(&(&1 == :not_found))
-    |> Enum.min_by(fn {index, _delimiter} -> index end, fn -> :not_found end)
-  end
-
-  defp find_delimiter(line, delimiter) do
-    case :binary.match(line, delimiter) do
-      {index, _size} -> {index, delimiter}
-      :nomatch -> :not_found
-    end
-  end
 
   defp collapse_blank_lines(text) do
     text

@@ -146,7 +146,7 @@ defmodule SpectreKinetic.Planner.ScorerTest do
       assert_in_delta Scorer.fuse_scores(%{
                         embedding: 1.0,
                         lexical: 1.0,
-                        alias: 1.0,
+                        arg_alias: 1.0,
                         shape: 1.0
                       }),
                       1.0,
@@ -157,7 +157,7 @@ defmodule SpectreKinetic.Planner.ScorerTest do
       assert_in_delta Scorer.fuse_scores(%{
                         embedding: 0.0,
                         lexical: 0.0,
-                        alias: 0.0,
+                        arg_alias: 0.0,
                         shape: 0.0
                       }),
                       0.0,
