@@ -10,6 +10,11 @@ defmodule SpectreKinetic.Planner.Runtime do
   alias SpectreKinetic.Planner.EmbeddingRuntime
   alias SpectreKinetic.Planner.Runtime.Embeddings
   alias SpectreKinetic.Planner.Runtime.Loader
+  alias SpectreKinetic.Telemetry
+
+  @registry_reload_event [:spectre_kinetic, :runtime, :registry, :reload]
+  @registry_add_event [:spectre_kinetic, :runtime, :registry, :add_action]
+  @registry_delete_event [:spectre_kinetic, :runtime, :registry, :delete_action]
 
   defstruct [
     :registry_module,
@@ -113,12 +118,24 @@ defmodule SpectreKinetic.Planner.Runtime do
   """
   @spec reload_registry(t(), binary()) :: {:ok, t()} | {:error, term()}
   def reload_registry(%__MODULE__{} = runtime, path) do
-    with {:ok, registry} <-
-           Loader.reload_registry(runtime.registry_module, runtime.registry, path) do
-      runtime
-      |> Map.put(:registry, registry)
-      |> Embeddings.reembed_after_reload(path)
-    end
+    start = System.monotonic_time()
+    embedding_attempted? = Embeddings.reembed_after_reload?(runtime, path)
+
+    result =
+      with {:ok, registry} <-
+             Loader.reload_registry(runtime.registry_module, runtime.registry, path) do
+        runtime
+        |> Map.put(:registry, registry)
+        |> Embeddings.reembed_after_reload(path)
+      end
+
+    emit_registry_event(@registry_reload_event, start, runtime, result, %{
+      path: path,
+      format: registry_format(path),
+      embedding_attempted: embedding_attempted?
+    })
+
+    result
   end
 
   @doc """
@@ -126,11 +143,21 @@ defmodule SpectreKinetic.Planner.Runtime do
   """
   @spec add_action(t(), map()) :: {:ok, t()} | {:error, term()}
   def add_action(%__MODULE__{} = runtime, action) do
-    with {:ok, registry} <- runtime.registry_module.add_action(runtime.registry, action),
-         runtime <- %{runtime | registry: registry},
-         {:ok, registry} <- Embeddings.maybe_embed_action(runtime, action) do
-      {:ok, %{runtime | registry: registry}}
-    end
+    start = System.monotonic_time()
+
+    result =
+      with {:ok, registry} <- runtime.registry_module.add_action(runtime.registry, action),
+           runtime <- %{runtime | registry: registry},
+           {:ok, registry} <- Embeddings.maybe_embed_action(runtime, action) do
+        {:ok, %{runtime | registry: registry}}
+      end
+
+    emit_registry_event(@registry_add_event, start, runtime, result, %{
+      action_id: action_id(action),
+      embedding_attempted: not is_nil(runtime.encoder)
+    })
+
+    result
   end
 
   @doc """
@@ -138,15 +165,92 @@ defmodule SpectreKinetic.Planner.Runtime do
   """
   @spec delete_action(t(), binary()) :: {:ok, boolean(), t()} | {:error, term()}
   def delete_action(%__MODULE__{} = runtime, action_id) do
-    case runtime.registry_module.delete_action(runtime.registry, action_id) do
-      {{:ok, deleted}, registry} ->
-        {:ok, deleted, %{runtime | registry: registry}}
+    start = System.monotonic_time()
 
-      {:error, _reason} = error ->
-        error
-    end
+    result =
+      case runtime.registry_module.delete_action(runtime.registry, action_id) do
+        {{:ok, deleted}, registry} ->
+          {:ok, deleted, %{runtime | registry: registry}}
+
+        {:error, _reason} = error ->
+          error
+      end
+
+    emit_delete_event(start, runtime, result, action_id)
+
+    result
   end
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp emit_registry_event(
+         event,
+         start,
+         _original_runtime,
+         {:ok, %__MODULE__{} = runtime},
+         metadata
+       ) do
+    Telemetry.execute(
+      event,
+      %{
+        duration: System.monotonic_time() - start,
+        action_count: action_count(runtime)
+      },
+      Map.put(metadata, :result, :ok)
+    )
+  end
+
+  defp emit_registry_event(event, start, original_runtime, {:error, reason}, metadata) do
+    Telemetry.execute(
+      event,
+      %{
+        duration: System.monotonic_time() - start,
+        action_count: action_count(original_runtime)
+      },
+      metadata
+      |> Map.put(:result, :error)
+      |> Map.put(:reason, reason)
+    )
+  end
+
+  defp emit_registry_event(_event, _start, _original_runtime, _result, _metadata), do: :ok
+
+  defp emit_delete_event(
+         start,
+         _original_runtime,
+         {:ok, deleted, %__MODULE__{} = runtime},
+         action_id
+       ) do
+    Telemetry.execute(
+      @registry_delete_event,
+      %{
+        duration: System.monotonic_time() - start,
+        action_count: action_count(runtime)
+      },
+      %{result: :ok, action_id: action_id, deleted: deleted}
+    )
+  end
+
+  defp emit_delete_event(start, original_runtime, {:error, reason}, action_id) do
+    Telemetry.execute(
+      @registry_delete_event,
+      %{
+        duration: System.monotonic_time() - start,
+        action_count: action_count(original_runtime)
+      },
+      %{result: :error, action_id: action_id, reason: reason}
+    )
+  end
+
+  defp registry_format(path) when is_binary(path) do
+    cond do
+      String.ends_with?(path, ".json") -> :json
+      String.ends_with?(path, ".etf") -> :etf
+      true -> :unknown
+    end
+  end
+
+  defp action_id(%{"id" => id}) when is_binary(id), do: id
+  defp action_id(_action), do: nil
 end

@@ -6,6 +6,9 @@ defmodule SpectreKinetic.Planner.Retrieval do
   alias SpectreKinetic.Planner.RegistryStore
   alias SpectreKinetic.Planner.Scorer
   alias SpectreKinetic.RuntimeConfig
+  alias SpectreKinetic.Telemetry
+
+  @retrieval_fallback_event [:spectre_kinetic, :planner, :retrieval, :fallback]
 
   @type opts :: %{
           registry_module: module(),
@@ -62,7 +65,9 @@ defmodule SpectreKinetic.Planner.Retrieval do
          embedded_candidates(query_vec, matrix, top_k, action_ids, registry_module, registry)}
 
       {:error, :embedder_unavailable} ->
-        retrieve_lexical(al_text, registry_module, registry, top_k)
+        result = retrieve_lexical(al_text, registry_module, registry, top_k)
+        emit_lexical_fallback(result, top_k, :embedder_unavailable)
+        result
 
       {:error, _reason} = error ->
         error
@@ -83,6 +88,14 @@ defmodule SpectreKinetic.Planner.Retrieval do
 
   defp embed_query(nil, _al_text), do: {:error, :embedder_unavailable}
   defp embed_query(embedder, al_text), do: EmbeddingRuntime.embed(embedder, al_text)
+
+  defp emit_lexical_fallback({:ok, candidates}, top_k, reason) do
+    Telemetry.execute(
+      @retrieval_fallback_event,
+      %{candidate_count: length(candidates), fallback_top_k: top_k},
+      %{result: :fallback, reason: reason}
+    )
+  end
 
   defp plan_option(opts, key) do
     Map.get(opts, key, Keyword.fetch!(RuntimeConfig.built_in_plan_defaults(), key))

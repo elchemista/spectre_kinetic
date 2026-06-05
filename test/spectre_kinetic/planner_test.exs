@@ -3,6 +3,10 @@ defmodule SpectreKinetic.PlannerTest do
 
   alias SpectreKinetic.Planner
   alias SpectreKinetic.Planner.RegistryStore
+  alias SpectreKinetic.TelemetryHelper
+
+  @retrieval_fallback_event [:spectre_kinetic, :planner, :retrieval, :fallback]
+  @reranker_fallback_event [:spectre_kinetic, :planner, :reranker, :fallback]
 
   defmodule FakeEmbedder do
     use GenServer
@@ -17,6 +21,21 @@ defmodule SpectreKinetic.PlannerTest do
       rows = Enum.map(texts, fn _text -> vector end)
       {:reply, {:ok, Nx.tensor(rows, type: :f32)}, vector}
     end
+  end
+
+  defmodule FakeReranker do
+    def score_batch(_runtime, pairs) do
+      scores =
+        pairs
+        |> Enum.with_index()
+        |> Enum.map(fn {_pair, index} -> index / max(length(pairs) - 1, 1) end)
+
+      {:ok, scores}
+    end
+  end
+
+  defmodule ErrorReranker do
+    def score_batch(_runtime, _pairs), do: {:error, :reranker_down}
   end
 
   setup do
@@ -114,6 +133,75 @@ defmodule SpectreKinetic.PlannerTest do
 
       assert result["selected_tool"] == "Dynamic.Sms.send/2"
       assert result["tool_score"] == 1.0
+    end
+
+    test "emits telemetry when embedded retrieval falls back to lexical", %{store: store} do
+      :ok = RegistryStore.put_embedding(store, "Dynamic.Email.send/3", Nx.tensor([0.0, 1.0]))
+
+      {result, events} =
+        TelemetryHelper.capture([@retrieval_fallback_event], fn ->
+          Planner.plan(
+            ~s(SEND OUTBOUND EMAIL WITH: TO=user@test.com SUBJECT="Hello" BODY="World"),
+            %{registry: store, embedder: nil}
+          )
+        end)
+
+      assert {:ok, %{"selected_tool" => "Dynamic.Email.send/3"}} = result
+
+      assert [%{measurements: measurements, metadata: metadata}] = events
+      assert measurements.candidate_count > 0
+      assert metadata.result == :fallback
+      assert metadata.reason == :embedder_unavailable
+    end
+
+    test "emits telemetry when reranker fallback changes or confirms selection", %{store: store} do
+      {result, events} =
+        TelemetryHelper.capture([@reranker_fallback_event], fn ->
+          Planner.plan(
+            "SEND OUTBOUND MESSAGE WITH: TO=+15551234567 BODY=\"Code 123\"",
+            %{
+              registry: store,
+              embedder: nil,
+              tool_threshold: 0.99,
+              tool_selection_fallback: :reranker,
+              reranker: :fake,
+              reranker_module: FakeReranker
+            }
+          )
+        end)
+
+      assert {:ok, result} = result
+      assert result["selected_tool"]
+
+      assert [%{measurements: measurements, metadata: metadata}] = events
+      assert measurements.candidate_count > 0
+      assert metadata.result == :fallback
+      assert metadata.primary_tool
+      assert metadata.chosen_tool
+    end
+
+    test "emits telemetry when reranker fallback fails and primary selection is kept", %{
+      store: store
+    } do
+      {_result, events} =
+        TelemetryHelper.capture([@reranker_fallback_event], fn ->
+          Planner.plan(
+            "SEND OUTBOUND MESSAGE WITH: TO=+15551234567 BODY=\"Code 123\"",
+            %{
+              registry: store,
+              embedder: nil,
+              tool_threshold: 0.99,
+              tool_selection_fallback: :reranker,
+              reranker: :fake,
+              reranker_module: ErrorReranker
+            }
+          )
+        end)
+
+      assert [%{metadata: metadata}] = events
+      assert metadata.result == :error
+      assert metadata.reason == :reranker_down
+      assert metadata.primary_tool == metadata.chosen_tool
     end
   end
 

@@ -4,42 +4,87 @@ defmodule SpectreKinetic.Planner.Runtime.Embeddings do
   alias SpectreKinetic.Planner.EmbeddingRuntime
   alias SpectreKinetic.Planner.Registry
   alias SpectreKinetic.RuntimeConfig
+  alias SpectreKinetic.Telemetry
+
+  @embed_event [:spectre_kinetic, :runtime, :registry, :embed]
 
   @spec embed_loaded_registry(map(), keyword()) :: {:ok, map()} | {:error, term()}
   def embed_loaded_registry(runtime, opts) do
-    if should_embed_loaded_registry?(runtime, opts),
-      do: reembed_all(runtime),
-      else: {:ok, runtime}
+    if should_embed_loaded_registry?(runtime, opts) do
+      reembed_all(runtime, %{scope: :loaded_registry})
+    else
+      emit_embed_skipped(runtime, %{
+        scope: :loaded_registry,
+        reason: loaded_registry_skip_reason(runtime)
+      })
+
+      {:ok, runtime}
+    end
   end
 
   @spec reembed_after_reload(map(), binary()) :: {:ok, map()} | {:error, term()}
   def reembed_after_reload(runtime, path) do
-    if should_reembed_after_reload?(runtime, path),
-      do: reembed_all(runtime),
-      else: {:ok, runtime}
+    if reembed_after_reload?(runtime, path) do
+      reembed_all(runtime, %{scope: :reload, path: path, format: registry_format(path)})
+    else
+      emit_embed_skipped(runtime, %{
+        scope: :reload,
+        path: path,
+        format: registry_format(path),
+        reason: reload_skip_reason(runtime)
+      })
+
+      {:ok, runtime}
+    end
   end
 
+  @spec reembed_after_reload?(map(), binary()) :: boolean()
+  def reembed_after_reload?(runtime, path), do: should_reembed_after_reload?(runtime, path)
+
   @spec maybe_embed_action(map(), map()) :: {:ok, term()} | {:error, term()}
-  def maybe_embed_action(%{encoder: nil, registry: registry}, _action), do: {:ok, registry}
+  def maybe_embed_action(%{encoder: nil, registry: registry} = runtime, action) do
+    emit_embed_skipped(runtime, %{
+      scope: :action,
+      action_id: action_id(action),
+      reason: :no_encoder
+    })
+
+    {:ok, registry}
+  end
 
   def maybe_embed_action(runtime, action) do
     action = normalize_or_keep(action)
+    start = System.monotonic_time()
 
-    with id when is_binary(id) <- action["id"],
-         stored when is_map(stored) <- runtime.registry_module.get_action(runtime.registry, id),
-         {:ok, vector} <-
-           EmbeddingRuntime.embed(runtime.encoder, Registry.build_tool_card(stored)),
-         {:ok, registry} <-
-           runtime.registry_module.put_embedding(
-             runtime.registry,
-             id,
-             Nx.backend_transfer(vector)
-           ) do
-      {:ok, registry}
-    else
-      false -> {:ok, runtime.registry}
-      nil -> {:ok, runtime.registry}
-      {:error, _reason} = error -> error
+    case embed_action(runtime, action) do
+      {:ok, registry} ->
+        emit_embed(@embed_event, start, runtime, %{
+          scope: :action,
+          action_id: action["id"],
+          result: :ok
+        })
+
+        {:ok, registry}
+
+      {:skip, reason} ->
+        emit_embed(@embed_event, start, runtime, %{
+          scope: :action,
+          action_id: action["id"],
+          result: :skipped,
+          reason: reason
+        })
+
+        {:ok, runtime.registry}
+
+      {:error, reason} = error ->
+        emit_embed(@embed_event, start, runtime, %{
+          scope: :action,
+          action_id: action["id"],
+          result: :error,
+          reason: reason
+        })
+
+        error
     end
   end
 
@@ -82,13 +127,42 @@ defmodule SpectreKinetic.Planner.Runtime.Embeddings do
     is_nil(runtime.registry_module.embedding_matrix(runtime.registry))
   end
 
-  defp reembed_all(runtime) do
+  defp reembed_all(runtime, metadata) do
+    start = System.monotonic_time()
+
     case runtime.registry_module.tool_cards(runtime.registry) do
       [] ->
+        emit_embed(
+          @embed_event,
+          start,
+          runtime,
+          Map.merge(metadata, %{result: :skipped, reason: :empty_registry})
+        )
+
         {:ok, runtime}
 
       cards ->
-        put_card_embeddings(runtime, cards)
+        case put_card_embeddings(runtime, cards) do
+          {:ok, runtime} = ok ->
+            emit_embed(
+              @embed_event,
+              start,
+              runtime,
+              Map.merge(metadata, %{result: :ok, embedded_count: length(cards)})
+            )
+
+            ok
+
+          {:error, reason} = error ->
+            emit_embed(
+              @embed_event,
+              start,
+              runtime,
+              Map.merge(metadata, %{result: :error, reason: reason})
+            )
+
+            error
+        end
     end
   end
 
@@ -112,10 +186,66 @@ defmodule SpectreKinetic.Planner.Runtime.Embeddings do
     end)
   end
 
+  defp embed_action(runtime, action) do
+    with id when is_binary(id) <- action["id"],
+         stored when is_map(stored) <- runtime.registry_module.get_action(runtime.registry, id),
+         {:ok, vector} <-
+           EmbeddingRuntime.embed(runtime.encoder, Registry.build_tool_card(stored)),
+         {:ok, registry} <-
+           runtime.registry_module.put_embedding(
+             runtime.registry,
+             id,
+             Nx.backend_transfer(vector)
+           ) do
+      {:ok, registry}
+    else
+      false -> {:skip, :missing_action_id}
+      nil -> {:skip, :action_not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp normalize_or_keep(action) do
     case Registry.normalize_action(action) do
       {:ok, normalized} -> normalized
       {:error, _reason} -> action
     end
   end
+
+  defp emit_embed_skipped(runtime, metadata) do
+    Telemetry.execute(
+      @embed_event,
+      %{duration: 0, action_count: action_count(runtime)},
+      Map.put(metadata, :result, :skipped)
+    )
+  end
+
+  defp emit_embed(event, start, runtime, metadata) do
+    Telemetry.execute(
+      event,
+      %{
+        duration: System.monotonic_time() - start,
+        action_count: action_count(runtime)
+      },
+      metadata
+    )
+  end
+
+  defp loaded_registry_skip_reason(%{encoder: nil}), do: :no_encoder
+  defp loaded_registry_skip_reason(_runtime), do: :embeddings_present
+
+  defp reload_skip_reason(%{encoder: nil}), do: :no_encoder
+  defp reload_skip_reason(_runtime), do: :embeddings_present
+
+  defp registry_format(path) when is_binary(path) do
+    cond do
+      String.ends_with?(path, ".json") -> :json
+      String.ends_with?(path, ".etf") -> :etf
+      true -> :unknown
+    end
+  end
+
+  defp action_count(runtime), do: runtime.registry_module.action_count(runtime.registry)
+  defp action_id(%{"id" => id}) when is_binary(id), do: id
+  defp action_id(_action), do: nil
 end
