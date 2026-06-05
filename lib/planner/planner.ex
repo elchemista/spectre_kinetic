@@ -186,19 +186,19 @@ defmodule SpectreKinetic.Planner do
   defp select_and_map(al_text, scored_candidates, slots, selection_opts) do
     with {:ok, %{candidate: chosen, mapping: mapping, notes: reranker_notes}} <-
            choose_candidate(al_text, scored_candidates, slots, selection_opts) do
-      build_selection_result(chosen, mapping, reranker_notes, scored_candidates, selection_opts)
+      finalize_selection(chosen, mapping, reranker_notes, scored_candidates, selection_opts)
     end
   end
 
-  defp build_selection_result(chosen, mapping, reranker_notes, scored_candidates, selection_opts) do
-    if selected_tool_accepted?(chosen, reranker_notes, selection_opts.tool_threshold) do
+  defp finalize_selection(chosen, mapping, reranker_notes, scored_candidates, selection_opts) do
+    if accepted_selection?(chosen, reranker_notes, selection_opts.tool_threshold) do
       {:ok, mapped_tool_result(chosen, mapping, reranker_notes, scored_candidates)}
     else
       no_tool_result(scored_candidates, selection_opts.tool_threshold)
     end
   end
 
-  defp selected_tool_accepted?(chosen, reranker_notes, tool_threshold) do
+  defp accepted_selection?(chosen, reranker_notes, tool_threshold) do
     chosen.fused_score >= tool_threshold or reranker_notes != []
   end
 
@@ -264,23 +264,34 @@ defmodule SpectreKinetic.Planner do
   defp choose_candidate(al_text, [best | rest] = scored_candidates, slots, selection_opts) do
     primary_mapping = SlotMapper.map_slots(slots, best.action)
 
-    if reranker_fallback?(best, rest, primary_mapping, selection_opts) do
-      rerank_candidates(al_text, scored_candidates, slots, selection_opts, best, primary_mapping)
+    if should_rerank?(best, rest, primary_mapping, selection_opts) do
+      choose_with_reranker(
+        al_text,
+        scored_candidates,
+        slots,
+        selection_opts,
+        best,
+        primary_mapping
+      )
     else
       {:ok, %{candidate: best, mapping: primary_mapping, notes: []}}
     end
   end
 
-  defp reranker_fallback?(best, rest, mapping, selection_opts) do
+  defp should_rerank?(best, rest, mapping, selection_opts) do
     selection_opts.tool_selection_fallback == :reranker and
       not is_nil(selection_opts.reranker) and
       not is_nil(selection_opts.reranker_module) and
-      (best.fused_score < selection_opts.tool_threshold or
-         mapping.missing != [] or
-         candidate_margin(best, rest) <= selection_opts.fallback_margin)
+      reranker_would_help?(best, rest, mapping, selection_opts)
   end
 
-  defp rerank_candidates(
+  defp reranker_would_help?(best, rest, mapping, selection_opts) do
+    best.fused_score < selection_opts.tool_threshold or
+      mapping.missing != [] or
+      candidate_margin(best, rest) <= selection_opts.fallback_margin
+  end
+
+  defp choose_with_reranker(
          al_text,
          scored_candidates,
          slots,
@@ -289,23 +300,11 @@ defmodule SpectreKinetic.Planner do
          primary_mapping
        ) do
     pool = Enum.take(scored_candidates, selection_opts.fallback_top_k)
-
-    pairs =
-      Enum.map(pool, fn candidate ->
-        {al_text, Registry.build_tool_card(candidate.action)}
-      end)
+    pairs = reranker_pairs(al_text, pool)
 
     case selection_opts.reranker_module.score_batch(selection_opts.reranker, pairs) do
       {:ok, scores} ->
-        chosen =
-          pool
-          |> Enum.zip(scores)
-          |> Enum.map(fn {candidate, reranker_score} ->
-            Map.put(candidate, :reranker_score, reranker_score)
-          end)
-          |> Enum.sort_by(&{&1.reranker_score, &1.fused_score}, :desc)
-          |> hd()
-
+        chosen = select_reranked_candidate(pool, scores)
         mapping = SlotMapper.map_slots(slots, chosen.action)
 
         {:ok,
@@ -318,6 +317,22 @@ defmodule SpectreKinetic.Planner do
       {:error, _reason} ->
         {:ok, %{candidate: primary, mapping: primary_mapping, notes: []}}
     end
+  end
+
+  defp reranker_pairs(al_text, candidates) do
+    Enum.map(candidates, fn candidate ->
+      {al_text, Registry.build_tool_card(candidate.action)}
+    end)
+  end
+
+  defp select_reranked_candidate(pool, scores) do
+    pool
+    |> Enum.zip(scores)
+    |> Enum.map(fn {candidate, reranker_score} ->
+      Map.put(candidate, :reranker_score, reranker_score)
+    end)
+    |> Enum.sort_by(&{&1.reranker_score, &1.fused_score}, :desc)
+    |> hd()
   end
 
   defp empty_registry_result do

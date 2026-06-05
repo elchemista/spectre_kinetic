@@ -45,10 +45,7 @@ defmodule SpectreKinetic.Parser do
   """
   @spec normalize(binary()) :: {:ok, binary()} | {:error, validation_error()}
   def normalize(al_text) when is_binary(al_text) do
-    al_text
-    |> String.trim()
-    |> unwrap_all()
-    |> case do
+    case unwrap_all(String.trim(al_text)) do
       {:ok, text} -> {:ok, collapse_whitespace(text)}
       {:error, reason} -> {:error, reason}
     end
@@ -105,33 +102,40 @@ defmodule SpectreKinetic.Parser do
     Map.new(args(al_text), fn {key, value} -> {String.downcase(key), value} end)
   end
 
+  # LLM wrappers arrive like little gift boxes full of chores. Peel one layer,
+  # then check again because models do enjoy nesting the ceremony.
   defp unwrap_all(""), do: {:ok, ""}
 
   defp unwrap_all(text) do
-    text
-    |> unwrap_once()
-    |> unwrap_all_result(text)
+    case unwrap_once(text) do
+      {:ok, ^text} -> {:ok, text}
+      {:ok, next} -> next |> String.trim() |> unwrap_all()
+      {:error, reason} -> {:error, reason}
+    end
   end
-
-  defp unwrap_all_result({:ok, text}, text), do: {:ok, text}
-  defp unwrap_all_result({:ok, next}, _text), do: next |> String.trim() |> unwrap_all()
-  defp unwrap_all_result({:error, reason}, _text), do: {:error, reason}
 
   defp unwrap_once(text) do
-    text
-    |> unwrap_prefixed_al(prefixed_al?(text))
-    |> unwrap_wrapped_tag(wrapped_tag?(text))
-    |> unwrap_wrapped_al_fence(wrapped_al_fence?(text))
+    with {:ok, text} <- unwrap_prefixed_al(text),
+         {:ok, text} <- unwrap_wrapped_tag(text) do
+      unwrap_wrapped_al_fence(text)
+    end
   end
 
-  defp unwrap_prefixed_al(text, true), do: {:ok, text |> strip_prefix_marker() |> String.trim()}
-  defp unwrap_prefixed_al(text, false), do: {:ok, text}
+  defp unwrap_prefixed_al(text) do
+    if prefixed_al?(text) do
+      {:ok, text |> strip_prefix_marker() |> String.trim()}
+    else
+      {:ok, text}
+    end
+  end
 
-  defp unwrap_wrapped_tag({:ok, text}, true), do: unwrap_tag(text)
-  defp unwrap_wrapped_tag(result, _wrapped?), do: result
+  defp unwrap_wrapped_tag(text) do
+    if wrapped_tag?(text), do: unwrap_tag(text), else: {:ok, text}
+  end
 
-  defp unwrap_wrapped_al_fence({:ok, text}, true), do: unwrap_al_fence(text)
-  defp unwrap_wrapped_al_fence(result, _wrapped?), do: result
+  defp unwrap_wrapped_al_fence(text) do
+    if wrapped_al_fence?(text), do: unwrap_al_fence(text), else: {:ok, text}
+  end
 
   defp validate_normalized(""), do: {:error, :empty_al}
 
@@ -176,17 +180,13 @@ defmodule SpectreKinetic.Parser do
   defp unwrap_tag_result(_text, {_open_index, 1}, :nomatch), do: {:error, :unterminated_al_tag}
   defp unwrap_tag_result(text, _open_end, _close_start), do: {:ok, text}
 
-  defp wrapped_al_fence?(text) do
-    text
-    |> opening_fence()
-    |> wrapped_al_fence_result?()
-  end
+  defp wrapped_al_fence?(text), do: opening_fence?(opening_fence(text))
 
-  defp wrapped_al_fence_result?({delimiter, _language, _rest})
+  defp opening_fence?({delimiter, _language, _rest})
        when delimiter in @fence_delimiters,
        do: true
 
-  defp wrapped_al_fence_result?(_result), do: false
+  defp opening_fence?(_result), do: false
 
   defp unwrap_al_fence(text) do
     text

@@ -56,23 +56,24 @@ defmodule SpectreKinetic.Planner.Compiler do
   end
 
   defp load_actions(opts) do
-    case Keyword.get(opts, :actions) do
-      actions when is_list(actions) ->
-        {:ok, actions}
-
-      nil ->
-        with {:ok, registry_json} <- fetch_opt(opts, :registry_json),
-             {:ok, registry} <- ETS.new(registry_json: registry_json) do
-          try do
-            {:ok, ETS.all_actions(registry)}
-          after
-            ETS.close(registry)
-          end
-        end
-
-      _other ->
-        {:error, {:invalid_option, :actions}}
+    case Keyword.fetch(opts, :actions) do
+      {:ok, actions} when is_list(actions) -> {:ok, actions}
+      {:ok, _other} -> {:error, {:invalid_option, :actions}}
+      :error -> load_actions_from_registry_json(opts)
     end
+  end
+
+  defp load_actions_from_registry_json(opts) do
+    with {:ok, registry_json} <- fetch_opt(opts, :registry_json),
+         {:ok, registry} <- ETS.new(registry_json: registry_json) do
+      actions_from_registry(registry)
+    end
+  end
+
+  defp actions_from_registry(registry) do
+    {:ok, ETS.all_actions(registry)}
+  after
+    ETS.close(registry)
   end
 
   defp registry_from_actions(actions) do

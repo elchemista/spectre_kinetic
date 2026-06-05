@@ -21,7 +21,8 @@ defmodule SpectreKinetic.ClassifierPipeline do
   @spec init_specs([module() | {module(), keyword()}]) ::
           {:ok, [Spec.t()]} | {:error, {module(), term()} | term()}
   def init_specs(classifier_specs) when is_list(classifier_specs) do
-    Enum.reduce_while(classifier_specs, {:ok, []}, fn spec, {:ok, acc} ->
+    classifier_specs
+    |> Enum.reduce_while({:ok, []}, fn spec, {:ok, acc} ->
       with {:ok, {module, opts}} <- normalize_declaration(spec),
            {:ok, state} <- init_classifier(module, opts) do
         {:cont, {:ok, [%Spec{module: module, state: state} | acc]}}
@@ -29,11 +30,11 @@ defmodule SpectreKinetic.ClassifierPipeline do
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
-    |> case do
-      {:ok, specs} -> {:ok, Enum.reverse(specs)}
-      {:error, _reason} = error -> error
-    end
+    |> initialized_specs()
   end
+
+  defp initialized_specs({:ok, specs}), do: {:ok, Enum.reverse(specs)}
+  defp initialized_specs({:error, _reason} = error), do: error
 
   @doc """
   Runs classifier specs in order.

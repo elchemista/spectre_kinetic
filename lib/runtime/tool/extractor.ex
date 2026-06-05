@@ -280,15 +280,22 @@ defmodule SpectreKinetic.Tool.Extractor do
   defp arg_types(_function, [], arity), do: List.duplicate("term()", arity)
 
   defp arg_types(function, [spec | _], arity) do
-    function
-    |> Code.Typespec.spec_to_quoted(spec)
-    |> extract_spec_args(function)
-    |> case do
+    spec
+    |> quoted_spec(function)
+    |> arg_types_from_quoted(function, arity)
+  rescue
+    _error -> List.duplicate("term()", arity)
+  end
+
+  defp quoted_spec(spec, function) do
+    Code.Typespec.spec_to_quoted(function, spec)
+  end
+
+  defp arg_types_from_quoted(quoted, function, arity) do
+    case extract_spec_args(quoted, function) do
       nil -> List.duplicate("term()", arity)
       args -> Enum.map(args, &arg_type_string/1)
     end
-  rescue
-    _error -> List.duplicate("term()", arity)
   end
 
   defp extract_spec_args({:"::", _, [{name, _, args}, _return]}, name), do: List.wrap(args)

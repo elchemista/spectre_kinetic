@@ -268,11 +268,11 @@ defmodule SpectreKinetic.PlanContext do
   defp score_at(ranked, index) do
     ranked
     |> Enum.at(index)
-    |> case do
-      nil -> nil
-      item -> item["combined_score"] || item["score"] || item["tool_score"]
-    end
+    |> ranked_score()
   end
+
+  defp ranked_score(nil), do: nil
+  defp ranked_score(item), do: item["combined_score"] || item["score"] || item["tool_score"]
 
   defp score_margin(score, nil) when is_number(score), do: 1.0
   defp score_margin(score, next) when is_number(score) and is_number(next), do: score - next
