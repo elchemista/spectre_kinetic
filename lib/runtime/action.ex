@@ -132,7 +132,7 @@ defmodule SpectreKinetic.Action do
   """
   @spec from_plan(binary(), map(), non_neg_integer() | nil) :: t()
   def from_plan(al, plan, index \\ nil) when is_binary(al) and is_map(plan) do
-    repaired = repair_missing_args(plan, SpectreKinetic.Parser.args(al))
+    repaired = repair_missing_args_from_al(plan, SpectreKinetic.Parser.args(al))
 
     %__MODULE__{
       index: index,
@@ -184,15 +184,17 @@ defmodule SpectreKinetic.Action do
     }
   end
 
-  # Status text crosses a boundary from planner maps and JSON. Keep the allowed
-  # set explicit so unexpected strings cannot create atoms at runtime.
+  # Status text crosses from maps and JSON into the VM. We keep the door narrow;
+  # atoms are forever, and forever is a long time to debug.
   defp normalize_status(other) when is_binary(other) do
     Map.get(@known_statuses, String.downcase(other), :error)
   end
 
   defp normalize_status(other), do: other
 
-  defp repair_missing_args(plan, parsed_args) do
+  # Planner maps come from the noisy side of the world. Repair aliases here,
+  # before callers have to care that `RECIPIENT` and `to` were arguing again.
+  defp repair_missing_args_from_al(plan, parsed_args) do
     missing = plan["missing"] || []
     current_args = plan["args"] || %{}
     normalized_args = Map.new(parsed_args, fn {key, value} -> {String.downcase(key), value} end)
@@ -214,7 +216,7 @@ defmodule SpectreKinetic.Action do
     |> Map.put("args", args)
     |> Map.put("missing", remaining_missing)
     |> Map.put("status", repaired_status(plan["status"], remaining_missing))
-    |> Map.put("notes", cleanup_notes(plan["notes"] || [], recovered_slots))
+    |> Map.put("notes", drop_repaired_unmatched_notes(plan["notes"] || [], recovered_slots))
   end
 
   defp repaired_status(_status, []), do: "ok"
@@ -246,8 +248,8 @@ defmodule SpectreKinetic.Action do
     end)
   end
 
-  # The parser intentionally accepts common natural-language aliases at the
-  # boundary. The action payload still exposes canonical registry arg names.
+  # These aliases are not a second schema. They are the crumbs users and models
+  # leave behind. The public action still exposes canonical registry names.
   defp repair_aliases("to"),
     do: ["recipient", "email", "phone", "number", "target", "destination", "dest"]
 
@@ -259,7 +261,7 @@ defmodule SpectreKinetic.Action do
   defp repair_aliases("branch"), do: ["ref"]
   defp repair_aliases(_missing_arg), do: []
 
-  defp cleanup_notes(notes, recovered_slots) do
+  defp drop_repaired_unmatched_notes(notes, recovered_slots) do
     recovered_slots = MapSet.new(recovered_slots)
 
     Enum.flat_map(notes, fn

@@ -80,9 +80,8 @@ defmodule SpectreKinetic.Extractor do
 
   def scan(_), do: %{clean_text: "", entries: []}
 
-  # The scanner uses reversed accumulators while reading line by line. That is
-  # the idiomatic O(1) list-building shape; `build_result/2` restores the public
-  # order once all input has been consumed.
+  # We build lists backwards because appending line-by-line is how tiny scripts
+  # become tiny regrets. The public result is put back in order at the boundary.
   defp consume_line(line, %{mode: :normal} = state) do
     trimmed = String.trim_leading(line)
     fence_candidate = drop_list_prefix(trimmed)
@@ -107,14 +106,8 @@ defmodule SpectreKinetic.Extractor do
   defp consume_line(line, %{mode: {:al_fence, delimiter, parts}} = state) do
     case parse_fence_close(line, delimiter) do
       {:close, before_close, after_close} ->
-        raw =
-          [before_close | parts]
-          |> Enum.reverse()
-          |> Enum.reject(&(&1 == ""))
-          |> Enum.join("\n")
-
         %{state | mode: :normal}
-        |> add_entry(raw)
+        |> add_entry(multiline_raw(parts, before_close))
         |> continue_after_close(after_close)
 
       :continue ->
@@ -125,14 +118,8 @@ defmodule SpectreKinetic.Extractor do
   defp consume_line(line, %{mode: {:al_tag, parts}} = state) do
     case split_al_close(line) do
       {:ok, before_close, after_close} ->
-        raw =
-          [before_close | parts]
-          |> Enum.reverse()
-          |> Enum.reject(&(&1 == ""))
-          |> Enum.join("\n")
-
         %{state | mode: :normal}
-        |> add_entry(raw)
+        |> add_entry(multiline_raw(parts, before_close))
         |> continue_after_tag_close(after_close)
 
       :not_found ->
@@ -156,20 +143,13 @@ defmodule SpectreKinetic.Extractor do
          clean_lines: clean_lines,
          entries: entries
        }) do
-    build_result(
-      clean_lines,
-      [
-        invalid_entry(parts |> Enum.reverse() |> Enum.join("\n"), :unterminated_al_fence)
-        | entries
-      ]
-    )
+    entry = invalid_entry(parts |> Enum.reverse() |> Enum.join("\n"), :unterminated_al_fence)
+    build_result(clean_lines, [entry | entries])
   end
 
   defp finalize_scan(%{mode: {:al_tag, parts}, clean_lines: clean_lines, entries: entries}) do
-    build_result(
-      clean_lines,
-      [invalid_entry(parts |> Enum.reverse() |> Enum.join("\n"), :unterminated_al_tag) | entries]
-    )
+    entry = invalid_entry(parts |> Enum.reverse() |> Enum.join("\n"), :unterminated_al_tag)
+    build_result(clean_lines, [entry | entries])
   end
 
   defp finalize_scan(%{clean_lines: clean_lines, entries: entries}) do
@@ -202,8 +182,8 @@ defmodule SpectreKinetic.Extractor do
 
   defp handle_tagged_segments_result({:ok, clean_parts, entries}, state) do
     clean_line = IO.iodata_to_binary(Enum.reverse(clean_parts))
-    {:ok, clean_parts, inline_entries} = extract_inline_fence_segments(clean_line, [], [])
-    clean_line = IO.iodata_to_binary(Enum.reverse(clean_parts))
+    {:ok, inline_clean_parts, inline_entries} = extract_inline_fence_segments(clean_line, [], [])
+    clean_line = IO.iodata_to_binary(Enum.reverse(inline_clean_parts))
 
     state
     |> append_entries(entries)
@@ -301,6 +281,13 @@ defmodule SpectreKinetic.Extractor do
   defp add_entry(state, raw), do: append_entry(build_entry(raw), state)
   defp append_entry(entry, state), do: %{state | entries: [entry | state.entries]}
 
+  defp multiline_raw(previous_parts, final_part) do
+    [final_part | previous_parts]
+    |> Enum.reverse()
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+  end
+
   defp build_entry(raw) do
     case SpectreKinetic.Parser.validate(raw) do
       {:ok, al} -> %{raw: raw, al: al, error: nil}
@@ -393,10 +380,9 @@ defmodule SpectreKinetic.Extractor do
   end
 
   defp al_prefixed_candidate(line) do
-    line
-    |> String.trim_leading()
-    |> drop_list_prefix()
-    |> case do
+    candidate = line |> String.trim_leading() |> drop_list_prefix()
+
+    case candidate do
       <<"A", "L", ":", rest::binary>> -> {:ok, String.trim(rest)}
       <<"a", "l", ":", rest::binary>> -> {:ok, String.trim(rest)}
       _ -> :not_al

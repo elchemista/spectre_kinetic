@@ -68,10 +68,30 @@ defmodule SpectreKinetic.ExtractorTest do
 
     assert {:ok, "SEND EMAIL"} = SpectreKinetic.normalize_al("```al SEND EMAIL```")
     assert {:ok, "SEND EMAIL"} = SpectreKinetic.normalize_al("<AL>SEND EMAIL</AL>")
+    assert {:ok, "SEND EMAIL"} = SpectreKinetic.normalize_al("AL: <al>```al SEND EMAIL```</al>")
   end
 
   test "parse_al/1 and validate_al/1 return errors for blank or malformed input" do
     assert {:error, :empty_al} = SpectreKinetic.parse_al("   ")
     assert {:error, :unterminated_al_fence} = SpectreKinetic.validate_al("```al\nSEND EMAIL")
+  end
+
+  test "extract_al_scan/1 handles uppercase multiline tags and inline fences" do
+    scan =
+      SpectreKinetic.extract_al_scan("""
+      Intro text.
+      <AL>
+      INSTALL PACKAGE WITH: PACKAGE="nginx"
+      </AL>
+      1. ```action LIST DIRECTORY WITH: PATH="/tmp"```
+      """)
+
+    assert Enum.map(scan.entries, & &1.al) == [
+             ~s(INSTALL PACKAGE WITH: PACKAGE="nginx"),
+             ~s(LIST DIRECTORY WITH: PATH="/tmp")
+           ]
+
+    assert scan.clean_text =~ "Intro text."
+    refute scan.clean_text =~ "INSTALL PACKAGE"
   end
 end

@@ -132,20 +132,11 @@ defmodule SpectreKinetic.Planner.Runtime do
   """
   @spec reload_registry(t(), binary()) :: {:ok, t()} | {:error, term()}
   def reload_registry(%__MODULE__{} = runtime, path) do
-    registry_module = runtime.registry_module
-
-    loader =
-      cond do
-        String.ends_with?(path, ".json") -> &registry_module.load_json/2
-        String.ends_with?(path, ".etf") -> &registry_module.load_compiled/2
-        true -> nil
-      end
-
-    case loader do
-      nil ->
+    case registry_loader(runtime.registry_module, path) do
+      :unknown ->
         {:error, :unknown_registry_format}
 
-      loader ->
+      {:ok, loader} ->
         case loader.(runtime.registry, path) do
           {:ok, registry} -> maybe_reembed(%{runtime | registry: registry}, path)
           {:error, _reason} = error -> error
@@ -218,76 +209,92 @@ defmodule SpectreKinetic.Planner.Runtime do
   end
 
   defp maybe_load_reranker(opts, reranker_module) do
-    fallback_mode =
-      Keyword.get(opts, :tool_selection_fallback) ||
-        Keyword.get(RuntimeConfig.default_plan_options(), :tool_selection_fallback, :disabled)
-
-    cond do
-      runtime = Keyword.get(opts, :reranker) ->
+    case {Keyword.get(opts, :reranker), fallback_mode(opts)} do
+      {runtime, _mode} when not is_nil(runtime) ->
         {:ok, runtime}
 
-      fallback_mode != :reranker ->
+      {_runtime, mode} when mode != :reranker ->
         {:ok, nil}
 
-      true ->
-        case RuntimeConfig.resolve_optional_path(
-               opts,
-               :fallback_model_dir,
-               :fallback_model_dir,
-               "SPECTRE_KINETIC_FALLBACK_MODEL_DIR"
-             ) do
-          nil -> {:ok, nil}
-          fallback_model_dir -> reranker_module.load(fallback_model_dir: fallback_model_dir)
-        end
+      {_runtime, :reranker} ->
+        load_optional_reranker(opts, reranker_module)
     end
   end
 
   defp maybe_embed_registry(runtime, opts) do
-    source =
-      RuntimeConfig.resolve_optional_path(
-        opts,
-        :registry_json,
-        :registry_json,
-        "SPECTRE_KINETIC_REGISTRY_JSON"
-      )
-
-    compiled =
-      RuntimeConfig.resolve_optional_path(
-        opts,
-        :compiled_registry,
-        :compiled_registry,
-        "SPECTRE_KINETIC_COMPILED_REGISTRY"
-      )
-
-    cond do
-      is_nil(runtime.encoder) ->
-        {:ok, runtime}
-
-      source && is_nil(compiled) ->
-        reembed_all(runtime)
-
-      is_nil(runtime.registry_module.embedding_matrix(runtime.registry)) ->
-        reembed_all(runtime)
-
-      true ->
-        {:ok, runtime}
-    end
+    if should_embed_loaded_registry?(runtime, opts),
+      do: reembed_all(runtime),
+      else: {:ok, runtime}
   end
 
   defp maybe_reembed(runtime, path) do
+    if should_reembed_after_reload?(runtime, path),
+      do: reembed_all(runtime),
+      else: {:ok, runtime}
+  end
+
+  defp registry_loader(registry_module, path) do
     cond do
-      is_nil(runtime.encoder) ->
-        {:ok, runtime}
-
-      String.ends_with?(path, ".json") ->
-        reembed_all(runtime)
-
-      is_nil(runtime.registry_module.embedding_matrix(runtime.registry)) ->
-        reembed_all(runtime)
-
-      true ->
-        {:ok, runtime}
+      String.ends_with?(path, ".json") -> {:ok, &registry_module.load_json/2}
+      String.ends_with?(path, ".etf") -> {:ok, &registry_module.load_compiled/2}
+      true -> :unknown
     end
+  end
+
+  defp fallback_mode(opts) do
+    Keyword.get(opts, :tool_selection_fallback) ||
+      Keyword.get(RuntimeConfig.default_plan_options(), :tool_selection_fallback, :disabled)
+  end
+
+  defp load_optional_reranker(opts, reranker_module) do
+    case RuntimeConfig.resolve_optional_path(
+           opts,
+           :fallback_model_dir,
+           :fallback_model_dir,
+           "SPECTRE_KINETIC_FALLBACK_MODEL_DIR"
+         ) do
+      nil -> {:ok, nil}
+      fallback_model_dir -> reranker_module.load(fallback_model_dir: fallback_model_dir)
+    end
+  end
+
+  # Compiled registries may already carry embeddings. JSON is raw ingredients,
+  # so when an encoder exists we cook the boring matrix now and spare callers.
+  defp should_embed_loaded_registry?(%__MODULE__{encoder: nil}, _opts), do: false
+
+  defp should_embed_loaded_registry?(%__MODULE__{} = runtime, opts) do
+    paths = registry_source_paths(opts)
+
+    (paths.registry_json && is_nil(paths.compiled_registry)) || missing_embeddings?(runtime)
+  end
+
+  defp should_reembed_after_reload?(%__MODULE__{encoder: nil}, _path), do: false
+
+  defp should_reembed_after_reload?(%__MODULE__{} = runtime, path) when is_binary(path) do
+    String.ends_with?(path, ".json") || missing_embeddings?(runtime)
+  end
+
+  defp registry_source_paths(opts) do
+    %{
+      registry_json:
+        RuntimeConfig.resolve_optional_path(
+          opts,
+          :registry_json,
+          :registry_json,
+          "SPECTRE_KINETIC_REGISTRY_JSON"
+        ),
+      compiled_registry:
+        RuntimeConfig.resolve_optional_path(
+          opts,
+          :compiled_registry,
+          :compiled_registry,
+          "SPECTRE_KINETIC_COMPILED_REGISTRY"
+        )
+    }
+  end
+
+  defp missing_embeddings?(runtime) do
+    is_nil(runtime.registry_module.embedding_matrix(runtime.registry))
   end
 
   defp reembed_all(%__MODULE__{} = runtime) do

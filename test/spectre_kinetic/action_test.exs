@@ -35,6 +35,27 @@ defmodule SpectreKinetic.ActionTest do
     assert action.notes == []
   end
 
+  test "from_plan repairs common body and url aliases at the public boundary" do
+    plan = %{
+      "status" => "MISSING_ARGS",
+      "selected_tool" => "Dynamic.Webhook.send/2",
+      "args" => %{},
+      "missing" => ["url", "body"],
+      "notes" => ["unmatched slots: [\"link\", \"message\"]"]
+    }
+
+    action =
+      Action.from_plan(
+        ~s(SEND WEBHOOK WITH: LINK="https://example.com/hook" MESSAGE="deploy failed"),
+        plan
+      )
+
+    assert action.status == :ok
+    assert action.args["url"] == "https://example.com/hook"
+    assert action.args["body"] == "deploy failed"
+    assert action.notes == []
+  end
+
   test "from_plan keeps unrelated unmatched slots in notes" do
     plan = %{
       "status" => "MISSING_ARGS",
