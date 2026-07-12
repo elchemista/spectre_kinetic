@@ -234,7 +234,8 @@ defmodule SpectreKinetic.RuntimeTest do
     {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: email_json)
     active_registry = runtime.registry
 
-    assert {:error, {:invalid_action, 1, :missing_id}} =
+    assert {:error,
+            {:invalid_action, 1, {:invalid_field, "module", :must_be_string}}} =
              SpectreKinetic.reload_registry(runtime, invalid_json)
 
     assert :ets.info(active_registry.actions) != :undefined
