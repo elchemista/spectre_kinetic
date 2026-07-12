@@ -53,8 +53,7 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
       safely(fn ->
         with {:ok, encoder} <- load_encoder(opts),
              {:ok, reranker} <- load_reranker(opts, reranker_module),
-             {:ok, classifiers} <- configured_classifiers(opts, :classifiers),
-             {:ok, chain_classifiers} <- configured_classifiers(opts, :chain_classifiers) do
+             {:ok, classifiers} <- configured_classifiers(opts, :classifiers) do
           {:ok,
            %{
              registry_module: registry_module,
@@ -64,8 +63,7 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
              reranker: reranker,
              allow_empty_registry: Keyword.get(opts, :allow_empty_registry, false),
              defaults: defaults,
-             classifiers: classifiers,
-             chain_classifiers: chain_classifiers
+             classifiers: classifiers
            }}
         end
       end)

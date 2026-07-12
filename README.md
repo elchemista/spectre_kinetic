@@ -488,8 +488,12 @@ LLM responses are often a polite paragraph wrapped around the one useful thing.
   ```al
   LIST DIRECTORY WITH: PATH="/var/log"
   ```
-  """)
+    """)
 ```
+
+Configured action classifiers run independently on each extracted action.
+Kinetic intentionally has no separate `chain_classifiers` pipeline: ordering,
+dependencies, retries, and whole-workflow policy belong to Spectre Directive.
 
 ## Reranker Fallback
 

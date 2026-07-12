@@ -24,8 +24,7 @@ defmodule SpectreKinetic.Planner.Runtime do
     :reranker,
     :allow_empty_registry,
     :defaults,
-    :classifiers,
-    :chain_classifiers
+    :classifiers
   ]
 
   @type t :: %__MODULE__{
@@ -36,8 +35,7 @@ defmodule SpectreKinetic.Planner.Runtime do
           reranker: term() | nil,
           allow_empty_registry: boolean(),
           defaults: keyword(),
-          classifiers: [module() | {module(), keyword()}],
-          chain_classifiers: [module() | {module(), keyword()}]
+          classifiers: [module() | {module(), keyword()}]
         }
 
   @doc """
