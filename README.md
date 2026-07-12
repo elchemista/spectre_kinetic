@@ -178,8 +178,13 @@ embeddings:
 ```bash
 mix spectre.download_encoder \
   --model BAAI/bge-small-en-v1.5 \
+  --revision 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a \
   --out artifacts/encoder
 ```
+
+The revision is an immutable Hugging Face commit SHA. When using the default
+model, omitting `--revision` uses the pinned SHA above; custom models must pass
+their own full commit SHA.
 
 This writes:
 

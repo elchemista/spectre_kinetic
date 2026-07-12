@@ -37,6 +37,7 @@ rows from real planner outputs after the registry is embedded.
 ```bash
 mix spectre.download_encoder \
   --model BAAI/bge-small-en-v1.5 \
+  --revision 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a \
   --out artifacts/encoder
 ```
 
