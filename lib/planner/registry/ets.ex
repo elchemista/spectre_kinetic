@@ -10,6 +10,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
 
   @behaviour SpectreKinetic.Planner.Registry
 
+  alias SpectreKinetic.Artifact
   alias SpectreKinetic.Planner.Registry
 
   require Logger
@@ -82,17 +83,22 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     do: not_owner(owner)
 
   def load_compiled(%__MODULE__{} = registry, path) do
-    case File.read(path) do
-      {:ok, binary} ->
+    case Artifact.read_term(path) do
+      {:ok, bundle} ->
         try do
-          binary
-          |> :erlang.binary_to_term()
+          bundle
           |> normalize_compiled_bundle()
           |> install_compiled_bundle(registry, path)
         rescue
           error ->
             {:error, {:bad_etf, Exception.message(error)}}
         end
+
+      {:error, {:invalid_artifact_term, _error} = reason} ->
+        {:error, {:bad_etf, reason}}
+
+      {:error, {:artifact_too_large, _path, _size, _limit} = reason} ->
+        {:error, reason}
 
       {:error, reason} ->
         {:error, {:file_read, reason}}
