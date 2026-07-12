@@ -146,5 +146,26 @@ defmodule SpectreKinetic.RuntimeConfigTest do
                  tool_selection_fallback: :reranker
                )
     end
+
+    test "rejects oversized AL and pathological slot containers" do
+      assert {:error,
+              {:invalid_request, [%{field: :al, reason: :exceeds_size_limit}]}} =
+               RuntimeConfig.validate_plan_input(String.duplicate("A", 32 * 1_024 + 1), [])
+
+      too_many_slots = Map.new(1..257, &{"slot_#{&1}", &1})
+
+      assert {:error,
+              {:invalid_request,
+               [%{field: :slots, reason: :exceeds_complexity_limit}]}} =
+               RuntimeConfig.validate_request(%{"al" => "RUN TEST", "slots" => too_many_slots})
+
+      deeply_nested =
+        Enum.reduce(1..17, "value", fn index, value -> %{"level_#{index}" => value} end)
+
+      assert {:error,
+              {:invalid_options,
+               [%{field: :slots, reason: :exceeds_complexity_limit}]}} =
+               RuntimeConfig.validate_options(slots: deeply_nested)
+    end
   end
 end

@@ -46,6 +46,12 @@ defmodule SpectreKinetic.RuntimeConfig do
 
   @runtime_path_keys Enum.map(@runtime_path_sources, &elem(&1, 0))
   @runtime_module_keys [:registry_module, :fallback_runtime_module]
+  @max_al_bytes 32 * 1_024
+  @max_slot_depth 16
+  @max_slot_entries 256
+  @max_slot_nodes 4_096
+  @max_slot_string_bytes 64 * 1_024
+  @max_total_slot_string_bytes 1_024 * 1_024
 
   @doc """
   Returns the planner defaults before application config or environment overrides.
@@ -321,23 +327,30 @@ defmodule SpectreKinetic.RuntimeConfig do
   defp parse_fallback_mode_result(_value), do: nil
 
   defp al_issues(al) when is_binary(al) do
-    if String.valid?(al) do
-      case SpectreKinetic.Parser.validate(al) do
-        {:ok, _normalized} -> []
-        {:error, reason} -> [%{field: :al, reason: reason}]
-      end
-    else
-      [%{field: :al, reason: :must_be_utf8_binary}]
+    cond do
+      not String.valid?(al) ->
+        [%{field: :al, reason: :must_be_utf8_binary}]
+
+      byte_size(al) > @max_al_bytes ->
+        [%{field: :al, reason: :exceeds_size_limit}]
+
+      true ->
+        case SpectreKinetic.Parser.validate(al) do
+          {:ok, _normalized} -> []
+          {:error, reason} -> [%{field: :al, reason: reason}]
+        end
     end
   end
 
   defp al_issues(_al), do: [%{field: :al, reason: :must_be_binary}]
 
   defp slots_issues(slots) when is_map(slots) and not is_struct(slots) do
-    if json_compatible_slots?(slots) do
-      []
-    else
-      [%{field: :slots, reason: :must_be_json_compatible_map}]
+    budget = %{nodes: @max_slot_nodes, string_bytes: @max_total_slot_string_bytes}
+
+    case validate_slot_map(slots, 0, budget) do
+      {:ok, _remaining_budget} -> []
+      {:error, :limit} -> [%{field: :slots, reason: :exceeds_complexity_limit}]
+      {:error, :invalid} -> [%{field: :slots, reason: :must_be_json_compatible_map}]
     end
   end
 
@@ -502,41 +515,97 @@ defmodule SpectreKinetic.RuntimeConfig do
     length(keys) != MapSet.size(MapSet.new(keys))
   end
 
-  defp json_compatible_slots?(slots) do
-    Enum.all?(slots, fn {key, value} ->
-      valid_slot_key?(key) and json_compatible_slot_value?(value)
-    end)
+  defp validate_slot_map(_slots, depth, _budget) when depth > @max_slot_depth,
+    do: {:error, :limit}
+
+  defp validate_slot_map(slots, _depth, _budget) when map_size(slots) > @max_slot_entries,
+    do: {:error, :limit}
+
+  defp validate_slot_map(slots, depth, budget) do
+    with {:ok, budget} <- consume_slot_node(budget) do
+      Enum.reduce_while(slots, {:ok, budget}, fn {key, value}, {:ok, remaining} ->
+        with :ok <- validate_slot_key(key),
+             {:ok, next} <- validate_slot_value(value, depth + 1, remaining) do
+          {:cont, {:ok, next}}
+        else
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+    end
   end
 
-  defp valid_slot_key?(key) when is_atom(key), do: true
-  defp valid_slot_key?(key) when is_binary(key), do: String.valid?(key)
-  defp valid_slot_key?(_key), do: false
+  defp validate_slot_key(key) when is_atom(key), do: :ok
 
-  defp json_compatible_slot_value?(nil), do: true
-  defp json_compatible_slot_value?(value) when is_boolean(value), do: true
-  defp json_compatible_slot_value?(value) when is_binary(value), do: String.valid?(value)
-  defp json_compatible_slot_value?(value) when is_atom(value), do: true
-  defp json_compatible_slot_value?(value) when is_integer(value), do: true
+  defp validate_slot_key(key) when is_binary(key) do
+    cond do
+      not String.valid?(key) -> {:error, :invalid}
+      byte_size(key) > @max_slot_string_bytes -> {:error, :limit}
+      true -> :ok
+    end
+  end
 
-  defp json_compatible_slot_value?(value) when is_float(value),
-    do: value == value
+  defp validate_slot_key(_key), do: {:error, :invalid}
 
-  defp json_compatible_slot_value?([]), do: true
+  defp validate_slot_value(_value, depth, _budget) when depth > @max_slot_depth,
+    do: {:error, :limit}
 
-  defp json_compatible_slot_value?([head | tail]),
-    do: json_compatible_slot_value?(head) and json_compatible_slot_list_tail?(tail)
+  defp validate_slot_value(value, _depth, budget)
+       when is_nil(value) or is_boolean(value) or is_atom(value) or is_integer(value),
+       do: consume_slot_node(budget)
 
-  defp json_compatible_slot_value?(value) when is_map(value) and not is_struct(value),
-    do: json_compatible_slots?(value)
+  defp validate_slot_value(value, _depth, budget) when is_float(value) do
+    if finite_float?(value), do: consume_slot_node(budget), else: {:error, :invalid}
+  end
 
-  defp json_compatible_slot_value?(_value), do: false
+  defp validate_slot_value(value, _depth, budget) when is_binary(value) do
+    cond do
+      not String.valid?(value) -> {:error, :invalid}
+      byte_size(value) > @max_slot_string_bytes -> {:error, :limit}
+      true -> consume_slot_string(budget, byte_size(value))
+    end
+  end
 
-  defp json_compatible_slot_list_tail?([]), do: true
+  defp validate_slot_value(value, depth, budget)
+       when is_map(value) and not is_struct(value),
+       do: validate_slot_map(value, depth, budget)
 
-  defp json_compatible_slot_list_tail?([head | tail]),
-    do: json_compatible_slot_value?(head) and json_compatible_slot_list_tail?(tail)
+  defp validate_slot_value(value, depth, budget) when is_list(value) do
+    if length(value) > @max_slot_entries do
+      {:error, :limit}
+    else
+      with {:ok, budget} <- consume_slot_node(budget) do
+        Enum.reduce_while(value, {:ok, budget}, fn item, {:ok, remaining} ->
+          case validate_slot_value(item, depth + 1, remaining) do
+            {:ok, next} -> {:cont, {:ok, next}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+        end)
+      end
+    end
+  end
 
-  defp json_compatible_slot_list_tail?(_improper_tail), do: false
+  defp validate_slot_value(_value, _depth, _budget), do: {:error, :invalid}
+
+  defp consume_slot_node(%{nodes: nodes} = budget) when nodes > 0,
+    do: {:ok, %{budget | nodes: nodes - 1}}
+
+  defp consume_slot_node(_budget), do: {:error, :limit}
+
+  defp consume_slot_string(%{string_bytes: remaining} = budget, size)
+       when size <= remaining do
+    with {:ok, budget} <- consume_slot_node(budget) do
+      {:ok, %{budget | string_bytes: remaining - size}}
+    end
+  end
+
+  defp consume_slot_string(_budget, _size), do: {:error, :limit}
+
+  defp finite_float?(value) do
+    representation = value |> :erlang.float_to_binary([:compact]) |> String.downcase()
+    representation not in ["nan", "inf", "-inf"]
+  rescue
+    _error -> false
+  end
 
   defp validation_result(_scope, []), do: :ok
   defp validation_result(scope, errors), do: {:error, {scope, errors}}
