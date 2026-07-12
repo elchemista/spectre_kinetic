@@ -347,26 +347,36 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
 
   defp json_actions(_decoded), do: {:error, :invalid_registry}
 
+  @spec normalize_actions(term()) :: {:ok, [map()]} | {:error, term()}
   defp normalize_actions(actions) when is_list(actions) do
     if length(actions) > @max_actions do
       {:error, {:too_many_actions, length(actions), @max_actions}}
     else
-      actions
-      |> Enum.with_index()
-      |> Enum.reduce_while({:ok, []}, fn {raw, index}, {:ok, normalized} ->
-        case Registry.normalize_action(raw) do
-          {:ok, action} -> {:cont, {:ok, [action | normalized]}}
-          {:error, reason} -> {:halt, {:error, {:invalid_action, index, reason}}}
-        end
-      end)
-      |> then(fn
-        {:ok, normalized} -> validate_unique_action_ids(Enum.reverse(normalized))
-        {:error, _reason} = error -> error
-      end)
+      normalize_action_list(actions)
     end
   end
 
   defp normalize_actions(_actions), do: {:error, :invalid_registry_actions}
+
+  @spec normalize_action_list([term()]) :: {:ok, [map()]} | {:error, term()}
+  defp normalize_action_list(actions) do
+    actions
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {raw, index}, {:ok, normalized} ->
+      case Registry.normalize_action(raw) do
+        {:ok, action} -> {:cont, {:ok, [action | normalized]}}
+        {:error, reason} -> {:halt, {:error, {:invalid_action, index, reason}}}
+      end
+    end)
+    |> validate_normalized_actions()
+  end
+
+  @spec validate_normalized_actions({:ok, [map()]} | {:error, term()}) ::
+          {:ok, [map()]} | {:error, term()}
+  defp validate_normalized_actions({:ok, normalized}),
+    do: validate_unique_action_ids(Enum.reverse(normalized))
+
+  defp validate_normalized_actions({:error, _reason} = error), do: error
 
   defp validate_unique_action_ids(actions) do
     duplicate_id =
