@@ -219,8 +219,11 @@ defmodule SpectreKinetic.PlannerTest do
     end
 
     test "uses embedding matrix when registry and embedder provide one", %{store: store} do
-      :ok = RegistryStore.put_embedding(store, "Dynamic.Email.send/3", Nx.tensor([0.0, 1.0]))
-      :ok = RegistryStore.put_embedding(store, "Dynamic.Sms.send/2", Nx.tensor([1.0, 0.0]))
+      :ok =
+        install_test_embeddings(store, %{
+          "Dynamic.Sms.send/2" => [1.0, 0.0]
+        })
+
       {:ok, embedder} = FakeEmbedder.start_link([1.0, 0.0])
 
       {:ok, result} =
@@ -234,7 +237,7 @@ defmodule SpectreKinetic.PlannerTest do
     end
 
     test "emits telemetry when embedded retrieval falls back to lexical", %{store: store} do
-      :ok = RegistryStore.put_embedding(store, "Dynamic.Email.send/3", Nx.tensor([0.0, 1.0]))
+      :ok = install_test_embeddings(store)
 
       {result, events} =
         TelemetryHelper.capture([@retrieval_fallback_event], fn ->
@@ -538,6 +541,17 @@ defmodule SpectreKinetic.PlannerTest do
 
     assert {:error, {:invalid_request, [%{field: :al, reason: :invalid_al_verb}]}} =
              Planner.plan("123 SEND MESSAGE", %{})
+  end
+
+  # Production registries expose a matrix only when every action has an
+  # embedding. Keeping the fixture complete prevents tests from depending on a
+  # partial index that would silently exclude valid actions from retrieval.
+  @spec install_test_embeddings(GenServer.server(), %{optional(binary()) => [number()]}) :: :ok
+  defp install_test_embeddings(store, overrides \\ %{}) do
+    Enum.each(test_actions(), fn %{"id" => action_id} ->
+      vector = Map.get(overrides, action_id, [0.0, 1.0])
+      :ok = RegistryStore.put_embedding(store, action_id, Nx.tensor(vector))
+    end)
   end
 
   defp test_actions do
