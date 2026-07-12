@@ -90,7 +90,9 @@ defmodule SpectreKinetic.RegistryValidationTest do
              })
 
     assert {:error, {:invalid_field, "doc", :exceeds_size_limit}} =
-             Registry.normalize_action(%{action() | "doc" => String.duplicate("x", 65_537)})
+             action()
+             |> Map.put("doc", String.duplicate("x", 65_537))
+             |> Registry.normalize_action()
 
     assert ETS.action_count(registry) == 1
   end
