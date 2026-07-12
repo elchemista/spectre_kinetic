@@ -282,26 +282,34 @@ defmodule SpectreKinetic.Planner.Registry do
   defp action_id(_id, _module_name, _function_name, _arity),
     do: {:error, {:invalid_field, "id", :must_be_string}}
 
+  @spec normalize_args(term()) :: {:ok, [map()]} | {:error, term()}
   defp normalize_args(args) when is_list(args) do
     if list_exceeds_limit?(args, @max_args) do
       {:error, {:invalid_field, "args", :too_many_entries}}
     else
-      args
-      |> Enum.with_index()
-      |> Enum.reduce_while({:ok, []}, fn {arg, index}, {:ok, normalized} ->
-        case normalize_arg(arg, index) do
-          {:ok, next} -> {:cont, {:ok, [next | normalized]}}
-          {:error, _reason} = error -> {:halt, error}
-        end
-      end)
-      |> then(fn
-        {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
-        {:error, _reason} = error -> error
-      end)
+      normalize_arg_list(args)
     end
   end
 
   defp normalize_args(_args), do: {:error, {:invalid_field, "args", :must_be_list}}
+
+  @spec normalize_arg_list([term()]) :: {:ok, [map()]} | {:error, term()}
+  defp normalize_arg_list(args) do
+    args
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {arg, index}, {:ok, normalized} ->
+      case normalize_arg(arg, index) do
+        {:ok, next} -> {:cont, {:ok, [next | normalized]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> reverse_normalized_list()
+  end
+
+  @spec reverse_normalized_list({:ok, [term()]} | {:error, term()}) ::
+          {:ok, [term()]} | {:error, term()}
+  defp reverse_normalized_list({:ok, normalized}), do: {:ok, Enum.reverse(normalized)}
+  defp reverse_normalized_list({:error, _reason} = error), do: error
 
   defp normalize_arg(arg, index) when is_map(arg) do
     arg = stringify_map(arg)
