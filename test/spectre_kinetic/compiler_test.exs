@@ -18,6 +18,10 @@ defmodule SpectreKinetic.Planner.CompilerTest do
     def embed_batch(:fake, _texts), do: {:error, :embedding_failed}
   end
 
+  defmodule UnexpectedLoadEmbedding do
+    def load(encoder_model_dir: "test://compiler"), do: :loaded_without_tuple
+  end
+
   test "compile/1 rejects non-list inline actions before loading artifacts" do
     assert {:error, {:invalid_option, :actions}} =
              Compiler.compile(actions: :nope, encoder_model_dir: "unused", output: "unused.etf")
@@ -83,6 +87,38 @@ defmodule SpectreKinetic.Planner.CompilerTest do
     assert Path.wildcard(Path.join(Path.dirname(output), ".existing.etf.tmp-*")) == []
   end
 
+  test "compile/1 closes its ETS registry when an inline action is invalid" do
+    table_count = owned_table_count()
+    output = temp_path("invalid-action.etf")
+
+    assert {:error, _reason} =
+             Compiler.compile(
+               actions: [action(), %{}],
+               encoder_model_dir: "test://compiler",
+               output: output,
+               embedding_module: FakeEmbedding
+             )
+
+    assert owned_table_count() == table_count
+    refute File.exists?(output)
+  end
+
+  test "compile/1 rejects unexpected embedding loader returns and closes ETS" do
+    table_count = owned_table_count()
+    output = temp_path("invalid-loader-return.etf")
+
+    assert {:error, {:invalid_embedding_load_result, :loaded_without_tuple}} =
+             Compiler.compile(
+               actions: [action()],
+               encoder_model_dir: "test://compiler",
+               output: output,
+               embedding_module: UnexpectedLoadEmbedding
+             )
+
+    assert owned_table_count() == table_count
+    refute File.exists?(output)
+  end
+
   defp action do
     %{
       id: "Example.run/0",
@@ -104,5 +140,10 @@ defmodule SpectreKinetic.Planner.CompilerTest do
     File.mkdir_p!(root)
     on_exit(fn -> File.rm_rf(root) end)
     Path.join(root, file_name)
+  end
+
+  defp owned_table_count do
+    owner = self()
+    Enum.count(:ets.all(), fn table -> :ets.info(table, :owner) == owner end)
   end
 end

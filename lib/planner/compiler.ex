@@ -53,8 +53,7 @@ defmodule SpectreKinetic.Planner.Compiler do
 
     with {:ok, registry} <- registry_from_actions(actions) do
       try do
-        with {:ok, embedder} <-
-               embedding_module.load(encoder_model_dir: encoder_model_dir) do
+        with {:ok, embedder} <- load_embedder(embedding_module, encoder_model_dir) do
           do_compile(registry, embedder, output_path, batch_size, embedding_module)
         end
       rescue
@@ -64,6 +63,14 @@ defmodule SpectreKinetic.Planner.Compiler do
       after
         ETS.close(registry)
       end
+    end
+  end
+
+  defp load_embedder(embedding_module, encoder_model_dir) do
+    case embedding_module.load(encoder_model_dir: encoder_model_dir) do
+      {:ok, embedder} -> {:ok, embedder}
+      {:error, _reason} = error -> error
+      other -> {:error, {:invalid_embedding_load_result, other}}
     end
   end
 
@@ -120,9 +127,28 @@ defmodule SpectreKinetic.Planner.Compiler do
 
   defp registry_from_actions(actions) do
     case ETS.new() do
-      {:ok, registry} -> add_actions_to_registry(registry, actions)
+      {:ok, registry} -> populate_registry(registry, actions)
       {:error, _reason} = error -> error
     end
+  end
+
+  defp populate_registry(registry, actions) do
+    case add_actions_to_registry(registry, actions) do
+      {:ok, _registry} = ok ->
+        ok
+
+      {:error, _reason} = error ->
+        ETS.close(registry)
+        error
+    end
+  rescue
+    error ->
+      ETS.close(registry)
+      {:error, {:registry_population_failed, Exception.message(error)}}
+  catch
+    kind, reason ->
+      ETS.close(registry)
+      {:error, {:registry_population_failed, {kind, reason}}}
   end
 
   defp add_actions_to_registry(registry, actions) do
