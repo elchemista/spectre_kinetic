@@ -52,12 +52,16 @@ defmodule SpectreKinetic.Artifact do
   def read_json(path, opts \\ []) when is_binary(path) and is_list(opts) do
     max_bytes = max_bytes(opts, :max_bytes, @default_json_max_bytes)
 
-    with {:ok, json} <- read_limited(path, max_bytes),
-         {:ok, decoded} <- Jason.decode(json) do
-      {:ok, decoded}
-    else
+    with {:ok, json} <- read_limited(path, max_bytes) do
+      decode_json(json)
+    end
+  end
+
+  @spec decode_json(binary()) :: {:ok, term()} | {:error, decode_error()}
+  defp decode_json(json) do
+    case Jason.decode(json) do
+      {:ok, decoded} -> {:ok, decoded}
       {:error, %Jason.DecodeError{} = error} -> {:error, {:invalid_artifact_json, error}}
-      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -78,6 +82,8 @@ defmodule SpectreKinetic.Artifact do
     end
   end
 
+  @spec limited_binary(Path.t(), binary(), pos_integer()) ::
+          {:ok, binary()} | {:error, decode_error()}
   defp limited_binary(_path, binary, max_bytes) when byte_size(binary) <= max_bytes,
     do: {:ok, binary}
 
@@ -91,6 +97,8 @@ defmodule SpectreKinetic.Artifact do
   defp validate_size(path, size, max_bytes),
     do: {:error, {:artifact_too_large, path, size, max_bytes}}
 
+  @spec validate_decoded_size(Path.t() | :binary, binary(), pos_integer()) ::
+          :ok | {:error, decode_error()}
   defp validate_decoded_size(source, binary, max_decoded_bytes) do
     decoded_size = declared_decoded_size(binary)
 
@@ -104,6 +112,7 @@ defmodule SpectreKinetic.Artifact do
 
   # COMPRESSED_EXT includes the exact uncompressed external-term size before
   # the zlib stream. Reject it before asking the VM to allocate/decompress it.
+  @spec declared_decoded_size(binary()) :: non_neg_integer()
   defp declared_decoded_size(<<131, 80, size::unsigned-big-integer-size(32), _rest::binary>>),
     do: size
 
