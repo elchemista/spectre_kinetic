@@ -141,7 +141,16 @@ defmodule SpectreKinetic.ClassifierPipeline do
         previous_status
       end
 
-    %{next | status: status}
+    %{
+      next
+      | runtime: previous.runtime,
+        input: previous.input,
+        mode: previous.mode,
+        planner_result: previous.planner_result,
+        metadata: previous.metadata,
+        halted?: previous.halted?,
+        status: status
+    }
   end
 
   defp fail_closed_halt(%PlanContext{status: :ok} = context),
