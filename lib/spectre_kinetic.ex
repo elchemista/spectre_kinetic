@@ -176,7 +176,11 @@ defmodule SpectreKinetic do
          :ok <- validate_chain_source(text) do
       opts = normalize_plan_opts(opts)
       scan = Extractor.scan(text)
-      {:ok, build_chain_from_scan(target, scan, opts)}
+
+      case validate_chain_entries(scan.entries) do
+        :ok -> {:ok, build_chain_from_scan(target, scan, opts)}
+        {:error, _reason} = error -> error
+      end
     end
   end
 
@@ -409,6 +413,15 @@ defmodule SpectreKinetic do
 
   defp validate_chain_lines(_improper, _count, _total_bytes),
     do: chain_validation_error(:must_be_proper_list)
+
+  defp validate_chain_entries(entries), do: validate_chain_entries(entries, 0)
+  defp validate_chain_entries([], _count), do: :ok
+
+  defp validate_chain_entries([_entry | _rest], @max_chain_steps),
+    do: chain_validation_error(:too_many_steps)
+
+  defp validate_chain_entries([_entry | rest], count),
+    do: validate_chain_entries(rest, count + 1)
 
   defp chain_validation_error(reason),
     do: {:error, {:invalid_request, [%{field: :chain, reason: reason}]}}
