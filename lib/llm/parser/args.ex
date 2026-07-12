@@ -17,7 +17,7 @@ defmodule SpectreKinetic.Parser.Args do
 
   @loose_value_stopwords ~w(with via using into onto in on at by for as and or)
 
-  @explicit_arg_pattern ~r/(^|[\s,;])(?<key>[A-Za-z0-9_]+)\s*(?:=|:)\s*(?<value>"[^"]*"|'[^']*'|\{[^}]*\}|[^\s,;]+)/u
+  @explicit_arg_pattern ~r/(^|[\s,;])(?<key>[A-Za-z0-9_]+)\s*(?:=|:)\s*(?<value>"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\{[^}]*\}|[^\s,;]+)/u
   @whitespace_chars [?\s, ?\n, ?\r, ?\t]
 
   @spec split_with_section(binary()) :: {binary(), binary() | nil}
@@ -65,6 +65,10 @@ defmodule SpectreKinetic.Parser.Args do
 
   defp split_quoted_with_section_char(quote, text, index, quote) do
     do_split_with_section(text, index + 1, nil)
+  end
+
+  defp split_quoted_with_section_char(?\\, text, index, quote) do
+    do_split_with_section(text, min(index + 2, byte_size(text)), quote)
   end
 
   defp split_quoted_with_section_char(_char, text, index, quote) do
@@ -151,39 +155,47 @@ defmodule SpectreKinetic.Parser.Args do
     text
     |> String.trim()
     |> String.to_charlist()
-    |> Enum.reduce({[], [], nil}, &collect_arg_token/2)
+    |> Enum.reduce({[], [], nil, false}, &collect_arg_token/2)
     |> finalize_arg_tokens()
   end
 
   # Tokenization keeps quoted values together. We only track one quote char
   # because this is AL cleanup, not a new programming language. Please no.
-  defp collect_arg_token(char, {tokens, current, nil})
+  defp collect_arg_token(char, {tokens, current, nil, _escaped?})
        when char in [?\s, ?\n, ?\r, ?\t, ?,, ?;] do
-    push_arg_token(tokens, current, nil)
+    push_arg_token(tokens, current, nil, false)
   end
 
-  defp collect_arg_token(char, {tokens, current, nil}) when char in [?", ?'] do
-    {tokens, [char | current], char}
+  defp collect_arg_token(char, {tokens, current, nil, _escaped?}) when char in [?", ?'] do
+    {tokens, [char | current], char, false}
   end
 
-  defp collect_arg_token(char, {tokens, current, quote}) when char == quote do
-    {tokens, [char | current], nil}
+  defp collect_arg_token(char, {tokens, current, quote, true}) do
+    {tokens, [char | current], quote, false}
   end
 
-  defp collect_arg_token(char, {tokens, current, quote}) do
-    {tokens, [char | current], quote}
+  defp collect_arg_token(?\\, {tokens, current, quote, false}) when quote in [?", ?'] do
+    {tokens, [?\\ | current], quote, true}
   end
 
-  defp finalize_arg_tokens({tokens, current, _quote}) do
+  defp collect_arg_token(char, {tokens, current, quote, false}) when char == quote do
+    {tokens, [char | current], nil, false}
+  end
+
+  defp collect_arg_token(char, {tokens, current, quote, false}) do
+    {tokens, [char | current], quote, false}
+  end
+
+  defp finalize_arg_tokens({tokens, current, _quote, _escaped?}) do
     tokens
     |> append_arg_token(current)
     |> Enum.reverse()
   end
 
-  defp push_arg_token(tokens, [], _quote), do: {tokens, [], nil}
+  defp push_arg_token(tokens, [], _quote, _escaped?), do: {tokens, [], nil, false}
 
-  defp push_arg_token(tokens, current, quote) do
-    {append_arg_token(tokens, current), [], quote}
+  defp push_arg_token(tokens, current, quote, escaped?) do
+    {append_arg_token(tokens, current), [], quote, escaped?}
   end
 
   defp append_arg_token(tokens, current) do
@@ -201,14 +213,30 @@ defmodule SpectreKinetic.Parser.Args do
     trimmed = String.trim(value)
     closing = <<quote>>
 
-    if String.ends_with?(trimmed, closing) do
-      body_size = byte_size(trimmed) - 1
-      binary_part(trimmed, 0, body_size)
-    else
-      trimmed
-    end
-    |> trim_terminal_punctuation()
+    body =
+      if String.ends_with?(trimmed, closing) do
+        body_size = byte_size(trimmed) - 1
+        binary_part(trimmed, 0, body_size)
+      else
+        trimmed
+      end
+
+    unescape_quoted(body, quote, [])
   end
+
+  defp unescape_quoted("", _quote, acc),
+    do: acc |> Enum.reverse() |> IO.iodata_to_binary()
+
+  defp unescape_quoted(<<?\\, char, rest::binary>>, quote, acc)
+       when char == quote or char == ?\\ do
+    unescape_quoted(rest, quote, [<<char>> | acc])
+  end
+
+  defp unescape_quoted(<<?\\, rest::binary>>, quote, acc),
+    do: unescape_quoted(rest, quote, [<<?\\>> | acc])
+
+  defp unescape_quoted(<<char::utf8, rest::binary>>, quote, acc),
+    do: unescape_quoted(rest, quote, [<<char::utf8>> | acc])
 
   defp trim_terminal_punctuation(text), do: String.trim(text, " ;,.")
 

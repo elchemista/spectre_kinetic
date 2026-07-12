@@ -67,6 +67,28 @@ defmodule SpectreKinetic.ParserTest do
              SpectreKinetic.parse_al("SEND ME EMAIL to yuriy.zhar@gmail.com")
   end
 
+  test "quoted values preserve punctuation and support escaped quotes" do
+    assert %{args: %{"BODY" => ~S(Hello, world. "quoted" C:\tmp)}} =
+             SpectreKinetic.parse_al(
+               ~S(SEND MESSAGE WITH: BODY="Hello, world. \"quoted\" C:\\tmp")
+             )
+
+    assert %{args: %{"BODY" => "Ship it, please."}} =
+             SpectreKinetic.parse_al(~S(SEND MESSAGE BODY "Ship it, please."))
+  end
+
+  test "escaped quotes keep WITH inside a value from becoming a section marker" do
+    assert %{
+             args: %{
+               "SUBJECT" => ~S(Working "WITH" teams),
+               "BODY" => "hello"
+             }
+           } =
+             SpectreKinetic.parse_al(
+               ~S(SEND MESSAGE SUBJECT="Working \"WITH\" teams" BODY="hello")
+             )
+  end
+
   defp parser_examples do
     explicit_examples =
       for {key, value} <- @explicit_fields,

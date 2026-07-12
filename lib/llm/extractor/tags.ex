@@ -1,6 +1,8 @@
 defmodule SpectreKinetic.Extractor.Tags do
   @moduledoc false
 
+  @open_tag_pattern ~r/<al(?:\s+[^>]*)?>/iu
+
   # XML-ish <al> segments inside one line. The scanner handles multi-line state;
   # this module only cuts a line into clean text plus raw AL candidates.
 
@@ -57,33 +59,19 @@ defmodule SpectreKinetic.Extractor.Tags do
   end
 
   defp split_open(line) do
-    lower = String.downcase(line)
-
-    case :binary.match(lower, "<al") do
-      {open_index, _size} ->
-        split_open_at(line, lower, open_index)
-
-      :nomatch ->
-        :not_found
-    end
-  end
-
-  # We match using a lowercase copy but slice from the original line, because
-  # callers expect clean text and raw AL to preserve casing. Boring detail,
-  # important result.
-  defp split_open_at(line, lower, open_index) do
-    rest = binary_part(line, open_index, byte_size(line) - open_index)
-    lower_rest = binary_part(lower, open_index, byte_size(lower) - open_index)
-
-    case :binary.match(lower_rest, ">") do
-      {gt_index, 1} ->
+    case Regex.run(@open_tag_pattern, line, return: :index) do
+      [{open_index, open_size}] ->
         {
           :ok,
           binary_part(line, 0, open_index),
-          binary_part(rest, gt_index + 1, byte_size(rest) - gt_index - 1)
+          binary_part(
+            line,
+            open_index + open_size,
+            byte_size(line) - open_index - open_size
+          )
         }
 
-      :nomatch ->
+      nil ->
         :not_found
     end
   end

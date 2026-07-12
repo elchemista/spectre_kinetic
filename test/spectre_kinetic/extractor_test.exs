@@ -71,6 +71,20 @@ defmodule SpectreKinetic.ExtractorTest do
     assert {:ok, "SEND EMAIL"} = SpectreKinetic.normalize_al("AL: <al>```al SEND EMAIL```</al>")
   end
 
+  test "AL tags require an exact tag name" do
+    response = """
+    <algorithm>Keep this prose intact.</algorithm>
+    <al>SEND EMAIL WITH: TO="dev@example.com"</al>
+    """
+
+    assert {clean_text, [~s(SEND EMAIL WITH: TO="dev@example.com")]} =
+             SpectreKinetic.extract_al(response)
+
+    assert clean_text =~ "<algorithm>"
+    assert {:error, :invalid_al_verb} = SpectreKinetic.validate_al("<alpine>SEND EMAIL</al>")
+    assert {:error, :unterminated_al_tag} = SpectreKinetic.validate_al("<al>SEND EMAIL")
+  end
+
   test "parse_al/1 and validate_al/1 return errors for blank or malformed input" do
     assert {:error, :empty_al} = SpectreKinetic.parse_al("   ")
     assert {:error, :unterminated_al_fence} = SpectreKinetic.validate_al("```al\nSEND EMAIL")
