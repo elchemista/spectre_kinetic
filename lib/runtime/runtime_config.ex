@@ -48,6 +48,35 @@ defmodule SpectreKinetic.RuntimeConfig do
 
   @runtime_path_keys Enum.map(@runtime_path_sources, &elem(&1, 0))
   @runtime_module_keys [:registry_module, :fallback_runtime_module]
+  @plan_option_keys Enum.map(@plan_option_sources, &elem(&1, 0))
+  @known_option_keys Enum.uniq(
+                       @plan_option_keys ++
+                         @runtime_path_keys ++
+                         @runtime_module_keys ++
+                         [
+                           :__spectre_mode__,
+                           :actions,
+                           :allow_empty_registry,
+                           :classifiers,
+                           :dictionary,
+                           :embedder,
+                           :embedding_module,
+                           :example_limit,
+                           :extra_rules,
+                           :name,
+                           :output,
+                           :registry,
+                           :registry_backend_opts,
+                           :request,
+                           :reranker,
+                           :reranker_max_length,
+                           :reranker_module,
+                           :reranker_score_index,
+                           :reranker_score_transform,
+                           :slots,
+                           :top_n
+                         ]
+                     )
   @max_al_bytes 32 * 1_024
   @max_request_json_bytes 1_024 * 1_024
   @max_slot_depth 16
@@ -401,7 +430,8 @@ defmodule SpectreKinetic.RuntimeConfig do
   end
 
   defp option_issues(options, source) do
-    slots_issues_if_present(options) ++
+    unknown_option_issues(options) ++
+      slots_issues_if_present(options) ++
       positive_integer_issues(options, :top_k) ++
       probability_issues(options, :tool_threshold) ++
       probability_issues(options, :mapping_threshold) ++
@@ -413,6 +443,14 @@ defmodule SpectreKinetic.RuntimeConfig do
       runtime_module_issues(options) ++
       classifier_issues(options) ++
       boolean_option_issues(options, :allow_empty_registry)
+  end
+
+  defp unknown_option_issues(options) do
+    options
+    |> Map.keys()
+    |> Enum.reject(&(&1 in @known_option_keys))
+    |> Enum.sort()
+    |> Enum.map(&%{field: &1, reason: :unknown_option})
   end
 
   defp slots_issues_if_present(options) do
