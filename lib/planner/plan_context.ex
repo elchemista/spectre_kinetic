@@ -47,6 +47,8 @@ defmodule SpectreKinetic.PlanContext do
     "error" => :error
   }
 
+  @known_status_atoms Map.values(@known_statuses)
+
   defstruct [
     :runtime,
     :input,
@@ -284,8 +286,8 @@ defmodule SpectreKinetic.PlanContext do
     Map.get(@known_statuses, String.downcase(status), :error)
   end
 
-  defp normalize_status(status) when is_atom(status), do: status
-  defp normalize_status(_status), do: :ok
+  defp normalize_status(status) when status in @known_status_atoms, do: status
+  defp normalize_status(_status), do: :error
 
   defp denormalize_status(:ok), do: "ok"
   defp denormalize_status(:no_tool), do: "NO_TOOL"

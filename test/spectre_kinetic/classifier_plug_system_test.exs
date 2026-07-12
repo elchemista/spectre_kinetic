@@ -210,6 +210,7 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
              SpectreKinetic.plan(runtime, ~s(INSTALL PACKAGE WITH: PACKAGE="nginx"))
 
     assert action.halted?
+    assert action.status == :needs_confirmation
     assert action.warnings == ["plug halted"]
     assert action.classifier_results == %{}
     assert Agent.get(call_agent, & &1) == 0
@@ -232,7 +233,7 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
 
     assert [%{metadata: metadata}] = events
     assert metadata.result == :halt
-    assert metadata.status == :ok
+    assert metadata.status == :needs_confirmation
   end
 
   test "classifier run emits error telemetry" do

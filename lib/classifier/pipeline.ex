@@ -5,6 +5,17 @@ defmodule SpectreKinetic.ClassifierPipeline do
 
   alias SpectreKinetic.PlanContext
 
+  @known_statuses [
+    :ok,
+    :no_tool,
+    :missing_args,
+    :ambiguous_mapping,
+    :needs_confirmation,
+    :needs_clarification,
+    :rejected,
+    :error
+  ]
+
   defmodule Spec do
     @moduledoc false
 
@@ -83,9 +94,14 @@ defmodule SpectreKinetic.ClassifierPipeline do
   defp run_classifier(module, state, context) do
     case module.call(context, state) do
       {:ok, %PlanContext{} = new_context} ->
-        {:cont, {:ok, new_context}}
+        {:cont, {:ok, reconcile_status(context, new_context)}}
 
       {:halt, %PlanContext{} = halted_context} ->
+        halted_context =
+          context
+          |> reconcile_status(halted_context)
+          |> fail_closed_halt()
+
         {:halt, {:ok, %{halted_context | halted?: true}}}
 
       {:error, reason} ->
@@ -97,4 +113,25 @@ defmodule SpectreKinetic.ClassifierPipeline do
   rescue
     error -> {:halt, {:error, {module, error}}}
   end
+
+  defp reconcile_status(previous, next) do
+    next_status = normalize_classifier_status(next.status)
+
+    status =
+      if next_status == :ok and previous.status != :ok do
+        previous.status
+      else
+        next_status
+      end
+
+    %{next | status: status}
+  end
+
+  defp fail_closed_halt(%PlanContext{status: :ok} = context),
+    do: %{context | status: :needs_confirmation}
+
+  defp fail_closed_halt(context), do: context
+
+  defp normalize_classifier_status(status) when status in @known_statuses, do: status
+  defp normalize_classifier_status(_status), do: :error
 end
