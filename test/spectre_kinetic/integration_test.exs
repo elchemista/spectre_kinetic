@@ -362,7 +362,7 @@ defmodule SpectreKinetic.IntegrationTest do
 
   test "uses configured tool threshold by default" do
     previous = Application.get_env(:spectre_kinetic, :tool_threshold)
-    Application.put_env(:spectre_kinetic, :tool_threshold, 1.1)
+    Application.put_env(:spectre_kinetic, :tool_threshold, 1.0)
 
     on_exit(fn ->
       if is_nil(previous) do
