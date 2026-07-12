@@ -15,6 +15,8 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
 
   require Logger
 
+  @compiled_bundle_version 1
+
   defstruct [:actions, :aliases, :embeddings, :meta, :owner]
 
   @type t :: %__MODULE__{
@@ -303,17 +305,28 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   defp normalize_actions(_actions), do: {:error, :invalid_registry_actions}
 
   defp normalize_compiled_bundle(bundle) when is_map(bundle) do
-    with {:ok, raw_actions} <- Map.fetch(bundle, :actions),
+    with {:ok, version} <- fetch_bundle_field(bundle, :version),
+         :ok <- validate_bundle_version(version),
+         {:ok, raw_actions} <- fetch_bundle_field(bundle, :actions),
          {:ok, actions} <- normalize_actions(raw_actions),
          {:ok, embedding_entries} <- compiled_embedding_entries(bundle, actions) do
       {:ok, actions, embedding_entries}
-    else
-      :error -> {:error, :missing_actions}
-      {:error, _reason} = error -> error
     end
   end
 
   defp normalize_compiled_bundle(_bundle), do: {:error, :invalid_bundle}
+
+  defp fetch_bundle_field(bundle, key) do
+    case Map.fetch(bundle, key) do
+      {:ok, value} -> {:ok, value}
+      :error -> {:error, {:missing_bundle_field, key}}
+    end
+  end
+
+  defp validate_bundle_version(@compiled_bundle_version), do: :ok
+
+  defp validate_bundle_version(version),
+    do: {:error, {:unsupported_bundle_version, version, @compiled_bundle_version}}
 
   defp compiled_embedding_entries(bundle, actions) do
     embeddings = Map.get(bundle, :tool_embeddings, [])
@@ -327,13 +340,40 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
       length(embeddings) != length(action_ids) ->
         {:error, :embedding_count_mismatch}
 
+      Enum.any?(action_ids, &(not is_binary(&1))) ->
+        {:error, :invalid_embedding_action_id}
+
+      length(Enum.uniq(action_ids)) != length(action_ids) ->
+        {:error, :duplicate_embedding_action}
+
       Enum.any?(action_ids, fn action_id -> not MapSet.member?(known_ids, action_id) end) ->
         {:error, :unknown_embedding_action}
 
       true ->
-        {:ok, Enum.zip(embeddings, action_ids)}
+        validate_compiled_embeddings(embeddings, action_ids, Map.get(bundle, :embedding_dim))
     end
   end
+
+  defp validate_compiled_embeddings([], [], embedding_dim)
+       when is_nil(embedding_dim) or
+              (is_integer(embedding_dim) and embedding_dim > 0),
+       do: {:ok, []}
+
+  defp validate_compiled_embeddings(embeddings, action_ids, embedding_dim)
+       when is_integer(embedding_dim) and embedding_dim > 0 do
+    case Enum.find_index(embeddings, &(not valid_embedding?(&1, embedding_dim))) do
+      nil -> {:ok, Enum.zip(embeddings, action_ids)}
+      index -> {:error, {:invalid_embedding, index, embedding_dim}}
+    end
+  end
+
+  defp validate_compiled_embeddings(_embeddings, _action_ids, embedding_dim),
+    do: {:error, {:invalid_embedding_dim, embedding_dim}}
+
+  defp valid_embedding?(%Nx.Tensor{} = tensor, embedding_dim),
+    do: Nx.shape(tensor) == {embedding_dim}
+
+  defp valid_embedding?(_embedding, _embedding_dim), do: false
 
   defp install_compiled_bundle(
          {:ok, actions, embedding_entries},

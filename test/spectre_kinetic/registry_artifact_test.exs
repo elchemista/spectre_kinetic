@@ -32,6 +32,51 @@ defmodule SpectreKinetic.RegistryArtifactTest do
     assert :ok = ETS.close(registry)
   end
 
+  test "compiled registries enforce bundle versions before installation" do
+    {:ok, registry} = ETS.new()
+    path = temp_path("wrong-version.etf")
+
+    write_bundle(path, %{version: 2, actions: [action()]})
+
+    assert {:error, {:unsupported_bundle_version, 2, 1}} =
+             ETS.load_compiled(registry, path)
+
+    write_bundle(path, %{actions: [action()]})
+
+    assert {:error, {:missing_bundle_field, :version}} =
+             ETS.load_compiled(registry, path)
+
+    assert ETS.action_count(registry) == 0
+    assert :ok = ETS.close(registry)
+  end
+
+  test "compiled registries reject incoherent embedding metadata" do
+    {:ok, registry} = ETS.new()
+    path = temp_path("bad-embeddings.etf")
+
+    write_bundle(path, %{
+      version: 1,
+      actions: [action()],
+      action_ids: ["Example.run/0", "Example.run/0"],
+      tool_embeddings: [Nx.tensor([1.0, 0.0]), Nx.tensor([0.0, 1.0])],
+      embedding_dim: 2
+    })
+
+    assert {:error, :duplicate_embedding_action} = ETS.load_compiled(registry, path)
+
+    write_bundle(path, %{
+      version: 1,
+      actions: [action()],
+      action_ids: ["Example.run/0"],
+      tool_embeddings: [Nx.tensor([[1.0, 0.0]])],
+      embedding_dim: 2
+    })
+
+    assert {:error, {:invalid_embedding, 0, 2}} = ETS.load_compiled(registry, path)
+    assert ETS.action_count(registry) == 0
+    assert :ok = ETS.close(registry)
+  end
+
   defp action do
     %{
       id: "Example.run/0",
@@ -41,6 +86,16 @@ defmodule SpectreKinetic.RegistryArtifactTest do
       args: [],
       examples: ["RUN EXAMPLE"]
     }
+  end
+
+  defp write_bundle(path, fields) do
+    bundle =
+      Map.merge(
+        %{action_ids: [], tool_embeddings: [], embedding_dim: nil},
+        fields
+      )
+
+    File.write!(path, :erlang.term_to_binary(bundle, [:compressed]))
   end
 
   defp temp_path(file_name) do
