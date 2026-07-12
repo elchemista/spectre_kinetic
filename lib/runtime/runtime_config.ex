@@ -468,6 +468,7 @@ defmodule SpectreKinetic.RuntimeConfig do
     end
   end
 
+  @spec probability_issues(map(), atom()) :: [validation_issue()]
   defp probability_issues(options, key) do
     case Map.fetch(options, key) do
       :error -> []
@@ -476,8 +477,11 @@ defmodule SpectreKinetic.RuntimeConfig do
     end
   end
 
+  @spec probability_value_issues(atom(), number()) :: [validation_issue()]
   defp probability_value_issues(key, value) do
-    if value == value and value >= 0.0 and value <= 1.0 do
+    finite? = is_integer(value) or finite_float?(value)
+
+    if finite? and value >= 0.0 and value <= 1.0 do
       []
     else
       [%{field: key, reason: :must_be_probability}]
@@ -703,6 +707,7 @@ defmodule SpectreKinetic.RuntimeConfig do
 
   defp consume_slot_string(_budget, _size), do: {:error, :limit}
 
+  @spec finite_float?(float()) :: boolean()
   defp finite_float?(value) do
     representation = value |> :erlang.float_to_binary([:compact]) |> String.downcase()
     representation not in ["nan", "inf", "-inf"]

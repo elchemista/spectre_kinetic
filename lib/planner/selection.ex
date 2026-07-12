@@ -285,14 +285,25 @@ defmodule SpectreKinetic.Planner.Selection do
     end
   end
 
-  # The range check rejects infinities and NaN in addition to ordinary
-  # out-of-range values. NaN is never equal to itself and cannot satisfy both
-  # bounds.
-  defp valid_probability?(score) when is_number(score) do
-    score == score and score >= 0.0 and score <= 1.0
+  @spec valid_probability?(term()) :: boolean()
+  defp valid_probability?(score) when is_integer(score), do: score in 0..1
+
+  defp valid_probability?(score) when is_float(score) do
+    finite_float?(score) and score >= 0.0 and score <= 1.0
   end
 
   defp valid_probability?(_score), do: false
+
+  # Model scores can originate in a NIF-backed tensor. Check the serialized
+  # representation instead of relying on a self-comparison that Dialyzer
+  # correctly treats as tautological for ordinary BEAM numbers.
+  @spec finite_float?(float()) :: boolean()
+  defp finite_float?(value) do
+    representation = value |> :erlang.float_to_binary([:compact]) |> String.downcase()
+    representation not in ["nan", "inf", "-inf"]
+  rescue
+    _error -> false
+  end
 
   defp reranker_pairs(al_text, candidates) do
     Enum.map(candidates, fn candidate ->
