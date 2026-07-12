@@ -16,6 +16,7 @@ defmodule SpectreKinetic.Reranker.Trainer do
   alias SpectreKinetic.Planner.EmbeddingRuntime
   alias SpectreKinetic.Reranker.Calibration
   alias SpectreKinetic.Reranker.FeatureBuilder
+  alias SpectreKinetic.Training.Options
 
   @default_hidden_dim 128
   @default_batch_size 32
@@ -49,6 +50,7 @@ defmodule SpectreKinetic.Reranker.Trainer do
     embedding_module = Keyword.get(opts, :embedding_module, EmbeddingRuntime)
 
     with {:ok, config} <- training_config(opts),
+         :ok <- validate_examples(examples),
          {:ok, embedder} <- embedding_module.load(encoder_model_dir: config.encoder_model_dir),
          {:ok, features} <-
            FeatureBuilder.build_matrix(
@@ -108,17 +110,53 @@ defmodule SpectreKinetic.Reranker.Trainer do
   @spec training_config(keyword()) :: {:ok, train_config()} | {:error, term()}
   defp training_config(opts) do
     with {:ok, encoder_model_dir} <- fetch_opt(opts, :encoder_model_dir),
-         {:ok, output_dir} <- fetch_opt(opts, :output_dir) do
+         {:ok, output_dir} <- fetch_opt(opts, :output_dir),
+         :ok <- Options.validate_path(encoder_model_dir, :encoder_model_dir),
+         :ok <- Options.validate_path(output_dir, :output_dir),
+         {:ok, values} <-
+           Options.validate(opts,
+             hidden_dim: @default_hidden_dim,
+             batch_size: @default_batch_size,
+             epochs: @default_epochs,
+             learning_rate: @default_learning_rate
+           ) do
       {:ok,
        %{
          encoder_model_dir: encoder_model_dir,
          output_dir: output_dir,
-         hidden_dim: Keyword.get(opts, :hidden_dim, @default_hidden_dim),
-         batch_size: Keyword.get(opts, :batch_size, @default_batch_size),
-         epochs: Keyword.get(opts, :epochs, @default_epochs),
-         learning_rate: Keyword.get(opts, :learning_rate, @default_learning_rate),
-         loop_opts: trainer_loop_opts(opts)
+         hidden_dim: values.hidden_dim,
+         batch_size: values.batch_size,
+         epochs: values.epochs,
+         learning_rate: values.learning_rate,
+         loop_opts: trainer_loop_opts(values.seed)
        }}
+    end
+  end
+
+  defp validate_examples([]), do: {:error, :empty_dataset}
+
+  defp validate_examples(examples) do
+    case Enum.find_index(examples, &(not valid_example?(&1))) do
+      nil -> validate_binary_classes(examples)
+      index -> {:error, {:invalid_training_example, index}}
+    end
+  end
+
+  defp valid_example?(example) when is_map(example) do
+    is_binary(Map.get(example, :query)) and Map.get(example, :query) != "" and
+      is_binary(Map.get(example, :tool_card)) and Map.get(example, :tool_card) != "" and
+      Map.get(example, :label) in [0, 1, false, true]
+  end
+
+  defp valid_example?(_example), do: false
+
+  defp validate_binary_classes(examples) do
+    classes = examples |> Enum.map(&normalize_label(&1.label)) |> MapSet.new()
+
+    if classes == MapSet.new([0.0, 1.0]) do
+      :ok
+    else
+      {:error, {:invalid_dataset, :requires_positive_and_negative_examples}}
     end
   end
 
@@ -182,10 +220,6 @@ defmodule SpectreKinetic.Reranker.Trainer do
     File.write(Path.join(output_dir, file_name), content)
   end
 
-  defp trainer_loop_opts(opts) do
-    case Keyword.fetch(opts, :seed) do
-      {:ok, seed} -> [log: 0, seed: seed]
-      :error -> [log: 0]
-    end
-  end
+  defp trainer_loop_opts(nil), do: [log: 0]
+  defp trainer_loop_opts(seed), do: [log: 0, seed: seed]
 end
