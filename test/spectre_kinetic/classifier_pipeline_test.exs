@@ -87,6 +87,28 @@ defmodule SpectreKinetic.ClassifierPipelineTest do
     assert context.status == :needs_clarification
   end
 
+  test "later classifiers cannot weaken a rejected status" do
+    for weaker_status <- [:needs_clarification, :no_tool] do
+      assert {:ok, context} =
+               ClassifierPipeline.run(context(), [
+                 {StatusClassifier, status: :rejected},
+                 {StatusClassifier, status: weaker_status}
+               ])
+
+      assert context.status == :rejected
+    end
+  end
+
+  test "later classifiers may strengthen a status" do
+    assert {:ok, context} =
+             ClassifierPipeline.run(context(), [
+               {StatusClassifier, status: :needs_confirmation},
+               {StatusClassifier, status: :needs_clarification}
+             ])
+
+    assert context.status == :needs_clarification
+  end
+
   test "invalid classifier statuses fail closed" do
     assert {:ok, context} =
              ClassifierPipeline.run(context(), [{StatusClassifier, status: :unknown_status}])

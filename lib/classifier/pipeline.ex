@@ -5,16 +5,19 @@ defmodule SpectreKinetic.ClassifierPipeline do
 
   alias SpectreKinetic.PlanContext
 
-  @known_statuses [
-    :ok,
-    :no_tool,
-    :missing_args,
-    :ambiguous_mapping,
-    :needs_confirmation,
-    :needs_clarification,
-    :rejected,
-    :error
-  ]
+  # A classifier may only move a plan toward a more restrictive outcome.
+  @status_ranks %{
+    ok: 0,
+    needs_confirmation: 10,
+    needs_clarification: 20,
+    ambiguous_mapping: 30,
+    missing_args: 40,
+    no_tool: 50,
+    rejected: 60,
+    error: 70
+  }
+
+  @known_statuses Map.keys(@status_ranks)
 
   defmodule Spec do
     @moduledoc false
@@ -115,13 +118,14 @@ defmodule SpectreKinetic.ClassifierPipeline do
   end
 
   defp reconcile_status(previous, next) do
+    previous_status = normalize_classifier_status(previous.status)
     next_status = normalize_classifier_status(next.status)
 
     status =
-      if next_status == :ok and previous.status != :ok do
-        previous.status
-      else
+      if status_rank(next_status) > status_rank(previous_status) do
         next_status
+      else
+        previous_status
       end
 
     %{next | status: status}
@@ -134,4 +138,6 @@ defmodule SpectreKinetic.ClassifierPipeline do
 
   defp normalize_classifier_status(status) when status in @known_statuses, do: status
   defp normalize_classifier_status(_status), do: :error
+
+  defp status_rank(status), do: Map.fetch!(@status_ranks, status)
 end
