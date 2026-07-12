@@ -137,6 +137,36 @@ defmodule SpectreKinetic.PlannerTest do
       assert result["mapping_score"] >= 0.3
     end
 
+    test "an invalid optional argument keeps the action non-executable", %{store: store} do
+      :ok =
+        RegistryStore.add_action(store, %{
+          id: "Dynamic.Worker.configure/2",
+          module: "Dynamic.Worker",
+          name: "configure",
+          arity: 2,
+          doc: "Configure a retry worker",
+          args: [
+            %{name: "name", type: "String.t()", required: true, aliases: []},
+            %{name: "retries", type: "pos_integer()", required: false, aliases: []}
+          ],
+          examples: ["CONFIGURE RETRY WORKER WITH: NAME=mailer RETRIES=3"]
+        })
+
+      assert {:ok, result} =
+               Planner.plan(
+                 "CONFIGURE RETRY WORKER WITH: NAME=mailer RETRIES=many",
+                 %{registry: store, embedder: nil, tool_threshold: 0.0}
+               )
+
+      assert result["selected_tool"] == "Dynamic.Worker.configure/2"
+      assert result["status"] == "AMBIGUOUS_MAPPING"
+      assert result["missing"] == []
+
+      assert result["invalid"] == [
+               %{name: "retries", expected_type: "pos_integer()", reason: :type_mismatch}
+             ]
+    end
+
     test "returns NO_TOOL for garbage input with high threshold", %{store: store} do
       {:ok, result} =
         Planner.plan(

@@ -4,21 +4,25 @@ defmodule SpectreKinetic.Planner.SlotType do
   @true_values ~w(true yes on 1)
   @false_values ~w(false no off 0)
 
-  @spec coerce(term(), term()) :: {:ok, term()} | {:error, :type_mismatch}
+  @type coercion_error :: :type_mismatch | {:unsupported_type, binary()}
+
+  @spec coerce(term(), term()) :: {:ok, term()} | {:error, coercion_error()}
   def coerce(value, type) when is_binary(type) do
     type
     |> String.split(~r/\s*\|\s*/, trim: true)
-    |> coerce_union(value)
+    |> coerce_union(value, nil)
   end
 
-  def coerce(value, _type), do: {:ok, value}
+  def coerce(_value, type), do: {:error, {:unsupported_type, inspect(type)}}
 
-  defp coerce_union([], _value), do: {:error, :type_mismatch}
+  defp coerce_union([], _value, nil), do: {:error, :type_mismatch}
+  defp coerce_union([], _value, unsupported), do: {:error, unsupported}
 
-  defp coerce_union([type | rest], value) do
+  defp coerce_union([type | rest], value, unsupported) do
     case coerce_one(value, normalize_type(type)) do
       {:ok, _coerced} = ok -> ok
-      {:error, :type_mismatch} -> coerce_union(rest, value)
+      {:error, :type_mismatch} -> coerce_union(rest, value, unsupported)
+      {:error, {:unsupported_type, _type} = error} -> coerce_union(rest, value, error)
     end
   end
 
@@ -83,12 +87,24 @@ defmodule SpectreKinetic.Planner.SlotType do
     if is_list(value), do: {:ok, value}, else: {:error, :type_mismatch}
   end
 
-  defp coerce_one(value, <<"[", _rest::binary>>) do
-    if is_list(value), do: {:ok, value}, else: {:error, :type_mismatch}
+  defp coerce_one(value, <<"[", rest::binary>> = type) do
+    if String.ends_with?(rest, "]") do
+      inner_size = byte_size(rest) - 1
+      inner_type = binary_part(rest, 0, inner_size)
+      coerce_list(value, inner_type)
+    else
+      {:error, {:unsupported_type, type}}
+    end
   end
 
-  defp coerce_one(value, <<"list(", _rest::binary>>) do
-    if is_list(value), do: {:ok, value}, else: {:error, :type_mismatch}
+  defp coerce_one(value, <<"list(", rest::binary>> = type) do
+    if String.ends_with?(rest, ")") do
+      inner_size = byte_size(rest) - 1
+      inner_type = binary_part(rest, 0, inner_size)
+      coerce_list(value, inner_type)
+    else
+      {:error, {:unsupported_type, type}}
+    end
   end
 
   defp coerce_one(value, type) when type in ["atom()", "atom"] do
@@ -97,9 +113,42 @@ defmodule SpectreKinetic.Planner.SlotType do
 
   defp coerce_one(value, type) when type in ["term()", "any()", "any"], do: {:ok, value}
 
-  # Custom and opaque types cannot be proven here. Keep them extensible rather
-  # than rejecting valid domain values the planner cannot introspect.
-  defp coerce_one(value, _unknown_type), do: {:ok, value}
+  defp coerce_one(value, <<":", literal::binary>>) when literal != "" do
+    case value do
+      ^literal -> {:ok, value}
+      atom when is_atom(atom) -> literal_atom_value(atom, literal)
+      _other -> {:error, :type_mismatch}
+    end
+  end
+
+  defp coerce_one(value, "true") when value in [true, "true"], do: {:ok, true}
+  defp coerce_one(value, "false") when value in [false, "false"], do: {:ok, false}
+
+  # Domain-specific types need an explicit coercer in a future registry schema.
+  # Accepting them blindly would make the type gate decorative.
+  defp coerce_one(_value, unknown_type), do: {:error, {:unsupported_type, unknown_type}}
+
+  defp coerce_list(value, inner_type) when is_list(value) and inner_type != "" do
+    value
+    |> Enum.reduce_while({:ok, []}, fn item, {:ok, coerced} ->
+      case coerce(item, inner_type) do
+        {:ok, next} -> {:cont, {:ok, [next | coerced]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> then(fn
+      {:ok, coerced} -> {:ok, Enum.reverse(coerced)}
+      {:error, _reason} = error -> error
+    end)
+  end
+
+  defp coerce_list(_value, _inner_type), do: {:error, :type_mismatch}
+
+  defp literal_atom_value(atom, literal) do
+    if Atom.to_string(atom) == literal,
+      do: {:ok, atom},
+      else: {:error, :type_mismatch}
+  end
 
   defp coerce_integer(value, predicate) when is_integer(value) do
     if predicate.(value), do: {:ok, value}, else: {:error, :type_mismatch}

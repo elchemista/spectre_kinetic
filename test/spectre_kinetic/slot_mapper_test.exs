@@ -119,9 +119,48 @@ defmodule SpectreKinetic.Planner.SlotMapperTest do
       result = SlotMapper.map_slots(parsed, action)
 
       assert result.args == %{"enabled" => false}
-      assert result.invalid == [%{name: "count", expected_type: "integer()"}]
+      assert result.invalid == [
+               %{name: "count", expected_type: "integer()", reason: :type_mismatch}
+             ]
       assert result.missing == ["count"]
       assert Enum.any?(result.notes, &String.contains?(&1, "invalid type for count"))
+    end
+
+    test "validates literal unions and typed collection elements" do
+      action = %{
+        "args" => [
+          %{"name" => "mode", "type" => ":safe | :fast", "required" => true},
+          %{"name" => "retries", "type" => "list(pos_integer())", "required" => true}
+        ]
+      }
+
+      valid = SlotMapper.map_slots(%{"MODE" => "safe", "RETRIES" => ["1", 2]}, action)
+      assert valid.args == %{"mode" => "safe", "retries" => [1, 2]}
+
+      invalid = SlotMapper.map_slots(%{"MODE" => "danger", "RETRIES" => [1, 0]}, action)
+      assert invalid.args == %{}
+      assert Enum.sort(invalid.missing) == ["mode", "retries"]
+      assert length(invalid.invalid) == 2
+    end
+
+    test "fails closed for unsupported opaque types" do
+      action = %{
+        "args" => [
+          %{"name" => "account", "type" => "MyApp.Account.t()", "required" => true}
+        ]
+      }
+
+      result = SlotMapper.map_slots(%{"ACCOUNT" => "acct-1"}, action)
+
+      assert result.args == %{}
+
+      assert result.invalid == [
+               %{
+                 name: "account",
+                 expected_type: "MyApp.Account.t()",
+                 reason: {:unsupported_type, "MyApp.Account.t()"}
+               }
+             ]
     end
 
     test "validates dates and URI values without changing their JSON shape" do

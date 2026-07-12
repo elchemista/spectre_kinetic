@@ -101,8 +101,8 @@ defmodule SpectreKinetic.Planner.SlotMapper do
         {:ok, coerced} ->
           {Map.put(valid, name, coerced), invalid}
 
-        {:error, :type_mismatch} ->
-          issue = %{name: name, expected_type: expected_type}
+        {:error, reason} ->
+          issue = %{name: name, expected_type: expected_type, reason: reason}
           {valid, [issue | invalid]}
       end
     end)
@@ -116,9 +116,12 @@ defmodule SpectreKinetic.Planner.SlotMapper do
 
   defp invalid_notes(invalid) do
     Enum.map(invalid, fn issue ->
-      "invalid type for #{issue.name}: expected #{issue.expected_type}"
+      "invalid type for #{issue.name}: expected #{issue.expected_type} (#{format_reason(issue.reason)})"
     end)
   end
+
+  defp format_reason(:type_mismatch), do: "type mismatch"
+  defp format_reason({:unsupported_type, type}), do: "unsupported type #{type}"
 
   # Three passes: names first, then value shape, then the one lonely positional
   # fallback. More magic here would make the planner look smart and age badly.

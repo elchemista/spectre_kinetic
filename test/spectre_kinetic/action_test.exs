@@ -100,7 +100,7 @@ defmodule SpectreKinetic.ActionTest do
       "selected_tool" => "Counter.set/1",
       "args" => %{},
       "missing" => ["count"],
-      "invalid" => [%{name: "count", expected_type: "integer()"}],
+      "invalid" => [%{name: "count", expected_type: "integer()", reason: :type_mismatch}],
       "notes" => ["invalid type for count: expected integer()"]
     }
 
@@ -108,7 +108,9 @@ defmodule SpectreKinetic.ActionTest do
 
     assert action.status == :missing_args
     assert action.args == %{}
-    assert action.invalid == [%{name: "count", expected_type: "integer()"}]
+    assert action.invalid == [
+             %{name: "count", expected_type: "integer()", reason: :type_mismatch}
+           ]
     assert action.missing == ["count"]
   end
 
