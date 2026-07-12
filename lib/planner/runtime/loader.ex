@@ -3,6 +3,7 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
 
   alias SpectreKinetic.ClassifierPipeline
   alias SpectreKinetic.Planner.EmbeddingRuntime
+  alias SpectreKinetic.Planner.Registry
   alias SpectreKinetic.Planner.Registry.ETS
   alias SpectreKinetic.Reranker.Runtime, as: RerankerRuntime
   alias SpectreKinetic.RuntimeConfig
@@ -29,14 +30,12 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
 
   @registry_functions [
     new: 1,
-    owner: 1,
     load_json: 2,
     load_compiled: 2,
     all_actions: 1,
     get_action: 2,
     action_count: 1,
     add_action: 2,
-    upsert_action: 3,
     delete_action: 2,
     embedding_matrix: 1,
     put_embedding: 3,
@@ -112,20 +111,26 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
 
   @spec stage_registry(module(), term(), keyword()) :: {:ok, term()} | {:error, term()}
   def stage_registry(registry_module, path, opts \\ []) do
+    stage_registry(registry_module, nil, path, opts)
+  end
+
+  @spec stage_registry(module(), term(), term(), keyword()) ::
+          {:ok, term()} | {:error, term()}
+  def stage_registry(registry_module, active_registry, path, opts) do
     with :ok <- RuntimeConfig.validate_options(opts),
          :ok <- validate_registry_module(registry_module),
          :ok <- RuntimeConfig.validate_path(path, :registry_path) do
-      do_stage_registry(registry_module, path, opts)
+      do_stage_registry(registry_module, active_registry, path, opts)
     end
   end
 
-  defp do_stage_registry(registry_module, path, opts) do
+  defp do_stage_registry(registry_module, active_registry, path, opts) do
     case registry_loader(registry_module, path) do
       :unknown ->
         {:error, :unknown_registry_format}
 
       {:ok, loader} ->
-        with {:ok, registry} <- registry_module.new([]) do
+        with {:ok, registry} <- Registry.stage(registry_module, active_registry, opts) do
           case safely(fn -> loader.(registry, path) end) do
             {:ok, registry} -> validate_staged_registry(registry_module, registry, opts)
             {:error, _reason} = error -> close_staged(registry_module, registry, error)

@@ -40,6 +40,7 @@ defmodule SpectreKinetic.Planner.Registry do
 
   @callback new(keyword()) :: {:ok, term()} | {:error, term()}
   @callback owner(term()) :: pid() | :shared
+  @callback new_staging(term(), keyword()) :: {:ok, term()} | {:error, term()}
   @callback load_json(term(), binary()) :: {:ok, term()} | {:error, term()}
   @callback load_compiled(term(), binary()) :: {:ok, term()} | {:error, term()}
   @callback all_actions(term()) :: [action()]
@@ -54,6 +55,45 @@ defmodule SpectreKinetic.Planner.Registry do
   @callback tool_cards(term()) :: [{binary(), binary()}]
   @callback resolve_alias(term(), binary()) :: [{binary(), binary()}]
   @callback close(term()) :: :ok | {:error, term()}
+
+  @optional_callbacks owner: 1, new_staging: 2, upsert_action: 3
+
+  @doc false
+  @spec mutation_owner(module(), term()) :: pid() | :shared
+  def mutation_owner(registry_module, registry) do
+    if function_exported?(registry_module, :owner, 1) do
+      registry_module.owner(registry)
+    else
+      :shared
+    end
+  end
+
+  @doc false
+  @spec stage(module(), term(), keyword()) :: {:ok, term()} | {:error, term()}
+  def stage(registry_module, active_registry, opts) do
+    if not is_nil(active_registry) and
+         function_exported?(registry_module, :new_staging, 2) do
+      registry_module.new_staging(active_registry, opts)
+    else
+      registry_module.new([])
+    end
+  end
+
+  @doc false
+  @spec upsert(module(), term(), map(), Nx.Tensor.t() | nil) ::
+          {:ok, term()} | {:error, term()}
+  def upsert(registry_module, registry, action, embedding) do
+    cond do
+      function_exported?(registry_module, :upsert_action, 3) ->
+        registry_module.upsert_action(registry, action, embedding)
+
+      is_nil(embedding) ->
+        registry_module.add_action(registry, action)
+
+      true ->
+        {:error, {:unsupported_registry_operation, :atomic_upsert_with_embedding}}
+    end
+  end
 
   @doc """
   Normalizes one raw registry action into the planner's canonical action shape.

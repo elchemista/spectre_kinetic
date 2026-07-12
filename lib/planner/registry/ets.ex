@@ -68,6 +68,9 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   def owner(%__MODULE__{} = registry), do: registry.owner
 
   @impl Registry
+  def new_staging(%__MODULE__{}, _opts), do: new()
+
+  @impl Registry
   def load_json(%__MODULE__{owner: owner}, _path) when owner != self(),
     do: not_owner(owner)
 

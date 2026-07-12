@@ -8,6 +8,7 @@ defmodule SpectreKinetic.Planner.Runtime do
   """
 
   alias SpectreKinetic.Planner.EmbeddingRuntime
+  alias SpectreKinetic.Planner.Registry
   alias SpectreKinetic.Planner.Runtime.Embeddings
   alias SpectreKinetic.Planner.Runtime.Loader
   alias SpectreKinetic.RuntimeConfig
@@ -168,7 +169,7 @@ defmodule SpectreKinetic.Planner.Runtime do
       with :ok <- ensure_registry_owner(runtime),
            {:ok, action, embedding} <- Embeddings.prepare_action(runtime, action),
            {:ok, registry} <-
-             runtime.registry_module.upsert_action(runtime.registry, action, embedding) do
+             Registry.upsert(runtime.registry_module, runtime.registry, action, embedding) do
         {:ok, %{runtime | registry: registry}}
       end
 
@@ -219,7 +220,7 @@ defmodule SpectreKinetic.Planner.Runtime do
   defp do_stage_and_swap_registry(runtime, path) do
     opts = [allow_empty_registry: runtime.allow_empty_registry]
 
-    case Loader.stage_registry(runtime.registry_module, path, opts) do
+    case Loader.stage_registry(runtime.registry_module, runtime.registry, path, opts) do
       {:ok, registry} -> complete_staged_registry(runtime, registry, path)
       {:error, _reason} = error -> {error, false}
     end
@@ -255,7 +256,7 @@ defmodule SpectreKinetic.Planner.Runtime do
   end
 
   defp ensure_registry_owner(runtime) do
-    case runtime.registry_module.owner(runtime.registry) do
+    case Registry.mutation_owner(runtime.registry_module, runtime.registry) do
       :shared -> :ok
       owner when owner == self() -> :ok
       owner -> {:error, {:registry_not_owner, owner}}
