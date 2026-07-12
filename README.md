@@ -186,14 +186,39 @@ The revision is an immutable Hugging Face commit SHA. When using the default
 model, omitting `--revision` uses the pinned SHA above; custom models must pass
 their own full commit SHA.
 
-This writes:
+Each download is staged, structurally checked, SHA-256 hashed, and atomically
+renamed into place. An exclusive output lock prevents concurrent runs from
+interleaving, and a failed install rolls back files already renamed. The task
+also writes `encoder-manifest.json`, containing the immutable model identity,
+byte sizes, source URLs, and hashes:
 
 ```text
 artifacts/encoder/
 |-- config.json
+|-- encoder-manifest.json
 |-- model.onnx
 `-- tokenizer.json
 ```
+
+To verify a later download against a trusted manifest, pass it explicitly:
+
+```bash
+mix spectre.download_encoder \
+  --model BAAI/bge-small-en-v1.5 \
+  --revision 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a \
+  --checksum-manifest trusted/encoder-manifest.json \
+  --out artifacts/encoder \
+  --force
+```
+
+The task checks the manifest's model and revision before downloading, then
+checks every artifact hash before replacing any existing artifact. Failed or
+partial downloads are removed from the staging directory. JSON artifacts must
+decode to objects, and a Git LFS pointer is rejected in place of ONNX bytes.
+Without `--force`, existing artifacts are skipped only after verification
+against either the explicit manifest or `encoder-manifest.json` already in the
+output directory. Use `--force` once for encoder directories created by an
+older task that have no manifest.
 
 Then compile the registry:
 

@@ -41,9 +41,20 @@ mix spectre.download_encoder \
   --out artifacts/encoder
 ```
 
-This downloads `model.onnx`, `tokenizer.json`, and `config.json` into
-`artifacts/encoder`. The planner uses this encoder to embed tool text and match
-AL input to tools.
+This stages, structurally validates, and atomically installs `model.onnx`,
+`tokenizer.json`, and `config.json` into `artifacts/encoder`. An output lock
+prevents concurrent installs from interleaving, and a failed rename rolls back
+the generation. The task also records SHA-256 hashes, byte sizes, source URLs,
+model, and revision in `encoder-manifest.json`. The planner uses this encoder
+to embed tool text and match AL input to tools.
+
+Pass a trusted manifest back with
+`--checksum-manifest path/to/encoder-manifest.json` to verify all three
+artifacts before any existing artifact is replaced. A failed or partial
+download is removed from the staging directory. Without `--force`, existing
+artifacts require either that explicit manifest or `encoder-manifest.json` in
+the output directory; use `--force` once for older encoder directories without
+a manifest.
 
 ## 2. Extract Or Compile Your Tool Registry
 
