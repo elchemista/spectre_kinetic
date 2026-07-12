@@ -61,6 +61,7 @@ defmodule SpectreKinetic.MixProject do
       {:jason, "~> 1.2"},
       {:nx, "~> 0.11"},
       {:axon, "~> 0.7"},
+      {:polaris, "~> 0.1"},
       {:ortex, "~> 0.1"},
       {:tokenizers, "~> 0.5"},
       {:telemetry, "~> 1.0"},
