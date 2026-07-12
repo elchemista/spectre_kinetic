@@ -564,7 +564,7 @@ defmodule SpectreKinetic.RuntimeConfig do
   defp validate_slot_map(slots, depth, budget) do
     with {:ok, budget} <- consume_slot_node(budget) do
       Enum.reduce_while(slots, {:ok, budget}, fn {key, value}, {:ok, remaining} ->
-        with :ok <- validate_slot_key(key),
+        with {:ok, remaining} <- validate_slot_key(key, remaining),
              {:ok, next} <- validate_slot_value(value, depth + 1, remaining) do
           {:cont, {:ok, next}}
         else
@@ -574,17 +574,17 @@ defmodule SpectreKinetic.RuntimeConfig do
     end
   end
 
-  defp validate_slot_key(key) when is_atom(key), do: :ok
+  defp validate_slot_key(key, budget) when is_atom(key), do: consume_slot_node(budget)
 
-  defp validate_slot_key(key) when is_binary(key) do
+  defp validate_slot_key(key, budget) when is_binary(key) do
     cond do
       not String.valid?(key) -> {:error, :invalid}
       byte_size(key) > @max_slot_string_bytes -> {:error, :limit}
-      true -> :ok
+      true -> consume_slot_string(budget, byte_size(key))
     end
   end
 
-  defp validate_slot_key(_key), do: {:error, :invalid}
+  defp validate_slot_key(_key, _budget), do: {:error, :invalid}
 
   defp validate_slot_value(_value, depth, _budget) when depth > @max_slot_depth,
     do: {:error, :limit}
@@ -609,22 +609,29 @@ defmodule SpectreKinetic.RuntimeConfig do
        when is_map(value) and not is_struct(value),
        do: validate_slot_map(value, depth, budget)
 
-  defp validate_slot_value(value, depth, budget) when is_list(value) do
-    if length(value) > @max_slot_entries do
-      {:error, :limit}
-    else
-      with {:ok, budget} <- consume_slot_node(budget) do
-        Enum.reduce_while(value, {:ok, budget}, fn item, {:ok, remaining} ->
-          case validate_slot_value(item, depth + 1, remaining) do
-            {:ok, next} -> {:cont, {:ok, next}}
-            {:error, reason} -> {:halt, {:error, reason}}
-          end
-        end)
-      end
+  defp validate_slot_value([], _depth, budget), do: consume_slot_node(budget)
+
+  defp validate_slot_value([_head | _tail] = value, depth, budget) do
+    with {:ok, budget} <- consume_slot_node(budget) do
+      validate_slot_list(value, depth, budget, 0)
     end
   end
 
   defp validate_slot_value(_value, _depth, _budget), do: {:error, :invalid}
+
+  defp validate_slot_list([], _depth, budget, _count), do: {:ok, budget}
+
+  defp validate_slot_list([_head | _tail], _depth, _budget, @max_slot_entries),
+    do: {:error, :limit}
+
+  defp validate_slot_list([head | tail], depth, budget, count) do
+    with {:ok, budget} <- validate_slot_value(head, depth + 1, budget) do
+      validate_slot_list(tail, depth, budget, count + 1)
+    end
+  end
+
+  defp validate_slot_list(_improper_tail, _depth, _budget, _count),
+    do: {:error, :invalid}
 
   defp consume_slot_node(%{nodes: nodes} = budget) when nodes > 0,
     do: {:ok, %{budget | nodes: nodes - 1}}
