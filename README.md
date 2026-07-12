@@ -1,6 +1,6 @@
 # SpectreKinetic
 
-Elixir-first planning for turning Action Language into real function calls.
+Elixir-first planning from Action Language to validated function-call candidates.
 
 ## Why Use This?
 
@@ -25,10 +25,10 @@ into a small Action Language candidate:
 SEND MAIL TO="ops@example.com" BODY="Deploy failed: https://logs.example/run/42"
 ```
 
-Then `spectre_kinetic` maps it to your real function:
+Then `spectre_kinetic` maps it to a structured proposal for your real function:
 
 ```elixir
-%SpectreKinetic.ActionPlan{
+%SpectreKinetic.Action{
   selected_tool: "MyApp.Emailer.send/2",
   args: %{
     "email" => "ops@example.com",
@@ -343,6 +343,11 @@ A classifier should not:
 - secretly replace the selected action
 - turn planning into workflow orchestration with a trench coat
 
+Classifier decisions are monotone: a later classifier cannot promote a
+restrictive status such as `:rejected`, `:needs_confirmation`, or
+`:needs_clarification` back to `:ok`. Selection and mapped arguments remain
+owned by the planner.
+
 Custom classifier plugs implement `SpectreKinetic.Classifier`:
 
 ```elixir
@@ -478,6 +483,9 @@ Each classifier training run writes:
 - `metadata.json`
 - `calibration.json`
 
+`calibration.json` is loaded with the artifact but does not currently choose
+runtime thresholds automatically. Configure classifier thresholds explicitly.
+
 The real workflow is:
 
 1. embed/compile your registry
@@ -509,7 +517,7 @@ every call:
 LLM responses are often a polite paragraph wrapped around the one useful thing.
 `plan_chain/3` extracts AL blocks and plans each step:
 
-```elixir
+````elixir
 {:ok, chain} =
   SpectreKinetic.plan_chain(runtime, """
   I will do this in order.
@@ -520,7 +528,7 @@ LLM responses are often a polite paragraph wrapped around the one useful thing.
   LIST DIRECTORY WITH: PATH="/var/log"
   ```
     """)
-```
+````
 
 Configured action classifiers run independently on each extracted action.
 Kinetic intentionally has no separate `chain_classifiers` pipeline: ordering,
