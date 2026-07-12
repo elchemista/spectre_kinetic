@@ -222,19 +222,17 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     do: not_owner(owner)
 
   def put_embedding(%__MODULE__{} = registry, action_id, tensor) do
-    cond do
-      not :ets.member(registry.actions, action_id) ->
-        {:error, :action_not_found}
+    if :ets.member(registry.actions, action_id) do
+      case validate_embedding(registry, action_id, tensor) do
+        :ok ->
+          :ets.insert(registry.embeddings, {action_id, tensor})
+          {:ok, registry}
 
-      true ->
-        case validate_embedding(registry, action_id, tensor) do
-          :ok ->
-            :ets.insert(registry.embeddings, {action_id, tensor})
-            {:ok, registry}
-
-          {:error, _reason} = error ->
-            error
-        end
+        {:error, _reason} = error ->
+          error
+      end
+    else
+      {:error, :action_not_found}
     end
   end
 
