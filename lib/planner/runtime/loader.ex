@@ -149,22 +149,30 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
     end
   end
 
+  @spec do_stage_registry(module(), term(), Path.t(), keyword()) ::
+          {:ok, term()} | {:error, term()}
   defp do_stage_registry(registry_module, active_registry, path, opts) do
     case registry_loader(registry_module, path) do
       :unknown ->
         {:error, :unknown_registry_format}
 
       {:ok, loader} ->
-        case safely(fn -> Registry.stage(registry_module, active_registry, opts) end) do
-          {:ok, registry} ->
-            load_staged_registry(registry_module, registry, loader, path, opts)
+        create_and_load_staged_registry(registry_module, active_registry, loader, path, opts)
+    end
+  end
 
-          {:error, _reason} = error ->
-            error
+  @spec create_and_load_staged_registry(module(), term(), function(), Path.t(), keyword()) ::
+          {:ok, term()} | {:error, term()}
+  defp create_and_load_staged_registry(registry_module, active_registry, loader, path, opts) do
+    case safely(fn -> Registry.stage(registry_module, active_registry, opts) end) do
+      {:ok, registry} ->
+        load_staged_registry(registry_module, registry, loader, path, opts)
 
-          other ->
-            {:error, {:invalid_registry_return, :new_staging, other}}
-        end
+      {:error, _reason} = error ->
+        error
+
+      other ->
+        {:error, {:invalid_registry_return, :new_staging, other}}
     end
   end
 
