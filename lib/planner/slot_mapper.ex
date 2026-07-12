@@ -259,11 +259,12 @@ defmodule SpectreKinetic.Planner.SlotMapper do
   end
 
   defp match_param_for_type(params, type) do
-    match = Enum.find(params, &(String.downcase(&1["name"]) in Map.get(@type_hints, type, [])))
+    matches =
+      Enum.filter(params, &(String.downcase(&1["name"]) in Map.get(@type_hints, type, [])))
 
-    case match do
-      nil -> :no_match
-      param -> {:ok, param}
+    case matches do
+      [param] -> {:ok, param}
+      _ambiguous_or_missing -> :no_match
     end
   end
 
