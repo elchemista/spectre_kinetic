@@ -87,6 +87,22 @@ defmodule SpectreKinetic.Planner.SlotMapperTest do
     end
   end
 
+  describe "positional fallback" do
+    test "never reports an inferred positional match as fully confident" do
+      action = %{
+        "args" => [
+          %{"name" => "body", "type" => "String.t()", "required" => true, "aliases" => []}
+        ]
+      }
+
+      result = SlotMapper.map_slots(%{"UNKNOWN" => "plain text"}, action)
+
+      assert result.args == %{"body" => "plain text"}
+      assert result.mapping_score == 0.5
+      assert "low-confidence positional slot mapping" in result.notes
+    end
+  end
+
   describe "schema type enforcement" do
     test "coerces scalar AL values to declared primitive types" do
       parsed = %{"COUNT" => "42", "RATIO" => "0.5", "ENABLED" => "off"}

@@ -32,6 +32,7 @@ defmodule SpectreKinetic.Planner.SlotMapper do
   @integer_pattern ~r/^-?\d+$/
   @float_pattern ~r/^-?\d+\.\d+$/
   @path_pattern ~r/^[\/~.][\w\/.\-]+$/
+  @positional_score_cap 0.5
 
   # Type hints: maps value-shape types to likely parameter names
   @type_hints %{
@@ -75,9 +76,14 @@ defmodule SpectreKinetic.Planner.SlotMapper do
       |> Enum.map(& &1["name"])
       |> Enum.uniq()
 
-    notes = build_notes(final_unmatched_slots, missing) ++ invalid_notes(invalid)
+    notes =
+      build_notes(final_unmatched_slots, missing) ++
+        positional_notes(positional) ++ invalid_notes(invalid)
 
-    score = compute_mapping_score(arg_defs, valid_args, missing)
+    score =
+      arg_defs
+      |> compute_mapping_score(valid_args, missing)
+      |> cap_positional_score(positional)
 
     %{
       args: valid_args,
@@ -226,6 +232,16 @@ defmodule SpectreKinetic.Planner.SlotMapper do
       keys -> ["unmatched slots: #{inspect(keys)}"]
     end
   end
+
+  defp positional_notes(positional) when map_size(positional) > 0,
+    do: ["low-confidence positional slot mapping"]
+
+  defp positional_notes(_positional), do: []
+
+  defp cap_positional_score(score, positional) when map_size(positional) > 0,
+    do: min(score, @positional_score_cap)
+
+  defp cap_positional_score(score, _positional), do: score
 
   defp compute_mapping_score(arg_defs, matched, missing) do
     n_total = length(arg_defs)
