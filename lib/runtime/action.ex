@@ -219,7 +219,15 @@ defmodule SpectreKinetic.Action do
     |> Map.put("notes", drop_repaired_unmatched_notes(plan["notes"] || [], recovered_slots))
   end
 
-  defp repaired_status(_status, []), do: "ok"
+  # Boundary repair is allowed to resolve an argument-mapping diagnostic, but
+  # it must never undo a later policy/classifier decision. `Action.from_plan/3`
+  # runs after classifier plugs, so blindly changing every fully repaired plan
+  # to `ok` would turn rejected or confirmation-gated actions executable.
+  defp repaired_status(status, []) when is_binary(status) do
+    if String.downcase(status) == "missing_args", do: "ok", else: status
+  end
+
+  defp repaired_status(:missing_args, []), do: :ok
   defp repaired_status(status, _remaining_missing), do: status
 
   defp recover_args(parsed_args, missing) do

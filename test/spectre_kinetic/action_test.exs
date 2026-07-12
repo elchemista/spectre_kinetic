@@ -93,6 +93,40 @@ defmodule SpectreKinetic.ActionTest do
     assert action.halted?
   end
 
+  test "from_plan argument repair never upgrades classifier or policy safety decisions" do
+    for status <- ~w(rejected needs_confirmation needs_clarification) do
+      plan = %{
+        "status" => status,
+        "selected_tool" => "vext.action.send_email",
+        "args" => %{},
+        "missing" => ["to"],
+        "notes" => ["unmatched slots: [\"recipient\"]"]
+      }
+
+      action = Action.from_plan("SEND EMAIL RECIPIENT=ops@example.com", plan)
+
+      assert action.status == String.to_existing_atom(status)
+      assert action.args["to"] == "ops@example.com"
+      assert action.missing == []
+      assert action.notes == []
+    end
+  end
+
+  test "from_plan preserves restrictive atom statuses while repairing arguments" do
+    plan = %{
+      "status" => :rejected,
+      "selected_tool" => "vext.action.send_email",
+      "args" => %{},
+      "missing" => ["to"]
+    }
+
+    action = Action.from_plan("SEND EMAIL RECIPIENT=ops@example.com", plan)
+
+    assert action.status == :rejected
+    assert action.args["to"] == "ops@example.com"
+    assert action.missing == []
+  end
+
   test "from_plan rejects unknown string statuses without creating atoms" do
     action = Action.from_plan("SEND EMAIL", %{"status" => "UNEXPECTED_STATUS"})
 
