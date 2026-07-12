@@ -20,7 +20,7 @@ defmodule SpectreKinetic.Planner.Compiler do
 
   @compiled_bundle_version 2
   @embedding_dtype "f32"
-  @f32_max 3.4028234663852886e38
+  @f32_max 3.402_823_466_385_288_6e38
   @max_embedding_dim 16_384
   @max_batch_size 1_024
 

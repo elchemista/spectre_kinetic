@@ -17,7 +17,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
 
   @compiled_bundle_version 2
   @legacy_compiled_bundle_version 1
-  @f32_max 3.4028234663852886e38
+  @f32_max 3.402_823_466_385_288_6e38
   @max_actions 1_000
   @max_embedding_dim 16_384
 
