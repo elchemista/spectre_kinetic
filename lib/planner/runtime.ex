@@ -59,17 +59,21 @@ defmodule SpectreKinetic.Planner.Runtime do
   """
   @spec load(keyword()) :: {:ok, t()} | {:error, term()}
   def load(opts \\ []) do
-    with {:ok, components} <- Loader.components(opts) do
-      runtime = struct(__MODULE__, components)
+    case Loader.components(opts) do
+      {:ok, components} -> embed_loaded_registry(struct(__MODULE__, components), opts)
+      {:error, _reason} = error -> error
+    end
+  end
 
-      case safely(fn -> Embeddings.embed_loaded_registry(runtime, opts) end) do
-        {:ok, runtime} ->
-          {:ok, runtime}
+  @spec embed_loaded_registry(t(), keyword()) :: {:ok, t()} | {:error, term()}
+  defp embed_loaded_registry(runtime, opts) do
+    case safely(fn -> Embeddings.embed_loaded_registry(runtime, opts) end) do
+      {:ok, runtime} ->
+        {:ok, runtime}
 
-        {:error, _reason} = error ->
-          close(runtime)
-          error
-      end
+      {:error, _reason} = error ->
+        close(runtime)
+        error
     end
   end
 
