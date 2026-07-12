@@ -27,9 +27,29 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
     {:reranker_score_transform, :score_transform}
   ]
 
+  @registry_functions [
+    new: 1,
+    owner: 1,
+    load_json: 2,
+    load_compiled: 2,
+    all_actions: 1,
+    get_action: 2,
+    action_count: 1,
+    add_action: 2,
+    upsert_action: 3,
+    delete_action: 2,
+    embedding_matrix: 1,
+    put_embedding: 3,
+    tool_cards: 1,
+    resolve_alias: 2,
+    close: 1
+  ]
+
   @spec components(keyword()) :: {:ok, map()} | {:error, term()}
   def components(opts) do
     with :ok <- RuntimeConfig.validate_options(opts),
+         :ok <- validate_registry_module(Keyword.get(opts, :registry_module, ETS)),
+         :ok <- validate_reranker_module(opts),
          {:ok, paths} <- RuntimeConfig.resolve_runtime_paths(opts) do
       opts
       |> Keyword.merge(Map.to_list(paths))
@@ -90,8 +110,16 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
     end
   end
 
-  @spec stage_registry(module(), binary(), keyword()) :: {:ok, term()} | {:error, term()}
+  @spec stage_registry(module(), term(), keyword()) :: {:ok, term()} | {:error, term()}
   def stage_registry(registry_module, path, opts \\ []) do
+    with :ok <- RuntimeConfig.validate_options(opts),
+         :ok <- validate_registry_module(registry_module),
+         :ok <- RuntimeConfig.validate_path(path, :registry_path) do
+      do_stage_registry(registry_module, path, opts)
+    end
+  end
+
+  defp do_stage_registry(registry_module, path, opts) do
     case registry_loader(registry_module, path) do
       :unknown ->
         {:error, :unknown_registry_format}
@@ -105,6 +133,43 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
         end
     end
   end
+
+  defp validate_registry_module(module) do
+    with :ok <- RuntimeConfig.validate_module(module, :registry_module) do
+      if Enum.all?(@registry_functions, fn {name, arity} ->
+           function_exported?(module, name, arity)
+         end) do
+        :ok
+      else
+        invalid_module(:registry_module, :must_implement_registry_backend)
+      end
+    end
+  end
+
+  defp validate_reranker_module(opts) do
+    module = Keyword.get(opts, :fallback_runtime_module, RerankerRuntime)
+
+    with :ok <- RuntimeConfig.validate_module(module, :fallback_runtime_module) do
+      required = required_reranker_functions(opts)
+
+      if Enum.all?(required, fn {name, arity} -> function_exported?(module, name, arity) end) do
+        :ok
+      else
+        invalid_module(:fallback_runtime_module, :must_implement_reranker_runtime)
+      end
+    end
+  end
+
+  defp required_reranker_functions(opts) do
+    cond do
+      not is_nil(Keyword.get(opts, :reranker)) -> [score_batch: 2]
+      fallback_mode(opts) == :reranker -> [load: 1, score_batch: 2]
+      true -> []
+    end
+  end
+
+  defp invalid_module(field, reason),
+    do: {:error, {:invalid_options, [%{field: field, reason: reason}]}}
 
   defp validate_staged_registry(registry_module, registry, opts) do
     if registry_module.action_count(registry) > 0 or
@@ -258,11 +323,13 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
     result
   end
 
-  defp registry_loader(registry_module, path) do
+  defp registry_loader(registry_module, path) when is_binary(path) do
     cond do
       String.ends_with?(path, ".json") -> {:ok, &registry_module.load_json/2}
       String.ends_with?(path, ".etf") -> {:ok, &registry_module.load_compiled/2}
       true -> :unknown
     end
   end
+
+  defp registry_loader(_registry_module, _path), do: :unknown
 end

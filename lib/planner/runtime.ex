@@ -10,6 +10,7 @@ defmodule SpectreKinetic.Planner.Runtime do
   alias SpectreKinetic.Planner.EmbeddingRuntime
   alias SpectreKinetic.Planner.Runtime.Embeddings
   alias SpectreKinetic.Planner.Runtime.Loader
+  alias SpectreKinetic.RuntimeConfig
   alias SpectreKinetic.Telemetry
 
   @registry_reload_event [:spectre_kinetic, :runtime, :registry, :reload]
@@ -137,10 +138,15 @@ defmodule SpectreKinetic.Planner.Runtime do
   Reloads the runtime registry from either JSON or compiled ETF and returns the
   updated runtime.
   """
-  @spec reload_registry(t(), binary()) :: {:ok, t()} | {:error, term()}
+  @spec reload_registry(t(), term()) :: {:ok, t()} | {:error, term()}
   def reload_registry(%__MODULE__{} = runtime, path) do
     start = System.monotonic_time()
-    {result, embedding_attempted?} = stage_and_swap_registry(runtime, path)
+
+    {result, embedding_attempted?} =
+      case RuntimeConfig.validate_path(path, :registry_path) do
+        :ok -> stage_and_swap_registry(runtime, path)
+        {:error, _reason} = error -> {error, false}
+      end
 
     emit_registry_event(@registry_reload_event, start, runtime, result, %{
       path: path,
@@ -330,6 +336,8 @@ defmodule SpectreKinetic.Planner.Runtime do
       true -> :unknown
     end
   end
+
+  defp registry_format(_path), do: :unknown
 
   defp action_id(%{"id" => id}) when is_binary(id), do: id
   defp action_id(%{id: id}) when is_binary(id), do: id

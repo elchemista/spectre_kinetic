@@ -85,6 +85,53 @@ defmodule SpectreKinetic.RuntimeConfigTest do
                RuntimeConfig.validate_options(slots: %{items: [1 | :improper]})
     end
 
+    test "does not let callers use the former missing-value sentinel" do
+      sentinel = :__spectre_kinetic_missing__
+
+      assert {:error,
+              {:invalid_options,
+               [%{field: :top_k, reason: :must_be_positive_integer}]}} =
+               RuntimeConfig.validate_options(top_k: sentinel)
+
+      assert {:error,
+              {:invalid_request,
+               [%{field: :top_k, reason: :must_be_positive_integer}]}} =
+               RuntimeConfig.validate_request(%{"al" => "SEND MESSAGE", "top_k" => sentinel})
+    end
+
+    test "validates runtime paths, modules, and the empty-registry flag" do
+      assert {:error, {:invalid_options, issues}} =
+               RuntimeConfig.validate_options(
+                 encoder_model_dir: nil,
+                 compiled_registry: " ",
+                 registry_json: 42,
+                 fallback_model_dir: [],
+                 registry_module: :spectre_missing_registry_module,
+                 fallback_runtime_module: "not-a-module",
+                 allow_empty_registry: :yes
+               )
+
+      assert Enum.map(issues, & &1.field) == [
+               :encoder_model_dir,
+               :compiled_registry,
+               :registry_json,
+               :fallback_model_dir,
+               :registry_module,
+               :fallback_runtime_module,
+               :allow_empty_registry
+             ]
+
+      assert Enum.map(issues, & &1.reason) == [
+               :must_be_non_blank_binary,
+               :must_be_non_blank_binary,
+               :must_be_non_blank_binary,
+               :must_be_non_blank_binary,
+               :must_be_module,
+               :must_be_module,
+               :must_be_boolean
+             ]
+    end
+
     test "accepts bounded options and JSON-compatible nested slots" do
       assert :ok =
                RuntimeConfig.validate_plan_input(

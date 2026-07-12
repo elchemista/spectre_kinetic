@@ -17,7 +17,6 @@ defmodule SpectreKinetic.RuntimeConfig do
   """
 
   @app :spectre_kinetic
-  @missing :__spectre_kinetic_missing__
   @built_in_plan_defaults [
     top_k: 5,
     tool_threshold: 0.3,
@@ -45,6 +44,9 @@ defmodule SpectreKinetic.RuntimeConfig do
     {:fallback_model_dir, "SPECTRE_KINETIC_FALLBACK_MODEL_DIR"}
   ]
 
+  @runtime_path_keys Enum.map(@runtime_path_sources, &elem(&1, 0))
+  @runtime_module_keys [:registry_module, :fallback_runtime_module]
+
   @doc """
   Returns the planner defaults before application config or environment overrides.
   """
@@ -70,13 +72,20 @@ defmodule SpectreKinetic.RuntimeConfig do
              registry_json: binary() | nil,
              fallback_model_dir: binary() | nil
            }}
+          | {:error, {:invalid_options, [validation_issue()]}}
   def resolve_runtime_paths(opts \\ []) do
-    paths =
-      Map.new(@runtime_path_sources, fn {key, env_var} ->
-        {key, resolve_optional_path(opts, key, key, env_var)}
-      end)
+    with :ok <- validate_options(opts) do
+      do_resolve_runtime_paths(opts)
+    end
+  end
 
-    {:ok, paths}
+  defp do_resolve_runtime_paths(opts) do
+    Enum.reduce_while(@runtime_path_sources, {:ok, %{}}, fn {key, env_var}, {:ok, paths} ->
+      case resolve_path(opts, key, key, env_var) do
+        {:ok, path} -> {:cont, {:ok, Map.put(paths, key, path)}}
+        {:error, issue} -> {:halt, validation_result(:invalid_options, [issue])}
+      end
+    end)
   end
 
   @doc """
@@ -87,11 +96,10 @@ defmodule SpectreKinetic.RuntimeConfig do
   """
   @spec resolve_optional_path(keyword(), atom(), atom(), binary()) :: binary() | nil
   def resolve_optional_path(opts, opt_key, app_key, env_var) do
-    opts
-    |> Keyword.get(opt_key)
-    |> fallback_path(Application.get_env(@app, app_key))
-    |> fallback_path(System.get_env(env_var))
-    |> normalize_optional_path()
+    case resolve_path(opts, opt_key, app_key, env_var) do
+      {:ok, path} -> path
+      {:error, _issue} -> nil
+    end
   end
 
   @doc """
@@ -100,9 +108,23 @@ defmodule SpectreKinetic.RuntimeConfig do
   @spec resolve_required_path(keyword(), atom(), atom(), binary()) ::
           {:ok, binary()} | {:error, term()}
   def resolve_required_path(opts, opt_key, app_key, env_var) do
-    opts
-    |> resolve_optional_path(opt_key, app_key, env_var)
-    |> wrap_required_path(opt_key, env_var)
+    with {:ok, path} <- resolve_path(opts, opt_key, app_key, env_var) do
+      wrap_required_path(path, opt_key, env_var)
+    end
+  end
+
+  @doc false
+  @spec validate_path(term(), atom()) ::
+          :ok | {:error, {:invalid_options, [validation_issue()]}}
+  def validate_path(path, key) do
+    validation_result(:invalid_options, path_value_issues(path, key))
+  end
+
+  @doc false
+  @spec validate_module(term(), atom()) ::
+          :ok | {:error, {:invalid_options, [validation_issue()]}}
+  def validate_module(module, key) do
+    validation_result(:invalid_options, module_value_issues(module, key))
   end
 
   @doc """
@@ -167,7 +189,7 @@ defmodule SpectreKinetic.RuntimeConfig do
           :ok | {:error, {:invalid_request, [validation_issue()]}}
   def validate_request(request) when is_map(request) and not is_struct(request) do
     errors =
-      al_issues(request_value(request, :al, @missing)) ++
+      al_issues(request_value(request, :al)) ++
         slots_issues(request_value(request, :slots, %{})) ++
         request_option_issues(request)
 
@@ -201,13 +223,23 @@ defmodule SpectreKinetic.RuntimeConfig do
     "missing required #{inspect(key)}. Pass it explicitly, configure :#{key} for :spectre_kinetic, or export #{env_var}."
   end
 
-  defp fallback_path(nil, fallback), do: fallback
-  defp fallback_path("", fallback), do: fallback
-  defp fallback_path(value, _fallback), do: value
+  defp resolve_path(opts, opt_key, app_key, env_var) do
+    [Keyword.get(opts, opt_key), Application.get_env(@app, app_key), System.get_env(env_var)]
+    |> Enum.find(&path_candidate?/1)
+    |> normalize_optional_path(opt_key)
+  end
 
-  defp normalize_optional_path(nil), do: nil
-  defp normalize_optional_path(""), do: nil
-  defp normalize_optional_path(path), do: Path.expand(path)
+  defp path_candidate?(nil), do: false
+  defp path_candidate?(value) when is_binary(value), do: String.trim(value) != ""
+  defp path_candidate?(_value), do: true
+
+  defp normalize_optional_path(nil, _key), do: {:ok, nil}
+
+  defp normalize_optional_path(path, _key) when is_binary(path),
+    do: {:ok, Path.expand(path)}
+
+  defp normalize_optional_path(_path, key),
+    do: {:error, %{field: key, reason: :must_be_non_blank_binary}}
 
   defp wrap_required_path(nil, opt_key, env_var), do: {:error, {:missing_path, opt_key, env_var}}
   defp wrap_required_path(path, _opt_key, _env_var), do: {:ok, path}
@@ -318,18 +350,21 @@ defmodule SpectreKinetic.RuntimeConfig do
   end
 
   defp request_options_map(request) do
-    Map.new(
-      [
-        :top_k,
-        :tool_threshold,
-        :mapping_threshold,
-        :tool_selection_fallback,
-        :fallback_top_k,
-        :fallback_margin,
-        :reranker_threshold
-      ],
-      fn key -> {key, request_value(request, key, @missing)} end
-    )
+    [
+      :top_k,
+      :tool_threshold,
+      :mapping_threshold,
+      :tool_selection_fallback,
+      :fallback_top_k,
+      :fallback_margin,
+      :reranker_threshold
+    ]
+    |> Enum.reduce(%{}, fn key, options ->
+      case fetch_request_value(request, key) do
+        {:ok, value} -> Map.put(options, key, value)
+        :error -> options
+      end
+    end)
   end
 
   defp option_issues(options, source) do
@@ -340,29 +375,32 @@ defmodule SpectreKinetic.RuntimeConfig do
       fallback_mode_issues(options, source) ++
       positive_integer_issues(options, :fallback_top_k) ++
       probability_issues(options, :fallback_margin) ++
-      probability_issues(options, :reranker_threshold)
+      probability_issues(options, :reranker_threshold) ++
+      runtime_path_issues(options) ++
+      runtime_module_issues(options) ++
+      boolean_option_issues(options, :allow_empty_registry)
   end
 
   defp slots_issues_if_present(options) do
-    case Map.get(options, :slots, @missing) do
-      @missing -> []
-      slots -> slots_issues(slots)
+    case Map.fetch(options, :slots) do
+      :error -> []
+      {:ok, slots} -> slots_issues(slots)
     end
   end
 
   defp positive_integer_issues(options, key) do
-    case Map.get(options, key, @missing) do
-      @missing -> []
-      value when is_integer(value) and value > 0 -> []
-      _value -> [%{field: key, reason: :must_be_positive_integer}]
+    case Map.fetch(options, key) do
+      :error -> []
+      {:ok, value} when is_integer(value) and value > 0 -> []
+      {:ok, _value} -> [%{field: key, reason: :must_be_positive_integer}]
     end
   end
 
   defp probability_issues(options, key) do
-    case Map.get(options, key, @missing) do
-      @missing -> []
-      value when is_number(value) -> probability_value_issues(key, value)
-      _value -> [%{field: key, reason: :must_be_probability}]
+    case Map.fetch(options, key) do
+      :error -> []
+      {:ok, value} when is_number(value) -> probability_value_issues(key, value)
+      {:ok, _value} -> [%{field: key, reason: :must_be_probability}]
     end
   end
 
@@ -375,11 +413,11 @@ defmodule SpectreKinetic.RuntimeConfig do
   end
 
   defp fallback_mode_issues(options, source) do
-    case Map.get(options, :tool_selection_fallback, @missing) do
-      @missing ->
+    case Map.fetch(options, :tool_selection_fallback) do
+      :error ->
         []
 
-      value ->
+      {:ok, value} ->
         if valid_fallback_mode?(value, source) do
           []
         else
@@ -390,6 +428,49 @@ defmodule SpectreKinetic.RuntimeConfig do
 
   defp valid_fallback_mode?(value, :options), do: value in [:disabled, :reranker]
   defp valid_fallback_mode?(value, :request), do: not is_nil(parse_fallback_mode(value))
+
+  defp runtime_path_issues(options) do
+    Enum.flat_map(@runtime_path_keys, fn key ->
+      case Map.fetch(options, key) do
+        :error -> []
+        {:ok, value} -> path_value_issues(value, key)
+      end
+    end)
+  end
+
+  defp path_value_issues(value, key) when is_binary(value) do
+    if String.trim(value) == "" do
+      [%{field: key, reason: :must_be_non_blank_binary}]
+    else
+      []
+    end
+  end
+
+  defp path_value_issues(_value, key),
+    do: [%{field: key, reason: :must_be_non_blank_binary}]
+
+  defp runtime_module_issues(options) do
+    Enum.flat_map(@runtime_module_keys, fn key ->
+      case Map.fetch(options, key) do
+        :error -> []
+        {:ok, module} -> module_value_issues(module, key)
+      end
+    end)
+  end
+
+  defp module_value_issues(module, key) when is_atom(module) do
+    if Code.ensure_loaded?(module), do: [], else: [%{field: key, reason: :must_be_module}]
+  end
+
+  defp module_value_issues(_module, key), do: [%{field: key, reason: :must_be_module}]
+
+  defp boolean_option_issues(options, key) do
+    case Map.fetch(options, key) do
+      :error -> []
+      {:ok, value} when is_boolean(value) -> []
+      {:ok, _value} -> [%{field: key, reason: :must_be_boolean}]
+    end
+  end
 
   defp options_map(opts) when is_list(opts) do
     cond do

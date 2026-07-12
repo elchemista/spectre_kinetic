@@ -14,10 +14,12 @@ defmodule SpectreKinetic.RuntimeTest do
 
   defmodule ExplicitReranker do
     def load(_opts), do: {:error, :should_not_load_when_runtime_is_explicit}
+    def score_batch(_runtime, _pairs), do: {:ok, []}
   end
 
   defmodule CapturingReranker do
     def load(opts), do: {:ok, {:loaded_with, opts}}
+    def score_batch(_runtime, _pairs), do: {:ok, []}
   end
 
   defmodule FakeEncoder do
@@ -151,6 +153,45 @@ defmodule SpectreKinetic.RuntimeTest do
                top_k: 0,
                tool_threshold: 1.5
              )
+  end
+
+  test "load_runtime/1 rejects invalid runtime boundary options" do
+    assert {:error,
+            {:invalid_options,
+             [%{field: :registry_module, reason: :must_implement_registry_backend}]}} =
+             SpectreKinetic.load_runtime(
+               registry_module: String,
+               allow_empty_registry: true
+             )
+
+    assert {:error,
+            {:invalid_options,
+             [
+               %{field: :fallback_runtime_module, reason: :must_implement_reranker_runtime}
+             ]}} =
+             SpectreKinetic.load_runtime(
+               fallback_runtime_module: String,
+               tool_selection_fallback: :reranker,
+               allow_empty_registry: true
+             )
+  end
+
+  test "load_runtime/1 rejects a non-binary application registry path" do
+    previous = Application.get_env(:spectre_kinetic, :registry_json)
+    Application.put_env(:spectre_kinetic, :registry_json, :not_a_path)
+
+    on_exit(fn ->
+      if is_nil(previous) do
+        Application.delete_env(:spectre_kinetic, :registry_json)
+      else
+        Application.put_env(:spectre_kinetic, :registry_json, previous)
+      end
+    end)
+
+    assert {:error,
+            {:invalid_options,
+             [%{field: :registry_json, reason: :must_be_non_blank_binary}]}} =
+             SpectreKinetic.load_runtime()
   end
 
   test "runtime mutation APIs return updated runtimes" do
@@ -304,6 +345,22 @@ defmodule SpectreKinetic.RuntimeTest do
     assert metadata.result == :error
     assert metadata.reason == :unknown_registry_format
     assert metadata.format == :unknown
+  end
+
+  test "reload_registry/2 rejects non-binary and blank paths without losing the registry" do
+    registry_json = write_registry_json([email_action()])
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)
+    active_registry = runtime.registry
+
+    for path <- [42, " "] do
+      assert {:error,
+              {:invalid_options,
+               [%{field: :registry_path, reason: :must_be_non_blank_binary}]}} =
+               SpectreKinetic.reload_registry(runtime, path)
+    end
+
+    assert :ets.info(active_registry.actions) != :undefined
+    assert SpectreKinetic.action_count(runtime) == 1
   end
 
   test "runtime mutation emits registry and embedding telemetry" do
