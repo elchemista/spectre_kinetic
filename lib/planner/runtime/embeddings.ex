@@ -150,14 +150,18 @@ defmodule SpectreKinetic.Planner.Runtime.Embeddings do
     end)
   end
 
+  @spec validate_embedding_batch(Nx.Tensor.t(), non_neg_integer()) ::
+          :ok
+          | {:error, :invalid_embedding_batch | :non_finite_embedding_batch}
+          | {:error, {:invalid_embedding_batch_shape, tuple(), non_neg_integer()}}
+          | {:error, {:invalid_embedding_batch_type, term()}}
   defp validate_embedding_batch(%Nx.Tensor{} = matrix, expected_rows) do
     case Nx.shape(matrix) do
       {^expected_rows, dimension}
       when dimension > 0 and dimension <= @max_embedding_dim and
              expected_rows * dimension <= @max_embedding_cells ->
-        with :ok <- validate_embedding_batch_type(matrix),
-             :ok <- validate_embedding_batch_values(matrix) do
-          :ok
+        with :ok <- validate_embedding_batch_type(matrix) do
+          validate_embedding_batch_values(matrix)
         end
 
       shape ->
@@ -165,9 +169,8 @@ defmodule SpectreKinetic.Planner.Runtime.Embeddings do
     end
   end
 
-  defp validate_embedding_batch(_matrix, _expected_rows),
-    do: {:error, :invalid_embedding_batch}
-
+  @spec validate_embedding_batch_type(Nx.Tensor.t()) ::
+          :ok | {:error, {:invalid_embedding_batch_type, term()}}
   defp validate_embedding_batch_type(matrix) do
     case Nx.type(matrix) do
       {:f, _bits} -> :ok
@@ -176,6 +179,8 @@ defmodule SpectreKinetic.Planner.Runtime.Embeddings do
     end
   end
 
+  @spec validate_embedding_batch_values(Nx.Tensor.t()) ::
+          :ok | {:error, :invalid_embedding_batch | :non_finite_embedding_batch}
   defp validate_embedding_batch_values(matrix) do
     if matrix |> Nx.to_flat_list() |> Enum.all?(&finite_number?/1),
       do: :ok,
@@ -184,6 +189,7 @@ defmodule SpectreKinetic.Planner.Runtime.Embeddings do
     _error -> {:error, :invalid_embedding_batch}
   end
 
+  @spec finite_number?(term()) :: boolean()
   defp finite_number?(value) when is_integer(value), do: true
 
   defp finite_number?(value) when is_float(value) do
