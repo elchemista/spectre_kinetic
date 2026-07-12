@@ -257,6 +257,24 @@ rejects ambiguous multiclass output instead of assuming class `0`. Use
 `reranker_score_transform: :softmax` for multiclass logits or `:sigmoid` for a
 single raw logit; already-normalized scores use the default `:identity`.
 
+Library-first runtimes own protected ETS tables in the process that loads
+them. Other processes may plan with the runtime, but reload/add/delete and
+closure must run in the owner process. Close the runtime when it is no longer
+needed:
+
+```elixir
+runtime = SpectreKinetic.load_runtime!(registry_json: "registry.json")
+
+try do
+  SpectreKinetic.plan(runtime, "SEND EMAIL WITH: TO=dev@example.com")
+after
+  SpectreKinetic.close_runtime(runtime)
+end
+```
+
+Use the supervised `SpectreKinetic` child when several callers need shared
+registry mutations; its server owns and closes the runtime automatically.
+
 ## Classifier Plugs
 
 The core planner stays small. It selects a tool and maps args. Then classifier

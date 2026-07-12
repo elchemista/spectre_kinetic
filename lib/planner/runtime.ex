@@ -60,9 +60,16 @@ defmodule SpectreKinetic.Planner.Runtime do
   @spec load(keyword()) :: {:ok, t()} | {:error, term()}
   def load(opts \\ []) do
     with {:ok, components} <- Loader.components(opts) do
-      __MODULE__
-      |> struct(components)
-      |> Embeddings.embed_loaded_registry(opts)
+      runtime = struct(__MODULE__, components)
+
+      case Embeddings.embed_loaded_registry(runtime, opts) do
+        {:ok, runtime} ->
+          {:ok, runtime}
+
+        {:error, _reason} = error ->
+          close(runtime)
+          error
+      end
     end
   end
 
@@ -117,6 +124,18 @@ defmodule SpectreKinetic.Planner.Runtime do
   end
 
   @doc """
+  Closes registry resources owned by the calling process.
+
+  ETS-backed runtimes are process-owned: they may be shared for planning, but
+  mutations and closure must run in the process that loaded them. Supervised
+  adapter runtimes are closed automatically when their server terminates.
+  """
+  @spec close(t()) :: :ok | {:error, term()}
+  def close(%__MODULE__{} = runtime) do
+    runtime.registry_module.close(runtime.registry)
+  end
+
+  @doc """
   Reloads the runtime registry from either JSON or compiled ETF and returns the
   updated runtime.
   """
@@ -142,7 +161,8 @@ defmodule SpectreKinetic.Planner.Runtime do
     start = System.monotonic_time()
 
     result =
-      with {:ok, action, embedding} <- Embeddings.prepare_action(runtime, action),
+      with :ok <- ensure_registry_owner(runtime),
+           {:ok, action, embedding} <- Embeddings.prepare_action(runtime, action),
            {:ok, registry} <-
              runtime.registry_module.upsert_action(runtime.registry, action, embedding) do
         {:ok, %{runtime | registry: registry}}
@@ -164,12 +184,14 @@ defmodule SpectreKinetic.Planner.Runtime do
     start = System.monotonic_time()
 
     result =
-      case runtime.registry_module.delete_action(runtime.registry, action_id) do
-        {{:ok, deleted}, registry} ->
-          {:ok, deleted, %{runtime | registry: registry}}
+      with :ok <- ensure_registry_owner(runtime) do
+        case runtime.registry_module.delete_action(runtime.registry, action_id) do
+          {{:ok, deleted}, registry} ->
+            {:ok, deleted, %{runtime | registry: registry}}
 
-        {:error, _reason} = error ->
-          error
+          {:error, _reason} = error ->
+            error
+        end
       end
 
     emit_delete_event(start, runtime, result, action_id)
@@ -181,25 +203,44 @@ defmodule SpectreKinetic.Planner.Runtime do
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp stage_and_swap_registry(runtime, path) do
-    opts = [allow_empty_registry: runtime.allow_empty_registry]
-
-    case Loader.stage_registry(runtime.registry_module, path, opts) do
-      {:ok, registry} ->
-        staged_runtime = %{runtime | registry: registry}
-        embedding_attempted? = Embeddings.reembed_after_reload?(staged_runtime, path)
-
-        case Embeddings.reembed_after_reload(staged_runtime, path) do
-          {:ok, next_runtime} ->
-            runtime.registry_module.close(runtime.registry)
-            {{:ok, next_runtime}, embedding_attempted?}
-
-          {:error, _reason} = error ->
-            runtime.registry_module.close(registry)
-            {error, embedding_attempted?}
-        end
+    case ensure_registry_owner(runtime) do
+      :ok ->
+        do_stage_and_swap_registry(runtime, path)
 
       {:error, _reason} = error ->
         {error, false}
+    end
+  end
+
+  defp do_stage_and_swap_registry(runtime, path) do
+    opts = [allow_empty_registry: runtime.allow_empty_registry]
+
+    case Loader.stage_registry(runtime.registry_module, path, opts) do
+      {:ok, registry} -> complete_staged_registry(runtime, registry, path)
+      {:error, _reason} = error -> {error, false}
+    end
+  end
+
+  defp complete_staged_registry(runtime, registry, path) do
+    staged_runtime = %{runtime | registry: registry}
+    embedding_attempted? = Embeddings.reembed_after_reload?(staged_runtime, path)
+
+    case Embeddings.reembed_after_reload(staged_runtime, path) do
+      {:ok, next_runtime} ->
+        :ok = runtime.registry_module.close(runtime.registry)
+        {{:ok, next_runtime}, embedding_attempted?}
+
+      {:error, _reason} = error ->
+        :ok = runtime.registry_module.close(registry)
+        {error, embedding_attempted?}
+    end
+  end
+
+  defp ensure_registry_owner(runtime) do
+    case runtime.registry_module.owner(runtime.registry) do
+      :shared -> :ok
+      owner when owner == self() -> :ok
+      owner -> {:error, {:registry_not_owner, owner}}
     end
   end
 

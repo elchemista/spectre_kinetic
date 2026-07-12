@@ -127,6 +127,12 @@ defmodule SpectreKinetic.Adapter.Server do
     {:reply, PlannerRuntime.action_count(state.runtime), state}
   end
 
+  @impl GenServer
+  def terminate(_reason, state) do
+    PlannerRuntime.close(state.runtime)
+    :ok
+  end
+
   defp do_plan(runtime, al_text, opts) do
     mode = Keyword.get(opts, :__spectre_mode__, :plan)
     planner_reply(runtime, al_text, Planner.plan(runtime, al_text, opts), opts, mode)

@@ -49,6 +49,10 @@ defmodule SpectreKinetic.RuntimeTest do
     end
   end
 
+  defmodule FailingClassifier do
+    def init(_opts), do: raise("classifier init failed")
+  end
+
   test "load_runtime/1 emits skipped optional ML load telemetry" do
     registry_json = write_registry_json([email_action()])
 
@@ -96,6 +100,19 @@ defmodule SpectreKinetic.RuntimeTest do
              )
 
     assert SpectreKinetic.action_count(runtime) == 0
+  end
+
+  test "load_runtime/1 closes registry resources when component loading fails" do
+    registry_json = write_registry_json([email_action()])
+    table_count = owned_table_count()
+
+    assert {:error, {FailingClassifier, %RuntimeError{message: "classifier init failed"}}} =
+             SpectreKinetic.load_runtime(
+               registry_json: registry_json,
+               classifiers: [FailingClassifier]
+             )
+
+    assert owned_table_count() == table_count
   end
 
   test "load_runtime/1 builds a persistent runtime that can plan directly" do
@@ -361,6 +378,43 @@ defmodule SpectreKinetic.RuntimeTest do
     end
   end
 
+  test "close_runtime/1 releases registry tables and is idempotent" do
+    registry_json = write_registry_json([email_action()])
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)
+    registry = runtime.registry
+
+    assert :ok = SpectreKinetic.close_runtime(runtime)
+    assert :ets.info(registry.actions) == :undefined
+    assert :ok = SpectreKinetic.close_runtime(runtime)
+  end
+
+  test "process-owned runtimes reject mutations and closure from other processes" do
+    registry_json = write_registry_json([email_action()])
+    notes_json = write_registry_json([note_delete_action()])
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)
+    owner = self()
+
+    task =
+      Task.async(fn ->
+        {
+          SpectreKinetic.add_action(runtime, note_delete_action()),
+          SpectreKinetic.delete_action(runtime, "Dynamic.Email.send/3"),
+          SpectreKinetic.reload_registry(runtime, notes_json),
+          SpectreKinetic.close_runtime(runtime)
+        }
+      end)
+
+    assert {
+             {:error, {:registry_not_owner, ^owner}},
+             {:error, {:registry_not_owner, ^owner}},
+             {:error, {:registry_not_owner, ^owner}},
+             {:error, {:registry_not_owner, ^owner}}
+           } = Task.await(task)
+
+    assert SpectreKinetic.action_count(runtime) == 1
+    assert :ets.info(runtime.registry.actions) != :undefined
+  end
+
   defp write_registry_json(actions) do
     path =
       Path.join(System.tmp_dir!(), "spectre_runtime_#{System.unique_integer([:positive])}.json")
@@ -390,6 +444,13 @@ defmodule SpectreKinetic.RuntimeTest do
     events
     |> Enum.find(&(&1.event == event))
     |> Map.fetch!(:metadata)
+  end
+
+  defp owned_table_count do
+    owner = self()
+
+    :ets.all()
+    |> Enum.count(fn table -> :ets.info(table, :owner) == owner end)
   end
 
   defp email_action do

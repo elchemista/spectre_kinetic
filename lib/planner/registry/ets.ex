@@ -1,6 +1,11 @@
 defmodule SpectreKinetic.Planner.Registry.ETS do
   @moduledoc """
   Default ETS-backed registry backend for the Elixir planner runtime.
+
+  The process that calls `new/1` owns the registry. Protected ETS tables allow
+  other processes to plan against the handle, but only the owner may load,
+  mutate, or close it. Use the supervised adapter when mutations need to be
+  shared across callers.
   """
 
   @behaviour SpectreKinetic.Planner.Registry
@@ -9,13 +14,14 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
 
   require Logger
 
-  defstruct [:actions, :aliases, :embeddings, :meta]
+  defstruct [:actions, :aliases, :embeddings, :meta, :owner]
 
   @type t :: %__MODULE__{
           actions: :ets.tid(),
           aliases: :ets.tid(),
           embeddings: :ets.tid(),
-          meta: :ets.tid()
+          meta: :ets.tid(),
+          owner: pid()
         }
 
   @impl Registry
@@ -24,16 +30,33 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
       actions: :ets.new(__MODULE__, [:set, :protected]),
       aliases: :ets.new(__MODULE__, [:bag, :protected]),
       embeddings: :ets.new(__MODULE__, [:set, :protected]),
-      meta: :ets.new(__MODULE__, [:set, :protected])
+      meta: :ets.new(__MODULE__, [:set, :protected]),
+      owner: self()
     }
 
-    case maybe_load_json(registry, Keyword.get(opts, :registry_json)) do
-      {:ok, registry} -> maybe_load_compiled(registry, Keyword.get(opts, :compiled_registry))
-      {:error, _reason} = error -> error
+    result =
+      case maybe_load_json(registry, Keyword.get(opts, :registry_json)) do
+        {:ok, registry} -> maybe_load_compiled(registry, Keyword.get(opts, :compiled_registry))
+        {:error, _reason} = error -> error
+      end
+
+    case result do
+      {:ok, registry} ->
+        {:ok, registry}
+
+      {:error, _reason} = error ->
+        close(registry)
+        error
     end
   end
 
   @impl Registry
+  def owner(%__MODULE__{} = registry), do: registry.owner
+
+  @impl Registry
+  def load_json(%__MODULE__{owner: owner}, _path) when owner != self(),
+    do: not_owner(owner)
+
   def load_json(%__MODULE__{} = registry, path) do
     with {:ok, payload} <- File.read(path),
          {:ok, decoded} <- Jason.decode(payload),
@@ -46,6 +69,9 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   end
 
   @impl Registry
+  def load_compiled(%__MODULE__{owner: owner}, _path) when owner != self(),
+    do: not_owner(owner)
+
   def load_compiled(%__MODULE__{} = registry, path) do
     case File.read(path) do
       {:ok, binary} ->
@@ -89,6 +115,9 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   end
 
   @impl Registry
+  def upsert_action(%__MODULE__{owner: owner}, _action, _embedding) when owner != self(),
+    do: not_owner(owner)
+
   def upsert_action(%__MODULE__{} = registry, action, embedding) do
     case Registry.normalize_action(action) do
       {:ok, normalized} ->
@@ -101,6 +130,9 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   end
 
   @impl Registry
+  def delete_action(%__MODULE__{owner: owner}, _action_id) when owner != self(),
+    do: not_owner(owner)
+
   def delete_action(%__MODULE__{} = registry, action_id) do
     existed = :ets.member(registry.actions, action_id)
     :ets.match_delete(registry.aliases, {:_, action_id, :_})
@@ -130,6 +162,9 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   end
 
   @impl Registry
+  def put_embedding(%__MODULE__{owner: owner}, _action_id, _tensor) when owner != self(),
+    do: not_owner(owner)
+
   def put_embedding(%__MODULE__{} = registry, action_id, tensor) do
     if :ets.member(registry.actions, action_id) do
       :ets.insert(registry.embeddings, {action_id, tensor})
@@ -156,16 +191,20 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
 
   @impl Registry
   def close(%__MODULE__{} = registry) do
-    Enum.each(
-      [registry.actions, registry.aliases, registry.embeddings, registry.meta],
-      fn table ->
-        if :ets.info(table) != :undefined do
-          :ets.delete(table)
-        end
-      end
-    )
+    cond do
+      closed?(registry) ->
+        :ok
 
-    :ok
+      registry.owner != self() ->
+        not_owner(registry.owner)
+
+      true ->
+        Enum.each(registry_tables(registry), fn table ->
+          if :ets.info(table) != :undefined, do: :ets.delete(table)
+        end)
+
+        :ok
+    end
   end
 
   defp maybe_load_json(registry, nil), do: {:ok, registry}
@@ -173,6 +212,16 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
 
   defp maybe_load_compiled(registry, nil), do: {:ok, registry}
   defp maybe_load_compiled(registry, path), do: load_compiled(registry, path)
+
+  defp registry_tables(registry) do
+    [registry.actions, registry.aliases, registry.embeddings, registry.meta]
+  end
+
+  defp closed?(registry) do
+    Enum.all?(registry_tables(registry), &(:ets.info(&1) == :undefined))
+  end
+
+  defp not_owner(owner), do: {:error, {:registry_not_owner, owner}}
 
   defp clear_tables(%__MODULE__{} = registry) do
     :ets.delete_all_objects(registry.actions)

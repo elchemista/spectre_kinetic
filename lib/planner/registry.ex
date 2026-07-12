@@ -14,6 +14,11 @@ defmodule SpectreKinetic.Planner.Registry do
   - shared normalization stays here so every backend receives the same action
     shape
 
+  A backend also declares who owns mutations through `owner/1`. `:shared`
+  backends may be mutated by any caller. Process-owned backends return their
+  owner pid and must reject mutations and closure from other processes. Reads
+  may remain shareable when the storage implementation permits it.
+
   ## Canonical action shape
 
       %{
@@ -34,6 +39,7 @@ defmodule SpectreKinetic.Planner.Registry do
   @type embedding_matrix :: {Nx.Tensor.t(), [binary()]}
 
   @callback new(keyword()) :: {:ok, term()} | {:error, term()}
+  @callback owner(term()) :: pid() | :shared
   @callback load_json(term(), binary()) :: {:ok, term()} | {:error, term()}
   @callback load_compiled(term(), binary()) :: {:ok, term()} | {:error, term()}
   @callback all_actions(term()) :: [action()]
@@ -47,7 +53,7 @@ defmodule SpectreKinetic.Planner.Registry do
   @callback put_embedding(term(), binary(), Nx.Tensor.t()) :: {:ok, term()} | {:error, term()}
   @callback tool_cards(term()) :: [{binary(), binary()}]
   @callback resolve_alias(term(), binary()) :: [{binary(), binary()}]
-  @callback close(term()) :: :ok
+  @callback close(term()) :: :ok | {:error, term()}
 
   @doc """
   Normalizes one raw registry action into the planner's canonical action shape.

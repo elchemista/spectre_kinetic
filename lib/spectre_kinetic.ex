@@ -234,6 +234,15 @@ defmodule SpectreKinetic do
   def load_runtime!(opts \\ []), do: PlannerRuntime.load!(opts)
 
   @doc """
+  Closes a library-first runtime and releases its registry resources.
+
+  Call this from the same process that loaded the runtime. Supervised adapter
+  runtimes are closed automatically with their server.
+  """
+  @spec close_runtime(PlannerRuntime.t()) :: :ok | {:error, term()}
+  def close_runtime(%PlannerRuntime{} = runtime), do: PlannerRuntime.close(runtime)
+
+  @doc """
   Returns the library version.
   """
   @spec version() :: binary()

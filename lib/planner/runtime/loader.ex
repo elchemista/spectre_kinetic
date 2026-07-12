@@ -39,23 +39,38 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
     registry_module = Keyword.get(opts, :registry_module, ETS)
     reranker_module = Keyword.get(opts, :fallback_runtime_module, RerankerRuntime)
 
-    with {:ok, registry} <- load_registry(registry_module, opts),
-         {:ok, encoder} <- load_encoder(opts),
-         {:ok, reranker} <- load_reranker(opts, reranker_module),
-         {:ok, classifiers} <- configured_classifiers(opts, :classifiers),
-         {:ok, chain_classifiers} <- configured_classifiers(opts, :chain_classifiers) do
-      {:ok,
-       %{
-         registry_module: registry_module,
-         registry: registry,
-         encoder: encoder,
-         reranker_module: reranker_module,
-         reranker: reranker,
-         allow_empty_registry: Keyword.get(opts, :allow_empty_registry, false),
-         defaults: planner_defaults(opts),
-         classifiers: classifiers,
-         chain_classifiers: chain_classifiers
-       }}
+    with {:ok, registry} <- load_registry(registry_module, opts) do
+      load_owned_components(registry_module, registry, reranker_module, opts)
+    end
+  end
+
+  defp load_owned_components(registry_module, registry, reranker_module, opts) do
+    result =
+      with {:ok, encoder} <- load_encoder(opts),
+           {:ok, reranker} <- load_reranker(opts, reranker_module),
+           {:ok, classifiers} <- configured_classifiers(opts, :classifiers),
+           {:ok, chain_classifiers} <- configured_classifiers(opts, :chain_classifiers) do
+        {:ok,
+         %{
+           registry_module: registry_module,
+           registry: registry,
+           encoder: encoder,
+           reranker_module: reranker_module,
+           reranker: reranker,
+           allow_empty_registry: Keyword.get(opts, :allow_empty_registry, false),
+           defaults: planner_defaults(opts),
+           classifiers: classifiers,
+           chain_classifiers: chain_classifiers
+         }}
+      end
+
+    case result do
+      {:ok, _components} = ok ->
+        ok
+
+      {:error, _reason} = error ->
+        registry_module.close(registry)
+        error
     end
   end
 
