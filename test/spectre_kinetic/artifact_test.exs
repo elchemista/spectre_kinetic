@@ -31,6 +31,19 @@ defmodule SpectreKinetic.ArtifactTest do
     assert size == byte_size(binary)
   end
 
+  test "rejects compressed terms whose declared expansion exceeds the limit" do
+    binary =
+      %{payload: String.duplicate("compressible", 1_024)}
+      |> :erlang.term_to_binary([:compressed])
+
+    assert byte_size(binary) < 1_024
+
+    assert {:error, {:artifact_expands_too_large, :binary, decoded_size, 1_024}} =
+             Artifact.decode_term(binary, max_bytes: 1_024, max_decoded_bytes: 1_024)
+
+    assert decoded_size > 1_024
+  end
+
   test "enforces file limits for ETF and JSON artifacts" do
     root =
       Path.join(

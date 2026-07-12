@@ -12,6 +12,7 @@ defmodule SpectreKinetic.Artifact do
 
   @type decode_error ::
           {:artifact_too_large, Path.t() | :binary, non_neg_integer(), pos_integer()}
+          | {:artifact_expands_too_large, Path.t() | :binary, non_neg_integer(), pos_integer()}
           | {:invalid_artifact_term, Exception.t()}
           | {:invalid_artifact_json, term()}
           | File.posix()
@@ -20,9 +21,14 @@ defmodule SpectreKinetic.Artifact do
   @spec read_term(Path.t(), keyword()) :: {:ok, term()} | {:error, decode_error()}
   def read_term(path, opts \\ []) when is_binary(path) and is_list(opts) do
     max_bytes = max_bytes(opts, :max_bytes, @default_term_max_bytes)
+    max_decoded_bytes = max_bytes(opts, :max_decoded_bytes, max_bytes)
 
     with {:ok, binary} <- read_limited(path, max_bytes) do
-      decode_term(binary, max_bytes: max_bytes)
+      decode_term(binary,
+        max_bytes: max_bytes,
+        max_decoded_bytes: max_decoded_bytes,
+        source: path
+      )
     end
   end
 
@@ -30,10 +36,11 @@ defmodule SpectreKinetic.Artifact do
   @spec decode_term(binary(), keyword()) :: {:ok, term()} | {:error, decode_error()}
   def decode_term(binary, opts \\ []) when is_binary(binary) and is_list(opts) do
     max_bytes = max_bytes(opts, :max_bytes, @default_term_max_bytes)
+    max_decoded_bytes = max_bytes(opts, :max_decoded_bytes, max_bytes)
+    source = Keyword.get(opts, :source, :binary)
 
-    if byte_size(binary) > max_bytes do
-      {:error, {:artifact_too_large, :binary, byte_size(binary), max_bytes}}
-    else
+    with :ok <- validate_size(source, byte_size(binary), max_bytes),
+         :ok <- validate_decoded_size(source, binary, max_decoded_bytes) do
       {:ok, :erlang.binary_to_term(binary, [:safe])}
     end
   rescue
@@ -83,6 +90,24 @@ defmodule SpectreKinetic.Artifact do
 
   defp validate_size(path, size, max_bytes),
     do: {:error, {:artifact_too_large, path, size, max_bytes}}
+
+  defp validate_decoded_size(source, binary, max_decoded_bytes) do
+    decoded_size = declared_decoded_size(binary)
+
+    if decoded_size <= max_decoded_bytes do
+      :ok
+    else
+      {:error,
+       {:artifact_expands_too_large, source, decoded_size, max_decoded_bytes}}
+    end
+  end
+
+  # COMPRESSED_EXT includes the exact uncompressed external-term size before
+  # the zlib stream. Reject it before asking the VM to allocate/decompress it.
+  defp declared_decoded_size(<<131, 80, size::unsigned-big-integer-size(32), _rest::binary>>),
+    do: size
+
+  defp declared_decoded_size(binary), do: byte_size(binary)
 
   @spec max_bytes(keyword(), atom(), pos_integer()) :: pos_integer()
   defp max_bytes(opts, key, default) do

@@ -102,6 +102,9 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
       {:error, {:artifact_too_large, _path, _size, _limit} = reason} ->
         {:error, reason}
 
+      {:error, {:artifact_expands_too_large, _path, _size, _limit} = reason} ->
+        {:error, reason}
+
       {:error, reason} ->
         {:error, {:file_read, reason}}
     end
