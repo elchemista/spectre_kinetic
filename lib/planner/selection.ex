@@ -30,6 +30,14 @@ defmodule SpectreKinetic.Planner.Selection do
           reranker: term() | nil
         }
 
+  @typep candidate :: %{
+           required(:action) => map(),
+           required(:fused_score) => number(),
+           required(:embedding_score) => number(),
+           optional(:reranker_score) => number()
+         }
+  @typep selection_result :: {:ok, map()} | {:error, term()}
+
   @doc """
   Extracts the validated selection options used by the planning stage.
   """
@@ -64,6 +72,8 @@ defmodule SpectreKinetic.Planner.Selection do
     end
   end
 
+  @spec finalize_selection(candidate(), map(), [binary()], [candidate()], opts()) ::
+          selection_result()
   defp finalize_selection(chosen, mapping, reranker_notes, scored_candidates, selection_opts) do
     if accepted_selection?(chosen, selection_opts) do
       {:ok,
@@ -73,14 +83,17 @@ defmodule SpectreKinetic.Planner.Selection do
     end
   end
 
+  @spec accepted_selection?(candidate(), opts()) :: boolean()
   defp accepted_selection?(chosen, selection_opts) do
     chosen.fused_score >= selection_opts.tool_threshold and
       reranker_score_accepted?(chosen, selection_opts.reranker_threshold)
   end
 
+  @spec reranker_score_accepted?(candidate(), number()) :: boolean()
   defp reranker_score_accepted?(%{reranker_score: score}, threshold), do: score >= threshold
   defp reranker_score_accepted?(_chosen, _threshold), do: true
 
+  @spec mapped_tool_result(candidate(), map(), [binary()], [candidate()], opts()) :: map()
   defp mapped_tool_result(chosen, mapping, reranker_notes, scored_candidates, selection_opts) do
     %{
       "status" => mapped_status(mapping, selection_opts.mapping_threshold),
@@ -97,6 +110,7 @@ defmodule SpectreKinetic.Planner.Selection do
     }
   end
 
+  @spec mapped_status(map(), number()) :: binary()
   defp mapped_status(%{mapping_score: score}, threshold) when score < threshold,
     do: "AMBIGUOUS_MAPPING"
 
@@ -109,6 +123,7 @@ defmodule SpectreKinetic.Planner.Selection do
   defp mapped_status(%{missing: []}, _threshold), do: "ok"
   defp mapped_status(_mapping, _threshold), do: "MISSING_ARGS"
 
+  @spec choose_candidate(binary(), [candidate(), ...], map(), opts()) :: selection_result()
   defp choose_candidate(al_text, [best | rest] = scored_candidates, slots, selection_opts) do
     primary_mapping = SlotMapper.map_slots(slots, best.action)
 
@@ -134,6 +149,7 @@ defmodule SpectreKinetic.Planner.Selection do
     end
   end
 
+  @spec should_rerank?(candidate(), [candidate()], map(), opts()) :: boolean()
   defp should_rerank?(best, rest, mapping, selection_opts) do
     selection_opts.tool_selection_fallback == :reranker and
       not is_nil(selection_opts.reranker) and
@@ -141,12 +157,21 @@ defmodule SpectreKinetic.Planner.Selection do
       reranker_would_help?(best, rest, mapping, selection_opts)
   end
 
+  @spec reranker_would_help?(candidate(), [candidate()], map(), opts()) :: boolean()
   defp reranker_would_help?(best, rest, mapping, selection_opts) do
     best.fused_score >= selection_opts.tool_threshold and
       (mapping.missing != [] or
          candidate_margin(best, rest) <= selection_opts.fallback_margin)
   end
 
+  @spec choose_with_reranker(
+          binary(),
+          [candidate(), ...],
+          map(),
+          opts(),
+          candidate(),
+          map()
+        ) :: selection_result()
   defp choose_with_reranker(
          al_text,
          scored_candidates,
@@ -188,6 +213,8 @@ defmodule SpectreKinetic.Planner.Selection do
     end
   end
 
+  @spec safe_score_batch(module(), term(), [{binary(), binary()}]) ::
+          {:ok, term()} | {:error, term()}
   defp safe_score_batch(module, runtime, pairs) do
     case module.score_batch(runtime, pairs) do
       {:ok, _scores} = ok ->
@@ -209,6 +236,16 @@ defmodule SpectreKinetic.Planner.Selection do
       {:error, {:reranker_call_failed, %{kind: kind, reason: reason}}}
   end
 
+  @spec handle_reranker_scores(
+          term(),
+          binary(),
+          [candidate(), ...],
+          map(),
+          opts(),
+          candidate(),
+          map(),
+          integer()
+        ) :: selection_result()
   defp handle_reranker_scores(
          scores,
          _al_text,
@@ -259,6 +296,14 @@ defmodule SpectreKinetic.Planner.Selection do
     end
   end
 
+  @spec reranker_error_fallback(
+          term(),
+          integer(),
+          opts(),
+          [candidate(), ...],
+          candidate(),
+          map()
+        ) :: {:ok, map()}
   defp reranker_error_fallback(
          reason,
          start,
@@ -329,12 +374,15 @@ defmodule SpectreKinetic.Planner.Selection do
     _error -> false
   end
 
+  @spec reranker_pairs(binary(), [candidate()]) :: [{binary(), binary()}]
   defp reranker_pairs(al_text, candidates) do
     Enum.map(candidates, fn candidate ->
       {al_text, Registry.build_tool_card(candidate.action)}
     end)
   end
 
+  @spec select_reranked_candidate([candidate(), ...], [float(), ...]) ::
+          {candidate(), [candidate()]}
   defp select_reranked_candidate(pool, scores) do
     [chosen | rest] =
       pool
@@ -347,6 +395,8 @@ defmodule SpectreKinetic.Planner.Selection do
     {chosen, rest}
   end
 
+  @spec mark_close_tool_selection(map(), number(), [candidate()], number()) ::
+          {map(), [binary()]}
   defp mark_close_tool_selection(mapping, _margin, [], _required_margin),
     do: {mapping, []}
 
@@ -361,6 +411,7 @@ defmodule SpectreKinetic.Planner.Selection do
   defp mark_close_tool_selection(mapping, _margin, _rest, _required_margin),
     do: {mapping, []}
 
+  @spec empty_registry_result() :: map()
   defp empty_registry_result do
     %{
       "status" => "NO_TOOL",
@@ -375,6 +426,7 @@ defmodule SpectreKinetic.Planner.Selection do
     }
   end
 
+  @spec no_tool_result([candidate()], number()) :: {:ok, map()}
   defp no_tool_result(scored_candidates, tool_threshold) do
     suggestions =
       scored_candidates
@@ -402,6 +454,7 @@ defmodule SpectreKinetic.Planner.Selection do
      }}
   end
 
+  @spec build_candidate_list([candidate()]) :: [map()]
   defp build_candidate_list(scored) do
     Enum.map(scored, fn c ->
       %{
@@ -414,14 +467,17 @@ defmodule SpectreKinetic.Planner.Selection do
     end)
   end
 
+  @spec candidate_margin(candidate(), [candidate()]) :: number()
   defp candidate_margin(_best, []), do: 1.0
   defp candidate_margin(best, [next | _rest]), do: best.fused_score - next.fused_score
 
+  @spec reranker_candidate_margin(candidate(), [candidate()]) :: number()
   defp reranker_candidate_margin(_best, []), do: 1.0
 
   defp reranker_candidate_margin(best, [next | _rest]),
     do: best.reranker_score - next.reranker_score
 
+  @spec reranker_notes(candidate(), candidate(), map(), map()) :: [binary()]
   defp reranker_notes(
          %{action: %{"id" => chosen_id}},
          %{action: %{"id" => primary_id}},
@@ -441,6 +497,8 @@ defmodule SpectreKinetic.Planner.Selection do
     ["reranker fallback confirmed tool selection"]
   end
 
+  @spec reranker_reason(candidate(), candidate(), map(), map()) ::
+          :changed_selection | :confirmed_selection | :revalidated_selection
   defp reranker_reason(
          %{action: %{"id" => chosen_id}},
          %{action: %{"id" => primary_id}},
@@ -456,6 +514,15 @@ defmodule SpectreKinetic.Planner.Selection do
 
   defp reranker_reason(_chosen, _primary, _mapping, _primary_mapping), do: :confirmed_selection
 
+  @spec emit_reranker_event(
+          integer(),
+          opts(),
+          [candidate()],
+          candidate(),
+          candidate(),
+          map(),
+          map()
+        ) :: :ok
   defp emit_reranker_event(start, selection_opts, pool, primary, chosen, mapping, metadata) do
     Telemetry.execute(
       @reranker_fallback_event,
@@ -474,6 +541,7 @@ defmodule SpectreKinetic.Planner.Selection do
     )
   end
 
+  @spec plan_option(map(), atom()) :: term()
   defp plan_option(opts, key) do
     Map.get(opts, key, Keyword.fetch!(RuntimeConfig.built_in_plan_defaults(), key))
   end
