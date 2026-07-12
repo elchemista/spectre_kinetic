@@ -289,7 +289,11 @@ defmodule SpectreKinetic.Action do
     Enum.reverse([%{improper_tail: json_safe(improper_tail, depth)} | acc])
   end
 
-  defp json_safe_key(key) when is_atom(key) or is_binary(key), do: key
+  defp json_safe_key(key) when is_binary(key) do
+    if String.valid?(key), do: key, else: "base64:" <> Base.encode64(key)
+  end
+
+  defp json_safe_key(key) when is_atom(key), do: key
   defp json_safe_key(key), do: inspect(key, limit: 5, printable_limit: 100)
 end
 
