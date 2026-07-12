@@ -52,7 +52,13 @@ defmodule SpectreKinetic.RuntimeTest do
   end
 
   defmodule FailingClassifier do
+    @behaviour SpectreKinetic.Classifier
+
+    @impl SpectreKinetic.Classifier
     def init(_opts), do: raise("classifier init failed")
+
+    @impl SpectreKinetic.Classifier
+    def call(context, _state), do: {:ok, context}
   end
 
   test "load_runtime/1 emits skipped optional ML load telemetry" do
