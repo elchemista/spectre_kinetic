@@ -20,6 +20,12 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
     :fallback_margin
   ]
 
+  @reranker_runtime_options [
+    {:reranker_max_length, :max_length},
+    {:reranker_score_index, :score_index},
+    {:reranker_score_transform, :score_transform}
+  ]
+
   @spec components(keyword()) :: {:ok, map()} | {:error, term()}
   def components(opts) do
     registry_module = Keyword.get(opts, :registry_module, ETS)
@@ -143,9 +149,22 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
         timed_result(
           @reranker_load_event,
           %{path: fallback_model_dir, mode: :reranker},
-          fn -> reranker_module.load(fallback_model_dir: fallback_model_dir) end
+          fn -> reranker_module.load(reranker_load_opts(opts, fallback_model_dir)) end
         )
     end
+  end
+
+  defp reranker_load_opts(opts, fallback_model_dir) do
+    Enum.reduce(
+      @reranker_runtime_options,
+      [fallback_model_dir: fallback_model_dir],
+      fn {source_key, target_key}, runtime_opts ->
+        case Keyword.get(opts, source_key, Application.get_env(:spectre_kinetic, source_key)) do
+          nil -> runtime_opts
+          value -> Keyword.put(runtime_opts, target_key, value)
+        end
+      end
+    )
   end
 
   defp timed_result(event, metadata, fun) do

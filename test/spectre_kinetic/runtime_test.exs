@@ -16,6 +16,10 @@ defmodule SpectreKinetic.RuntimeTest do
     def load(_opts), do: {:error, :should_not_load_when_runtime_is_explicit}
   end
 
+  defmodule CapturingReranker do
+    def load(opts), do: {:ok, {:loaded_with, opts}}
+  end
+
   defmodule FakeEncoder do
     use GenServer
 
@@ -133,6 +137,27 @@ defmodule SpectreKinetic.RuntimeTest do
     assert runtime.reranker_module == ExplicitReranker
     assert event_metadata(events, @reranker_load_event).result == :ok
     assert event_metadata(events, @reranker_load_event).reason == :explicit_runtime
+  end
+
+  test "passes explicit ONNX output semantics to the reranker runtime" do
+    registry_json = write_registry_json([email_action()])
+
+    assert {:ok, %PlannerRuntime{} = runtime} =
+             SpectreKinetic.load_runtime(
+               registry_json: registry_json,
+               tool_selection_fallback: :reranker,
+               fallback_model_dir: "/tmp/reranker-model",
+               fallback_runtime_module: CapturingReranker,
+               reranker_max_length: 256,
+               reranker_score_index: 1,
+               reranker_score_transform: :softmax
+             )
+
+    assert {:loaded_with, opts} = runtime.reranker
+    assert opts[:fallback_model_dir] == "/tmp/reranker-model"
+    assert opts[:max_length] == 256
+    assert opts[:score_index] == 1
+    assert opts[:score_transform] == :softmax
   end
 
   test "reload_registry/2 rejects unknown registry formats" do

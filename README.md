@@ -229,7 +229,9 @@ config :spectre_kinetic,
   tool_selection_fallback: :disabled,
   fallback_model_dir: "/abs/path/to/artifacts/reranker",
   fallback_top_k: 3,
-  fallback_margin: 0.12
+  fallback_margin: 0.12,
+  reranker_score_index: 1,
+  reranker_score_transform: :softmax
 ```
 
 Environment variables work too:
@@ -248,6 +250,12 @@ export SPECTRE_KINETIC_FALLBACK_MARGIN=0.12
 ```
 
 Explicit options passed to `load_runtime!/1` win over config.
+
+For ONNX rerankers that return more than one class, set
+`reranker_score_index` to the relevance-class index. Kinetic deliberately
+rejects ambiguous multiclass output instead of assuming class `0`. Use
+`reranker_score_transform: :softmax` for multiclass logits or `:sigmoid` for a
+single raw logit; already-normalized scores use the default `:identity`.
 
 ## Classifier Plugs
 
