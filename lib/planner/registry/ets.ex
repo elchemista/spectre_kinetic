@@ -202,11 +202,13 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
       |> :ets.tab2list()
       |> Enum.sort_by(&elem(&1, 0))
 
+    expected_count = action_count(registry)
+
     case entries do
       [] ->
         nil
 
-      _ when length(entries) == action_count(registry) ->
+      _ when length(entries) == expected_count ->
         {ids, tensors} = Enum.unzip(entries)
         {Nx.stack(tensors), ids}
 
