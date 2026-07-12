@@ -190,8 +190,6 @@ defmodule Mix.Tasks.Spectre.DownloadEncoder do
       with_output_lock(out_dir, fn ->
         download_locked(opts, model_id, revision, out_dir)
       end)
-    else
-      {:error, reason} -> {:error, reason}
     end
   rescue
     error -> {:error, {:download_exception, error}}
