@@ -1,6 +1,8 @@
 defmodule SpectreKinetic.Classifiers.Internal.AxonRuntime do
   @moduledoc false
 
+  alias SpectreKinetic.Artifact
+
   defstruct [
     :classifier,
     :model_dir,
@@ -24,11 +26,15 @@ defmodule SpectreKinetic.Classifiers.Internal.AxonRuntime do
   @spec load(module(), keyword()) :: {:ok, t()} | {:error, term()}
   def load(classifier, opts) when is_atom(classifier) and is_list(opts) do
     with {:ok, model_dir} <- model_dir(opts),
-         {:ok, metadata} <- read_json(Path.join(model_dir, "metadata.json")),
+         {:ok, metadata} <-
+           Artifact.read_json(
+             Path.join(model_dir, "metadata.json"),
+             artifact_opts(opts, :metadata_max_bytes)
+           ),
          :ok <- validate_metadata(classifier, metadata),
-         {:ok, params_binary} <- File.read(Path.join(model_dir, "params.etf")),
-         {:ok, model_state} <- decode_params(params_binary),
-         {:ok, calibration} <- read_optional_json(Path.join(model_dir, "calibration.json")) do
+         {:ok, model_state} <- read_params(Path.join(model_dir, "params.etf"), opts),
+         {:ok, calibration} <-
+           read_optional_json(Path.join(model_dir, "calibration.json"), opts) do
       model = classifier.build_model(metadata)
       {_init_fn, predict_fn} = Axon.build(model)
 
@@ -83,27 +89,29 @@ defmodule SpectreKinetic.Classifiers.Internal.AxonRuntime do
     end
   end
 
-  defp read_json(path) do
-    with {:ok, json} <- File.read(path) do
-      Jason.decode(json)
-    end
-  end
-
-  defp read_optional_json(path) do
-    case File.read(path) do
-      {:ok, json} -> Jason.decode(json)
+  defp read_optional_json(path, opts) do
+    case Artifact.read_json(path, artifact_opts(opts, :calibration_max_bytes)) do
+      {:ok, calibration} -> {:ok, calibration}
       {:error, :enoent} -> {:ok, %{}}
       {:error, _reason} = error -> error
     end
   end
 
-  defp decode_params(binary) do
-    {:ok, :erlang.binary_to_term(binary)}
-  rescue
-    error -> {:error, {:invalid_params, error}}
+  defp read_params(path, opts) do
+    case Artifact.read_term(path, artifact_opts(opts, :params_max_bytes)) do
+      {:ok, model_state} -> {:ok, model_state}
+      {:error, reason} -> {:error, {:invalid_params, reason}}
+    end
   end
 
-  defp validate_metadata(classifier, metadata) do
+  defp artifact_opts(opts, key) do
+    case Keyword.get(opts, key, Keyword.get(opts, :artifact_max_bytes)) do
+      nil -> []
+      max_bytes -> [max_bytes: max_bytes]
+    end
+  end
+
+  defp validate_metadata(classifier, metadata) when is_map(metadata) do
     cond do
       not is_integer(metadata["feature_dim"]) or metadata["feature_dim"] <= 0 ->
         {:error, {:invalid_metadata, :feature_dim}}
@@ -116,6 +124,8 @@ defmodule SpectreKinetic.Classifiers.Internal.AxonRuntime do
         :ok
     end
   end
+
+  defp validate_metadata(_classifier, _metadata), do: {:error, {:invalid_metadata, :root}}
 
   defp validate_features(runtime, features) do
     expected_dim = feature_dim(runtime)

@@ -15,10 +15,14 @@ defmodule SpectreKinetic.Planner.SlotMapper do
 
   @type mapping_result :: %{
           args: map(),
+          invalid: [map()],
           missing: [binary()],
           notes: [binary()],
-          mapping_score: float()
+          mapping_score: float(),
+          positional: [binary()]
         }
+
+  alias SpectreKinetic.Planner.SlotType
 
   @email_pattern ~r/^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/
   @phone_pattern ~r/^\+?[0-9\s\-().]{7,}$/
@@ -29,6 +33,7 @@ defmodule SpectreKinetic.Planner.SlotMapper do
   @integer_pattern ~r/^-?\d+$/
   @float_pattern ~r/^-?\d+\.\d+$/
   @path_pattern ~r/^[\/~.][\w\/.\-]+$/
+  @positional_score_cap 0.5
 
   # Type hints: maps value-shape types to likely parameter names
   @type_hints %{
@@ -64,23 +69,67 @@ defmodule SpectreKinetic.Planner.SlotMapper do
       resolve_positional(still_unmatched_slots, still_unmatched_params)
 
     all_matched = Map.merge(matched, type_matched) |> Map.merge(positional)
+    {valid_args, invalid} = validate_mapped_args(all_matched, arg_defs)
 
     missing =
-      final_unmatched_params
+      (final_unmatched_params ++ invalid_required_params(invalid, arg_defs))
       |> Enum.filter(& &1["required"])
       |> Enum.map(& &1["name"])
+      |> Enum.uniq()
 
-    notes = build_notes(final_unmatched_slots, missing)
+    notes =
+      build_notes(final_unmatched_slots, missing) ++
+        positional_notes(positional) ++ invalid_notes(invalid)
 
-    score = compute_mapping_score(arg_defs, all_matched, missing)
+    score =
+      arg_defs
+      |> compute_mapping_score(valid_args, missing)
+      |> cap_positional_score(positional)
 
     %{
-      args: all_matched,
+      args: valid_args,
+      invalid: invalid,
       missing: missing,
       notes: notes,
-      mapping_score: score
+      mapping_score: score,
+      positional: positional |> Map.keys() |> Enum.sort()
     }
   end
+
+  defp validate_mapped_args(matched, arg_defs) do
+    definitions = Map.new(arg_defs, &{&1["name"], &1})
+
+    matched
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.reduce({%{}, []}, fn {name, value}, {valid, invalid} ->
+      definition = Map.fetch!(definitions, name)
+      expected_type = definition["type"] || "String.t()"
+
+      case SlotType.coerce(value, expected_type) do
+        {:ok, coerced} ->
+          {Map.put(valid, name, coerced), invalid}
+
+        {:error, reason} ->
+          issue = %{name: name, expected_type: expected_type, reason: reason}
+          {valid, [issue | invalid]}
+      end
+    end)
+    |> then(fn {valid, invalid} -> {valid, Enum.reverse(invalid)} end)
+  end
+
+  defp invalid_required_params(invalid, arg_defs) do
+    invalid_names = invalid |> Enum.map(& &1.name) |> MapSet.new()
+    Enum.filter(arg_defs, &MapSet.member?(invalid_names, &1["name"]))
+  end
+
+  defp invalid_notes(invalid) do
+    Enum.map(invalid, fn issue ->
+      "invalid type for #{issue.name}: expected #{issue.expected_type} (#{format_reason(issue.reason)})"
+    end)
+  end
+
+  defp format_reason(:type_mismatch), do: "type mismatch"
+  defp format_reason({:unsupported_type, type}), do: "unsupported type #{type}"
 
   # Three passes: names first, then value shape, then the one lonely positional
   # fallback. More magic here would make the planner look smart and age badly.
@@ -186,6 +235,16 @@ defmodule SpectreKinetic.Planner.SlotMapper do
     end
   end
 
+  defp positional_notes(positional) when map_size(positional) > 0,
+    do: ["low-confidence positional slot mapping"]
+
+  defp positional_notes(_positional), do: []
+
+  defp cap_positional_score(score, positional) when map_size(positional) > 0,
+    do: min(score, @positional_score_cap)
+
+  defp cap_positional_score(score, _positional), do: score
+
   defp compute_mapping_score(arg_defs, matched, missing) do
     n_total = length(arg_defs)
     n_required = Enum.count(arg_defs, & &1["required"])
@@ -200,11 +259,12 @@ defmodule SpectreKinetic.Planner.SlotMapper do
   end
 
   defp match_param_for_type(params, type) do
-    match = Enum.find(params, &(String.downcase(&1["name"]) in Map.get(@type_hints, type, [])))
+    matches =
+      Enum.filter(params, &(String.downcase(&1["name"]) in Map.get(@type_hints, type, [])))
 
-    case match do
-      nil -> :no_match
-      param -> {:ok, param}
+    case matches do
+      [param] -> {:ok, param}
+      _ambiguous_or_missing -> :no_match
     end
   end
 

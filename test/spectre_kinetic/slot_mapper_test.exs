@@ -87,6 +87,120 @@ defmodule SpectreKinetic.Planner.SlotMapperTest do
     end
   end
 
+  describe "positional fallback" do
+    test "never reports an inferred positional match as fully confident" do
+      action = %{
+        "args" => [
+          %{"name" => "body", "type" => "String.t()", "required" => true, "aliases" => []}
+        ]
+      }
+
+      result = SlotMapper.map_slots(%{"UNKNOWN" => "plain text"}, action)
+
+      assert result.args == %{"body" => "plain text"}
+      assert result.mapping_score == 0.5
+      assert result.positional == ["body"]
+      assert "low-confidence positional slot mapping" in result.notes
+    end
+  end
+
+  describe "schema type enforcement" do
+    test "coerces scalar AL values to declared primitive types" do
+      parsed = %{"COUNT" => "42", "RATIO" => "0.5", "ENABLED" => "off"}
+
+      action = %{
+        "args" => [
+          %{"name" => "count", "type" => "pos_integer()", "required" => true},
+          %{"name" => "ratio", "type" => "float()", "required" => true},
+          %{"name" => "enabled", "type" => "boolean()", "required" => true}
+        ]
+      }
+
+      result = SlotMapper.map_slots(parsed, action)
+
+      assert result.args == %{"count" => 42, "ratio" => 0.5, "enabled" => false}
+      assert result.invalid == []
+      assert result.missing == []
+    end
+
+    test "removes invalid values and keeps required arguments missing" do
+      parsed = %{"COUNT" => "many", "ENABLED" => false}
+
+      action = %{
+        "args" => [
+          %{"name" => "count", "type" => "integer()", "required" => true},
+          %{"name" => "enabled", "type" => "boolean()", "required" => true}
+        ]
+      }
+
+      result = SlotMapper.map_slots(parsed, action)
+
+      assert result.args == %{"enabled" => false}
+      assert result.invalid == [
+               %{name: "count", expected_type: "integer()", reason: :type_mismatch}
+             ]
+      assert result.missing == ["count"]
+      assert Enum.any?(result.notes, &String.contains?(&1, "invalid type for count"))
+    end
+
+    test "validates literal unions and typed collection elements" do
+      action = %{
+        "args" => [
+          %{"name" => "mode", "type" => ":safe | :fast", "required" => true},
+          %{"name" => "retries", "type" => "list(pos_integer())", "required" => true}
+        ]
+      }
+
+      valid = SlotMapper.map_slots(%{"MODE" => "safe", "RETRIES" => ["1", 2]}, action)
+      assert valid.args == %{"mode" => "safe", "retries" => [1, 2]}
+
+      invalid = SlotMapper.map_slots(%{"MODE" => "danger", "RETRIES" => [1, 0]}, action)
+      assert invalid.args == %{}
+      assert Enum.sort(invalid.missing) == ["mode", "retries"]
+      assert length(invalid.invalid) == 2
+    end
+
+    test "fails closed for unsupported opaque types" do
+      action = %{
+        "args" => [
+          %{"name" => "account", "type" => "MyApp.Account.t()", "required" => true}
+        ]
+      }
+
+      result = SlotMapper.map_slots(%{"ACCOUNT" => "acct-1"}, action)
+
+      assert result.args == %{}
+
+      assert result.invalid == [
+               %{
+                 name: "account",
+                 expected_type: "MyApp.Account.t()",
+                 reason: {:unsupported_type, "MyApp.Account.t()"}
+               }
+             ]
+    end
+
+    test "validates dates and URI values without changing their JSON shape" do
+      action = %{
+        "args" => [
+          %{"name" => "due", "type" => "Date.t()", "required" => true},
+          %{"name" => "url", "type" => "URI.t()", "required" => true}
+        ]
+      }
+
+      result =
+        SlotMapper.map_slots(
+          %{"DUE" => "2026-07-12", "URL" => "https://example.com/task"},
+          action
+        )
+
+      assert result.args == %{
+               "due" => "2026-07-12",
+               "url" => "https://example.com/task"
+             }
+    end
+  end
+
   describe "detect_value_type/1" do
     test "detects email" do
       assert SlotMapper.detect_value_type("user@example.com") == :email

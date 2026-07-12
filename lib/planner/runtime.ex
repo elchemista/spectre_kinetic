@@ -8,8 +8,10 @@ defmodule SpectreKinetic.Planner.Runtime do
   """
 
   alias SpectreKinetic.Planner.EmbeddingRuntime
+  alias SpectreKinetic.Planner.Registry
   alias SpectreKinetic.Planner.Runtime.Embeddings
   alias SpectreKinetic.Planner.Runtime.Loader
+  alias SpectreKinetic.RuntimeConfig
   alias SpectreKinetic.Telemetry
 
   @registry_reload_event [:spectre_kinetic, :runtime, :registry, :reload]
@@ -22,9 +24,9 @@ defmodule SpectreKinetic.Planner.Runtime do
     :encoder,
     :reranker_module,
     :reranker,
+    :allow_empty_registry,
     :defaults,
-    :classifiers,
-    :chain_classifiers
+    :classifiers
   ]
 
   @type t :: %__MODULE__{
@@ -33,9 +35,9 @@ defmodule SpectreKinetic.Planner.Runtime do
           encoder: EmbeddingRuntime.runtime_t() | nil,
           reranker_module: module(),
           reranker: term() | nil,
+          allow_empty_registry: boolean(),
           defaults: keyword(),
-          classifiers: [module() | {module(), keyword()}],
-          chain_classifiers: [module() | {module(), keyword()}]
+          classifiers: [module() | {module(), keyword()}]
         }
 
   @doc """
@@ -46,19 +48,32 @@ defmodule SpectreKinetic.Planner.Runtime do
     * `:registry_module` — registry backend module, defaults to ETS
     * `:registry_json` — registry JSON source path
     * `:compiled_registry` — compiled ETF bundle path
+    * `:allow_empty_registry` — explicitly permit a runtime without actions,
+      defaults to `false`
     * `:encoder_model_dir` — ONNX encoder directory
     * `:top_k`, `:tool_threshold`, `:mapping_threshold` — default planner opts
     * `:tool_selection_fallback` — `:disabled` or `:reranker`
     * `:fallback_model_dir` — path to reranker ONNX directory
-    * `:fallback_top_k`, `:fallback_margin` — reranker fallback tuning
+    * `:fallback_top_k`, `:fallback_margin`, `:reranker_threshold` — reranker fallback tuning
     * `:classifiers` — planning-time classifier pipeline specs
   """
   @spec load(keyword()) :: {:ok, t()} | {:error, term()}
   def load(opts \\ []) do
-    with {:ok, components} <- Loader.components(opts) do
-      __MODULE__
-      |> struct(components)
-      |> Embeddings.embed_loaded_registry(opts)
+    case Loader.components(opts) do
+      {:ok, components} -> embed_loaded_registry(struct(__MODULE__, components), opts)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @spec embed_loaded_registry(t(), keyword()) :: {:ok, t()} | {:error, term()}
+  defp embed_loaded_registry(runtime, opts) do
+    case safely(fn -> Embeddings.embed_loaded_registry(runtime, opts) end) do
+      {:ok, runtime} ->
+        {:ok, runtime}
+
+      {:error, _reason} = error ->
+        close(runtime)
+        error
     end
   end
 
@@ -113,20 +128,29 @@ defmodule SpectreKinetic.Planner.Runtime do
   end
 
   @doc """
+  Closes registry resources owned by the calling process.
+
+  ETS-backed runtimes are process-owned: they may be shared for planning, but
+  mutations and closure must run in the process that loaded them. Supervised
+  adapter runtimes are closed automatically when their server terminates.
+  """
+  @spec close(t()) :: :ok | {:error, term()}
+  def close(%__MODULE__{} = runtime) do
+    runtime.registry_module.close(runtime.registry)
+  end
+
+  @doc """
   Reloads the runtime registry from either JSON or compiled ETF and returns the
   updated runtime.
   """
-  @spec reload_registry(t(), binary()) :: {:ok, t()} | {:error, term()}
+  @spec reload_registry(t(), term()) :: {:ok, t()} | {:error, term()}
   def reload_registry(%__MODULE__{} = runtime, path) do
     start = System.monotonic_time()
-    embedding_attempted? = Embeddings.reembed_after_reload?(runtime, path)
 
-    result =
-      with {:ok, registry} <-
-             Loader.reload_registry(runtime.registry_module, runtime.registry, path) do
-        runtime
-        |> Map.put(:registry, registry)
-        |> Embeddings.reembed_after_reload(path)
+    {result, embedding_attempted?} =
+      case RuntimeConfig.validate_path(path, :registry_path) do
+        :ok -> stage_and_swap_registry(runtime, path)
+        {:error, _reason} = error -> {error, false}
       end
 
     emit_registry_event(@registry_reload_event, start, runtime, result, %{
@@ -146,9 +170,10 @@ defmodule SpectreKinetic.Planner.Runtime do
     start = System.monotonic_time()
 
     result =
-      with {:ok, registry} <- runtime.registry_module.add_action(runtime.registry, action),
-           runtime <- %{runtime | registry: registry},
-           {:ok, registry} <- Embeddings.maybe_embed_action(runtime, action) do
+      with :ok <- ensure_registry_owner(runtime),
+           {:ok, action, embedding} <- Embeddings.prepare_action(runtime, action),
+           {:ok, registry} <-
+             Registry.upsert(runtime.registry_module, runtime.registry, action, embedding) do
         {:ok, %{runtime | registry: registry}}
       end
 
@@ -168,12 +193,14 @@ defmodule SpectreKinetic.Planner.Runtime do
     start = System.monotonic_time()
 
     result =
-      case runtime.registry_module.delete_action(runtime.registry, action_id) do
-        {{:ok, deleted}, registry} ->
-          {:ok, deleted, %{runtime | registry: registry}}
+      with :ok <- ensure_registry_owner(runtime) do
+        case runtime.registry_module.delete_action(runtime.registry, action_id) do
+          {{:ok, deleted}, registry} ->
+            {:ok, deleted, %{runtime | registry: registry}}
 
-        {:error, _reason} = error ->
-          error
+          {:error, _reason} = error ->
+            error
+        end
       end
 
     emit_delete_event(start, runtime, result, action_id)
@@ -183,6 +210,70 @@ defmodule SpectreKinetic.Planner.Runtime do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp stage_and_swap_registry(runtime, path) do
+    case ensure_registry_owner(runtime) do
+      :ok ->
+        do_stage_and_swap_registry(runtime, path)
+
+      {:error, _reason} = error ->
+        {error, false}
+    end
+  end
+
+  defp do_stage_and_swap_registry(runtime, path) do
+    opts = [allow_empty_registry: runtime.allow_empty_registry]
+
+    case Loader.stage_registry(runtime.registry_module, runtime.registry, path, opts) do
+      {:ok, registry} -> complete_staged_registry(runtime, registry, path)
+      {:error, _reason} = error -> {error, false}
+    end
+  end
+
+  defp complete_staged_registry(runtime, registry, path) do
+    case safely(fn -> complete_staged_registry_resources(runtime, registry, path) end) do
+      {:ok, result} ->
+        result
+
+      {:error, reason} ->
+        runtime.registry_module.close(registry)
+        {{:error, {:registry_stage_failed, reason}}, false}
+    end
+  end
+
+  defp complete_staged_registry_resources(runtime, registry, path) do
+    staged_runtime = %{runtime | registry: registry}
+    embedding_attempted? = Embeddings.reembed_after_reload?(staged_runtime, path)
+
+    result =
+      case Embeddings.reembed_after_reload(staged_runtime, path) do
+        {:ok, next_runtime} ->
+          :ok = runtime.registry_module.close(runtime.registry)
+          {{:ok, next_runtime}, embedding_attempted?}
+
+        {:error, _reason} = error ->
+          :ok = runtime.registry_module.close(registry)
+          {error, embedding_attempted?}
+      end
+
+    {:ok, result}
+  end
+
+  defp ensure_registry_owner(runtime) do
+    case Registry.mutation_owner(runtime.registry_module, runtime.registry) do
+      :shared -> :ok
+      owner when owner == self() -> :ok
+      owner -> {:error, {:registry_not_owner, owner}}
+    end
+  end
+
+  defp safely(fun) do
+    fun.()
+  rescue
+    error -> {:error, {:exception, Exception.message(error)}}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
 
   defp emit_registry_event(
          event,
@@ -251,6 +342,9 @@ defmodule SpectreKinetic.Planner.Runtime do
     end
   end
 
+  defp registry_format(_path), do: :unknown
+
   defp action_id(%{"id" => id}) when is_binary(id), do: id
+  defp action_id(%{id: id}) when is_binary(id), do: id
   defp action_id(_action), do: nil
 end

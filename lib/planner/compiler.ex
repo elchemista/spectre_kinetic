@@ -7,7 +7,7 @@ defmodule SpectreKinetic.Planner.Compiler do
 
     * normalized action definitions
     * ordered action IDs
-    * precomputed tool-card embeddings as Nx tensors
+    * precomputed tool-card embeddings as data-only f32 rows
 
   This bundle is loaded at runtime by `RegistryStore` so that production
   boots do not need network access or model inference at startup.
@@ -17,6 +17,12 @@ defmodule SpectreKinetic.Planner.Compiler do
   alias SpectreKinetic.Planner.Registry.ETS
 
   require Logger
+
+  @compiled_bundle_version 2
+  @embedding_dtype "f32"
+  @f32_max 3.402_823_466_385_288_6e38
+  @max_embedding_dim 16_384
+  @max_batch_size 1_024
 
   @doc """
   Compiles a registry bundle from JSON + encoder model.
@@ -31,20 +37,46 @@ defmodule SpectreKinetic.Planner.Compiler do
   @spec compile(keyword()) :: :ok | {:error, term()}
   def compile(opts) do
     with {:ok, actions} <- load_actions(opts),
+         :ok <- validate_actions(actions),
          {:ok, encoder_model_dir} <- fetch_opt(opts, :encoder_model_dir),
-         {:ok, output_path} <- fetch_opt(opts, :output) do
-      batch_size = Keyword.get(opts, :batch_size, 32)
+         :ok <- validate_path(encoder_model_dir, :encoder_model_dir),
+         {:ok, output_path} <- fetch_opt(opts, :output),
+         :ok <- validate_path(output_path, :output),
+         {:ok, batch_size} <- positive_integer_option(opts, :batch_size, 32),
+         {:ok, embedding_module} <- embedding_module(opts) do
+      compile_actions(
+        actions,
+        encoder_model_dir,
+        output_path,
+        batch_size,
+        embedding_module
+      )
+    end
+  end
 
-      Logger.info("Compiling registry with #{length(actions)} actions")
+  defp compile_actions(actions, encoder_model_dir, output_path, batch_size, embedding_module) do
+    Logger.info("Compiling registry with #{length(actions)} actions")
 
-      with {:ok, registry} <- registry_from_actions(actions),
-           {:ok, embedder} <- EmbeddingRuntime.load(encoder_model_dir: encoder_model_dir) do
-        try do
-          do_compile(registry, embedder, output_path, batch_size)
-        after
-          ETS.close(registry)
+    with {:ok, registry} <- registry_from_actions(actions) do
+      try do
+        with {:ok, embedder} <- load_embedder(embedding_module, encoder_model_dir) do
+          do_compile(registry, embedder, output_path, batch_size, embedding_module)
         end
+      rescue
+        error -> {:error, {:registry_compile_failed, Exception.message(error)}}
+      catch
+        kind, reason -> {:error, {:registry_compile_failed, {kind, reason}}}
+      after
+        ETS.close(registry)
       end
+    end
+  end
+
+  defp load_embedder(embedding_module, encoder_model_dir) do
+    case embedding_module.load(encoder_model_dir: encoder_model_dir) do
+      {:ok, embedder} -> {:ok, embedder}
+      {:error, _reason} = error -> error
+      other -> {:error, {:invalid_embedding_load_result, other}}
     end
   end
 
@@ -52,6 +84,29 @@ defmodule SpectreKinetic.Planner.Compiler do
     case Keyword.fetch(opts, key) do
       {:ok, value} -> {:ok, value}
       :error -> {:error, {:missing_option, key}}
+    end
+  end
+
+  defp validate_actions([]), do: {:error, :empty_registry}
+  defp validate_actions(actions) when is_list(actions), do: :ok
+
+  defp validate_path(path, key) when is_binary(path) and path != "" do
+    if String.trim(path) == "", do: {:error, {:invalid_option, key}}, else: :ok
+  end
+
+  defp validate_path(_path, key), do: {:error, {:invalid_option, key}}
+
+  defp positive_integer_option(opts, key, default) do
+    case Keyword.get(opts, key, default) do
+      value when is_integer(value) and value > 0 and value <= @max_batch_size -> {:ok, value}
+      value -> {:error, {:invalid_option, key, value}}
+    end
+  end
+
+  defp embedding_module(opts) do
+    case Keyword.get(opts, :embedding_module, EmbeddingRuntime) do
+      module when is_atom(module) -> {:ok, module}
+      value -> {:error, {:invalid_option, :embedding_module, value}}
     end
   end
 
@@ -78,9 +133,28 @@ defmodule SpectreKinetic.Planner.Compiler do
 
   defp registry_from_actions(actions) do
     case ETS.new() do
-      {:ok, registry} -> add_actions_to_registry(registry, actions)
+      {:ok, registry} -> populate_registry(registry, actions)
       {:error, _reason} = error -> error
     end
+  end
+
+  defp populate_registry(registry, actions) do
+    case add_actions_to_registry(registry, actions) do
+      {:ok, _registry} = ok ->
+        ok
+
+      {:error, _reason} = error ->
+        ETS.close(registry)
+        error
+    end
+  rescue
+    error ->
+      ETS.close(registry)
+      {:error, {:registry_population_failed, Exception.message(error)}}
+  catch
+    kind, reason ->
+      ETS.close(registry)
+      {:error, {:registry_population_failed, {kind, reason}}}
   end
 
   defp add_actions_to_registry(registry, actions) do
@@ -92,49 +166,144 @@ defmodule SpectreKinetic.Planner.Compiler do
     end)
   end
 
-  defp do_compile(registry, embedder, output_path, batch_size) do
+  defp do_compile(registry, embedder, output_path, batch_size, embedding_module) do
     actions = ETS.all_actions(registry)
     cards = ETS.tool_cards(registry)
 
     Logger.info("Embedding #{length(cards)} tool cards...")
 
     {action_ids, card_texts} = Enum.unzip(cards)
+    embedding_dim = embedding_module.dim(embedder)
 
-    tool_embeddings = embed_in_batches(embedder, card_texts, batch_size)
+    with :ok <- validate_embedding_dim(embedding_dim),
+         {:ok, tool_embeddings} <-
+           embed_in_batches(
+             embedder,
+             card_texts,
+             batch_size,
+             embedding_dim,
+             embedding_module
+           ),
+         {:ok, embedding_rows} <- serialize_embedding_rows(tool_embeddings) do
+      bundle = %{
+        "version" => @compiled_bundle_version,
+        "actions" => actions,
+        "action_ids" => action_ids,
+        "tool_embeddings" => embedding_rows,
+        "embedding_dim" => embedding_dim,
+        "embedding_dtype" => @embedding_dtype,
+        "compiled_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+      }
 
-    bundle = %{
-      version: 1,
-      actions: actions,
-      action_ids: action_ids,
-      tool_embeddings: split_embeddings(tool_embeddings),
-      embedding_dim: EmbeddingRuntime.dim(embedder),
-      compiled_at: DateTime.utc_now() |> DateTime.to_iso8601()
-    }
+      binary = :erlang.term_to_binary(bundle, [:compressed])
 
-    binary = :erlang.term_to_binary(bundle, [:compressed])
-    File.mkdir_p!(Path.dirname(output_path))
-    File.write!(output_path, binary)
-
-    Logger.info("Compiled registry written to #{output_path} (#{byte_size(binary)} bytes)")
-    :ok
+      with :ok <- atomic_write(output_path, binary) do
+        Logger.info("Compiled registry written to #{output_path} (#{byte_size(binary)} bytes)")
+      end
+    end
   end
 
-  defp embed_in_batches(embedder, texts, batch_size) do
+  @spec embed_in_batches(term(), [binary()], pos_integer(), pos_integer(), module()) ::
+          {:ok, Nx.Tensor.t()} | {:error, term()}
+  defp embed_in_batches(embedder, texts, batch_size, embedding_dim, embedding_module) do
     texts
     |> Enum.chunk_every(batch_size)
-    |> Enum.map(fn batch ->
-      {:ok, embeddings} = EmbeddingRuntime.embed_batch(embedder, batch)
-      embeddings
+    |> Enum.reduce_while({:ok, []}, fn batch, {:ok, tensors} ->
+      case embed_batch(embedding_module, embedder, batch, embedding_dim) do
+        {:ok, tensor} -> {:cont, {:ok, [tensor | tensors]}}
+        {:error, _reason} = error ->
+          {:halt, error}
+      end
     end)
-    |> Nx.concatenate()
+    |> concatenate_batches()
   end
 
-  defp split_embeddings(matrix) do
-    # Split {n, dim} matrix into a list of {dim} tensors for ETF storage
+  @spec embed_batch(module(), term(), [binary()], pos_integer()) ::
+          {:ok, Nx.Tensor.t()} | {:error, term()}
+  defp embed_batch(embedding_module, embedder, batch, embedding_dim) do
+    case embedding_module.embed_batch(embedder, batch) do
+      {:ok, %Nx.Tensor{} = tensor} -> validate_embedded_batch(tensor, batch, embedding_dim)
+      {:ok, invalid} -> {:error, {:invalid_embedding_batch, invalid}}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @spec validate_embedded_batch(Nx.Tensor.t(), [binary()], pos_integer()) ::
+          {:ok, Nx.Tensor.t()} | {:error, term()}
+  defp validate_embedded_batch(tensor, batch, embedding_dim) do
+    case Nx.shape(tensor) do
+      {rows, ^embedding_dim} when rows == length(batch) ->
+        {:ok, tensor}
+
+      shape ->
+        {:error, {:invalid_embedding_batch_shape, shape, {length(batch), embedding_dim}}}
+    end
+  end
+
+  defp concatenate_batches({:ok, tensors}),
+    do: {:ok, tensors |> Enum.reverse() |> Nx.concatenate()}
+
+  defp concatenate_batches({:error, _reason} = error), do: error
+
+  defp validate_embedding_dim(dim)
+       when is_integer(dim) and dim > 0 and dim <= @max_embedding_dim,
+       do: :ok
+  defp validate_embedding_dim(dim), do: {:error, {:invalid_embedding_dim, dim}}
+
+  @spec atomic_write(Path.t(), binary()) :: :ok | {:error, term()}
+  defp atomic_write(output_path, binary) do
+    output_dir = Path.dirname(output_path)
+    temp_path = temporary_path(output_path)
+
+    with :ok <- File.mkdir_p(output_dir) do
+      try do
+        with :ok <- File.write(temp_path, binary, [:binary, :exclusive]) do
+          File.rename(temp_path, output_path)
+        end
+      after
+        File.rm(temp_path)
+      end
+    end
+  end
+
+  defp temporary_path(output_path) do
+    directory = Path.dirname(output_path)
+    file_name = Path.basename(output_path)
+    unique = System.unique_integer([:positive, :monotonic])
+    Path.join(directory, ".#{file_name}.tmp-#{unique}")
+  end
+
+  defp serialize_embedding_rows(matrix) do
     {n, _dim} = Nx.shape(matrix)
 
-    for i <- 0..(n - 1) do
-      Nx.backend_transfer(matrix[i])
+    rows =
+      matrix
+      |> Nx.as_type(:f32)
+      |> then(fn matrix ->
+        for i <- 0..(n - 1) do
+          matrix[i] |> Nx.backend_transfer() |> Nx.to_flat_list()
+        end
+      end)
+
+    case Enum.find_index(rows, fn row ->
+           Enum.any?(row, &(not finite_f32_number?(&1)))
+         end) do
+      nil -> {:ok, rows}
+      index -> {:error, {:invalid_embedding_values, index}}
     end
+  end
+
+  defp finite_f32_number?(value) when is_number(value) do
+    finite_number?(value) and abs(value) <= @f32_max
+  end
+
+  defp finite_f32_number?(_value), do: false
+  defp finite_number?(value) when is_integer(value), do: true
+
+  defp finite_number?(value) when is_float(value) do
+    representation = value |> :erlang.float_to_binary([:compact]) |> String.downcase()
+    representation not in ["nan", "inf", "-inf"]
+  rescue
+    _error -> false
   end
 end

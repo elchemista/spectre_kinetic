@@ -3,6 +3,7 @@ defmodule SpectreKinetic.ClassifierPipelineTest do
 
   alias SpectreKinetic.ClassifierPipeline
   alias SpectreKinetic.PlanContext
+  alias SpectreKinetic.Planner.Runtime, as: PlannerRuntime
 
   defmodule AppendResult do
     @behaviour SpectreKinetic.Classifier
@@ -37,6 +38,13 @@ defmodule SpectreKinetic.ClassifierPipelineTest do
     def call(_context, _opts), do: {:error, :boom}
   end
 
+  defmodule StatusClassifier do
+    @behaviour SpectreKinetic.Classifier
+
+    def init(opts), do: Keyword.fetch!(opts, :status)
+    def call(context, status), do: {:ok, %{context | status: status}}
+  end
+
   test "runs classifiers in order and passes initialized opts" do
     context = context()
 
@@ -59,6 +67,7 @@ defmodule SpectreKinetic.ClassifierPipelineTest do
              ])
 
     assert context.halted?
+    assert context.status == :needs_confirmation
     assert context.warnings == ["halted"]
     refute Map.has_key?(context.classifier_results, :after_halt)
   end
@@ -66,6 +75,59 @@ defmodule SpectreKinetic.ClassifierPipelineTest do
   test "returns classifier errors with the module attached" do
     assert {:error, {ErrorClassifier, :boom}} =
              ClassifierPipeline.run(context(), [ErrorClassifier])
+  end
+
+  test "a later classifier cannot downgrade a restrictive status to ok" do
+    assert {:ok, context} =
+             ClassifierPipeline.run(context(), [
+               {StatusClassifier, status: :needs_clarification},
+               {StatusClassifier, status: :ok}
+             ])
+
+    assert context.status == :needs_clarification
+  end
+
+  test "later classifiers cannot weaken a rejected status" do
+    for weaker_status <- [:needs_clarification, :no_tool] do
+      assert {:ok, context} =
+               ClassifierPipeline.run(context(), [
+                 {StatusClassifier, status: :rejected},
+                 {StatusClassifier, status: weaker_status}
+               ])
+
+      assert context.status == :rejected
+    end
+  end
+
+  test "later classifiers may strengthen a status" do
+    assert {:ok, context} =
+             ClassifierPipeline.run(context(), [
+               {StatusClassifier, status: :needs_confirmation},
+               {StatusClassifier, status: :needs_clarification}
+             ])
+
+    assert context.status == :needs_clarification
+  end
+
+  test "invalid classifier statuses fail closed" do
+    assert {:ok, context} =
+             ClassifierPipeline.run(context(), [{StatusClassifier, status: :unknown_status}])
+
+    assert context.status == :error
+  end
+
+  test "invalid planner statuses normalize to error" do
+    for invalid <- [nil, 123, %{}, :unknown_status] do
+      context =
+        PlanContext.from_planner_result(
+          %PlannerRuntime{},
+          "TEST",
+          :plan,
+          %{"status" => invalid}
+        )
+
+      assert context.status == :error
+    end
   end
 
   defp context do

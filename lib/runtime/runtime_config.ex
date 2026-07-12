@@ -16,6 +16,8 @@ defmodule SpectreKinetic.RuntimeConfig do
   the planner pipeline.
   """
 
+  alias SpectreKinetic.ClassifierPipeline.Spec, as: ClassifierSpec
+
   @app :spectre_kinetic
   @built_in_plan_defaults [
     top_k: 5,
@@ -23,7 +25,8 @@ defmodule SpectreKinetic.RuntimeConfig do
     mapping_threshold: 0.0,
     tool_selection_fallback: :disabled,
     fallback_top_k: 3,
-    fallback_margin: 0.12
+    fallback_margin: 0.12,
+    reranker_threshold: 0.5
   ]
 
   @plan_option_sources [
@@ -32,7 +35,8 @@ defmodule SpectreKinetic.RuntimeConfig do
     {:mapping_threshold, :float, "SPECTRE_KINETIC_MAPPING_THRESHOLD"},
     {:tool_selection_fallback, :fallback_mode, "SPECTRE_KINETIC_TOOL_SELECTION_FALLBACK"},
     {:fallback_top_k, :integer, "SPECTRE_KINETIC_FALLBACK_TOP_K"},
-    {:fallback_margin, :float, "SPECTRE_KINETIC_FALLBACK_MARGIN"}
+    {:fallback_margin, :float, "SPECTRE_KINETIC_FALLBACK_MARGIN"},
+    {:reranker_threshold, :float, "SPECTRE_KINETIC_RERANKER_THRESHOLD"}
   ]
 
   @runtime_path_sources [
@@ -41,6 +45,48 @@ defmodule SpectreKinetic.RuntimeConfig do
     {:registry_json, "SPECTRE_KINETIC_REGISTRY_JSON"},
     {:fallback_model_dir, "SPECTRE_KINETIC_FALLBACK_MODEL_DIR"}
   ]
+
+  @runtime_path_keys Enum.map(@runtime_path_sources, &elem(&1, 0))
+  @runtime_module_keys [:registry_module, :fallback_runtime_module]
+  @plan_option_keys Enum.map(@plan_option_sources, &elem(&1, 0))
+  @known_option_keys Enum.uniq(
+                       @plan_option_keys ++
+                         @runtime_path_keys ++
+                         @runtime_module_keys ++
+                         [
+                           :__spectre_mode__,
+                           :actions,
+                           :allow_empty_registry,
+                           :classifiers,
+                           :dictionary,
+                           :embedder,
+                           :embedding_module,
+                           :example_limit,
+                           :extra_rules,
+                           :name,
+                           :output,
+                           :registry,
+                           :registry_backend_opts,
+                           :request,
+                           :reranker,
+                           :reranker_max_length,
+                           :reranker_module,
+                           :reranker_score_index,
+                           :reranker_score_transform,
+                           :slots,
+                           :top_n
+                         ]
+                     )
+  @max_al_bytes 32 * 1_024
+  @max_request_json_bytes 1_024 * 1_024
+  @max_slot_depth 16
+  @max_slot_entries 256
+  @max_slot_nodes 4_096
+  @max_slot_string_bytes 64 * 1_024
+  @max_total_slot_string_bytes 1_024 * 1_024
+
+  @typep slot_budget :: %{nodes: non_neg_integer(), string_bytes: non_neg_integer()}
+  @typep slot_validation :: {:ok, slot_budget()} | {:error, :invalid | :limit}
 
   @doc """
   Returns the planner defaults before application config or environment overrides.
@@ -67,13 +113,20 @@ defmodule SpectreKinetic.RuntimeConfig do
              registry_json: binary() | nil,
              fallback_model_dir: binary() | nil
            }}
+          | {:error, {:invalid_options, [validation_issue()]}}
   def resolve_runtime_paths(opts \\ []) do
-    paths =
-      Map.new(@runtime_path_sources, fn {key, env_var} ->
-        {key, resolve_optional_path(opts, key, key, env_var)}
-      end)
+    with :ok <- validate_options(opts) do
+      do_resolve_runtime_paths(opts)
+    end
+  end
 
-    {:ok, paths}
+  defp do_resolve_runtime_paths(opts) do
+    Enum.reduce_while(@runtime_path_sources, {:ok, %{}}, fn {key, env_var}, {:ok, paths} ->
+      case resolve_path(opts, key, key, env_var) do
+        {:ok, path} -> {:cont, {:ok, Map.put(paths, key, path)}}
+        {:error, issue} -> {:halt, validation_result(:invalid_options, [issue])}
+      end
+    end)
   end
 
   @doc """
@@ -84,11 +137,10 @@ defmodule SpectreKinetic.RuntimeConfig do
   """
   @spec resolve_optional_path(keyword(), atom(), atom(), binary()) :: binary() | nil
   def resolve_optional_path(opts, opt_key, app_key, env_var) do
-    opts
-    |> Keyword.get(opt_key)
-    |> fallback_path(Application.get_env(@app, app_key))
-    |> fallback_path(System.get_env(env_var))
-    |> normalize_optional_path()
+    case resolve_path(opts, opt_key, app_key, env_var) do
+      {:ok, path} -> path
+      {:error, _issue} -> nil
+    end
   end
 
   @doc """
@@ -97,9 +149,40 @@ defmodule SpectreKinetic.RuntimeConfig do
   @spec resolve_required_path(keyword(), atom(), atom(), binary()) ::
           {:ok, binary()} | {:error, term()}
   def resolve_required_path(opts, opt_key, app_key, env_var) do
-    opts
-    |> resolve_optional_path(opt_key, app_key, env_var)
-    |> wrap_required_path(opt_key, env_var)
+    with {:ok, path} <- resolve_path(opts, opt_key, app_key, env_var) do
+      wrap_required_path(path, opt_key, env_var)
+    end
+  end
+
+  @doc false
+  @spec validate_path(term(), atom()) ::
+          :ok | {:error, {:invalid_options, [validation_issue()]}}
+  def validate_path(path, key) do
+    validation_result(:invalid_options, path_value_issues(path, key))
+  end
+
+  @doc false
+  @spec validate_module(term(), atom()) ::
+          :ok | {:error, {:invalid_options, [validation_issue()]}}
+  def validate_module(module, key) do
+    validation_result(:invalid_options, module_value_issues(module, key))
+  end
+
+  @doc false
+  @spec decode_request_json(term()) :: {:ok, term()} | {:error, term()}
+  def decode_request_json(request_json) when is_binary(request_json) do
+    if byte_size(request_json) > @max_request_json_bytes do
+      validation_result(:invalid_request, [%{field: :json, reason: :exceeds_size_limit}])
+    else
+      case Jason.decode(request_json) do
+        {:ok, request} -> {:ok, request}
+        {:error, %Jason.DecodeError{} = reason} -> {:error, {:json_decode, reason}}
+      end
+    end
+  end
+
+  def decode_request_json(_request_json) do
+    validation_result(:invalid_request, [%{field: :json, reason: :must_be_binary}])
   end
 
   @doc """
@@ -139,6 +222,56 @@ defmodule SpectreKinetic.RuntimeConfig do
     %{"al" => "", "slots" => %{}, "top_k" => built_in_default!(:top_k)}
   end
 
+  @typedoc "One machine-readable public input validation issue."
+  @type validation_issue :: %{required(:field) => atom(), required(:reason) => atom()}
+
+  @doc """
+  Validates an AL value and public planner options before any planner work.
+
+  Errors deliberately contain field names and stable reason atoms rather than
+  echoing AL or slot values back to logs and callers.
+  """
+  @spec validate_plan_input(term(), term()) ::
+          :ok | {:error, {:invalid_request | :invalid_options, [validation_issue()]}}
+  def validate_plan_input(al, opts) do
+    with :ok <- validation_result(:invalid_request, al_issues(al)) do
+      validate_options(opts)
+    end
+  end
+
+  @doc """
+  Validates the external request-map shape accepted by `plan_request/2`.
+  """
+  @spec validate_request(term()) ::
+          :ok | {:error, {:invalid_request, [validation_issue()]}}
+  def validate_request(request) when is_map(request) and not is_struct(request) do
+    errors =
+      al_issues(request_value(request, :al)) ++
+        slots_issues(request_value(request, :slots, %{})) ++
+        request_option_issues(request)
+
+    validation_result(:invalid_request, errors)
+  end
+
+  def validate_request(_request) do
+    validation_result(:invalid_request, [%{field: :request, reason: :must_be_map}])
+  end
+
+  @doc """
+  Validates planner option containers and the bounded numeric options they expose.
+
+  Both keyword lists and atom-keyed maps are accepted because the public facade
+  uses keywords while the internal planner uses maps.
+  """
+  @spec validate_options(term()) ::
+          :ok | {:error, {:invalid_options, [validation_issue()]}}
+  def validate_options(opts) do
+    case options_map(opts) do
+      {:ok, options} -> validation_result(:invalid_options, option_issues(options, :options))
+      {:error, issue} -> validation_result(:invalid_options, [issue])
+    end
+  end
+
   @doc """
   Formats a readable error message for missing required paths.
   """
@@ -147,13 +280,23 @@ defmodule SpectreKinetic.RuntimeConfig do
     "missing required #{inspect(key)}. Pass it explicitly, configure :#{key} for :spectre_kinetic, or export #{env_var}."
   end
 
-  defp fallback_path(nil, fallback), do: fallback
-  defp fallback_path("", fallback), do: fallback
-  defp fallback_path(value, _fallback), do: value
+  defp resolve_path(opts, opt_key, app_key, env_var) do
+    [Keyword.get(opts, opt_key), Application.get_env(@app, app_key), System.get_env(env_var)]
+    |> Enum.find(&path_candidate?/1)
+    |> normalize_optional_path(opt_key)
+  end
 
-  defp normalize_optional_path(nil), do: nil
-  defp normalize_optional_path(""), do: nil
-  defp normalize_optional_path(path), do: Path.expand(path)
+  defp path_candidate?(nil), do: false
+  defp path_candidate?(value) when is_binary(value), do: String.trim(value) != ""
+  defp path_candidate?(_value), do: true
+
+  defp normalize_optional_path(nil, _key), do: {:ok, nil}
+
+  defp normalize_optional_path(path, _key) when is_binary(path),
+    do: {:ok, Path.expand(path)}
+
+  defp normalize_optional_path(_path, key),
+    do: {:error, %{field: key, reason: :must_be_non_blank_binary}}
 
   defp wrap_required_path(nil, opt_key, env_var), do: {:error, {:missing_path, opt_key, env_var}}
   defp wrap_required_path(path, _opt_key, _env_var), do: {:ok, path}
@@ -234,6 +377,360 @@ defmodule SpectreKinetic.RuntimeConfig do
   defp parse_fallback_mode_result("reranker"), do: :reranker
   defp parse_fallback_mode_result(_value), do: nil
 
+  defp al_issues(al) when is_binary(al) do
+    cond do
+      not String.valid?(al) ->
+        [%{field: :al, reason: :must_be_utf8_binary}]
+
+      byte_size(al) > @max_al_bytes ->
+        [%{field: :al, reason: :exceeds_size_limit}]
+
+      true ->
+        case SpectreKinetic.Parser.validate(al) do
+          {:ok, _normalized} -> []
+          {:error, reason} -> [%{field: :al, reason: reason}]
+        end
+    end
+  end
+
+  defp al_issues(_al), do: [%{field: :al, reason: :must_be_binary}]
+
+  defp slots_issues(slots) when is_map(slots) and not is_struct(slots) do
+    budget = %{nodes: @max_slot_nodes, string_bytes: @max_total_slot_string_bytes}
+
+    case validate_slot_map(slots, 0, budget) do
+      {:ok, _remaining_budget} -> []
+      {:error, :limit} -> [%{field: :slots, reason: :exceeds_complexity_limit}]
+      {:error, :invalid} -> [%{field: :slots, reason: :must_be_json_compatible_map}]
+    end
+  end
+
+  defp slots_issues(_slots), do: [%{field: :slots, reason: :must_be_map}]
+
+  defp request_option_issues(request) do
+    request
+    |> request_options_map()
+    |> option_issues(:request)
+  end
+
+  defp request_options_map(request) do
+    [
+      :top_k,
+      :tool_threshold,
+      :mapping_threshold,
+      :tool_selection_fallback,
+      :fallback_top_k,
+      :fallback_margin,
+      :reranker_threshold
+    ]
+    |> Enum.reduce(%{}, fn key, options ->
+      case fetch_request_value(request, key) do
+        {:ok, value} -> Map.put(options, key, value)
+        :error -> options
+      end
+    end)
+  end
+
+  defp option_issues(options, source) do
+    unknown_option_issues(options) ++
+      slots_issues_if_present(options) ++
+      positive_integer_issues(options, :top_k) ++
+      probability_issues(options, :tool_threshold) ++
+      probability_issues(options, :mapping_threshold) ++
+      fallback_mode_issues(options, source) ++
+      positive_integer_issues(options, :fallback_top_k) ++
+      probability_issues(options, :fallback_margin) ++
+      probability_issues(options, :reranker_threshold) ++
+      runtime_path_issues(options) ++
+      runtime_module_issues(options) ++
+      classifier_issues(options) ++
+      boolean_option_issues(options, :allow_empty_registry)
+  end
+
+  defp unknown_option_issues(options) do
+    options
+    |> Map.keys()
+    |> Enum.reject(&(&1 in @known_option_keys))
+    |> Enum.sort()
+    |> Enum.map(&%{field: &1, reason: :unknown_option})
+  end
+
+  defp slots_issues_if_present(options) do
+    case Map.fetch(options, :slots) do
+      :error -> []
+      {:ok, slots} -> slots_issues(slots)
+    end
+  end
+
+  defp positive_integer_issues(options, key) do
+    case Map.fetch(options, key) do
+      :error -> []
+      {:ok, value} when is_integer(value) and value > 0 -> []
+      {:ok, _value} -> [%{field: key, reason: :must_be_positive_integer}]
+    end
+  end
+
+  @spec probability_issues(map(), atom()) :: [validation_issue()]
+  defp probability_issues(options, key) do
+    case Map.fetch(options, key) do
+      :error -> []
+      {:ok, value} when is_number(value) -> probability_value_issues(key, value)
+      {:ok, _value} -> [%{field: key, reason: :must_be_probability}]
+    end
+  end
+
+  @spec probability_value_issues(atom(), number()) :: [validation_issue()]
+  defp probability_value_issues(key, value) do
+    finite? = is_integer(value) or finite_float?(value)
+
+    if finite? and value >= 0.0 and value <= 1.0 do
+      []
+    else
+      [%{field: key, reason: :must_be_probability}]
+    end
+  end
+
+  defp fallback_mode_issues(options, source) do
+    case Map.fetch(options, :tool_selection_fallback) do
+      :error ->
+        []
+
+      {:ok, value} ->
+        if valid_fallback_mode?(value, source) do
+          []
+        else
+          [%{field: :tool_selection_fallback, reason: :must_be_fallback_mode}]
+        end
+    end
+  end
+
+  defp valid_fallback_mode?(value, :options), do: value in [:disabled, :reranker]
+  defp valid_fallback_mode?(value, :request), do: not is_nil(parse_fallback_mode(value))
+
+  defp runtime_path_issues(options) do
+    Enum.flat_map(@runtime_path_keys, fn key ->
+      case Map.fetch(options, key) do
+        :error -> []
+        {:ok, value} -> path_value_issues(value, key)
+      end
+    end)
+  end
+
+  defp path_value_issues(value, key) when is_binary(value) do
+    if String.trim(value) == "" do
+      [%{field: key, reason: :must_be_non_blank_binary}]
+    else
+      []
+    end
+  end
+
+  defp path_value_issues(_value, key),
+    do: [%{field: key, reason: :must_be_non_blank_binary}]
+
+  defp runtime_module_issues(options) do
+    Enum.flat_map(@runtime_module_keys, fn key ->
+      case Map.fetch(options, key) do
+        :error -> []
+        {:ok, module} -> module_value_issues(module, key)
+      end
+    end)
+  end
+
+  defp module_value_issues(module, key) when is_atom(module) do
+    if Code.ensure_loaded?(module), do: [], else: [%{field: key, reason: :must_be_module}]
+  end
+
+  defp module_value_issues(_module, key), do: [%{field: key, reason: :must_be_module}]
+
+  defp classifier_issues(options) do
+    case Map.fetch(options, :classifiers) do
+      :error ->
+        []
+
+      {:ok, classifiers} when is_list(classifiers) ->
+        if Enum.all?(classifiers, &valid_classifier_spec?/1) do
+          []
+        else
+          [%{field: :classifiers, reason: :invalid_classifier_spec}]
+        end
+
+      {:ok, _classifiers} ->
+        [%{field: :classifiers, reason: :must_be_list}]
+    end
+  end
+
+  defp valid_classifier_spec?(%ClassifierSpec{module: module}),
+    do: valid_classifier_module?(module, :initialized)
+
+  defp valid_classifier_spec?(module) when is_atom(module),
+    do: valid_classifier_module?(module, :declaration)
+
+  defp valid_classifier_spec?({module, opts}) when is_atom(module) and is_list(opts) do
+    Keyword.keyword?(opts) and valid_classifier_module?(module, :declaration)
+  end
+
+  defp valid_classifier_spec?(_spec), do: false
+
+  defp valid_classifier_module?(module, mode) when is_atom(module) do
+    Code.ensure_loaded?(module) and
+      function_exported?(module, :call, 2) and
+      (mode == :initialized or function_exported?(module, :init, 1))
+  end
+
+  defp valid_classifier_module?(_module, _mode), do: false
+
+  defp boolean_option_issues(options, key) do
+    case Map.fetch(options, key) do
+      :error -> []
+      {:ok, value} when is_boolean(value) -> []
+      {:ok, _value} -> [%{field: key, reason: :must_be_boolean}]
+    end
+  end
+
+  defp options_map(opts) when is_list(opts) do
+    cond do
+      not Keyword.keyword?(opts) ->
+        {:error, %{field: :options, reason: :must_be_keyword_or_atom_keyed_map}}
+
+      duplicate_keyword_keys?(opts) ->
+        {:error, %{field: :options, reason: :must_have_unique_keys}}
+
+      true ->
+        {:ok, Map.new(opts)}
+    end
+  end
+
+  defp options_map(opts) when is_map(opts) and not is_struct(opts) do
+    if Enum.all?(Map.keys(opts), &is_atom/1) do
+      {:ok, opts}
+    else
+      {:error, %{field: :options, reason: :must_be_keyword_or_atom_keyed_map}}
+    end
+  end
+
+  defp options_map(_opts) do
+    {:error, %{field: :options, reason: :must_be_keyword_or_atom_keyed_map}}
+  end
+
+  defp duplicate_keyword_keys?(opts) do
+    keys = Keyword.keys(opts)
+    length(keys) != MapSet.size(MapSet.new(keys))
+  end
+
+  @spec validate_slot_map(map(), non_neg_integer(), slot_budget()) :: slot_validation()
+  defp validate_slot_map(_slots, depth, _budget) when depth > @max_slot_depth,
+    do: {:error, :limit}
+
+  defp validate_slot_map(slots, _depth, _budget) when map_size(slots) > @max_slot_entries,
+    do: {:error, :limit}
+
+  defp validate_slot_map(slots, depth, budget) do
+    with {:ok, budget} <- consume_slot_node(budget) do
+      validate_slot_entries(slots, depth, budget)
+    end
+  end
+
+  @spec validate_slot_entries(map(), non_neg_integer(), slot_budget()) :: slot_validation()
+  defp validate_slot_entries(slots, depth, budget) do
+    Enum.reduce_while(slots, {:ok, budget}, fn {key, value}, {:ok, remaining} ->
+      case validate_slot_entry(key, value, depth, remaining) do
+        {:ok, next} -> {:cont, {:ok, next}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  @spec validate_slot_entry(term(), term(), non_neg_integer(), slot_budget()) ::
+          slot_validation()
+  defp validate_slot_entry(key, value, depth, budget) do
+    with {:ok, budget} <- validate_slot_key(key, budget),
+         do: validate_slot_value(value, depth + 1, budget)
+  end
+
+  defp validate_slot_key(key, budget) when is_atom(key), do: consume_slot_node(budget)
+
+  defp validate_slot_key(key, budget) when is_binary(key) do
+    cond do
+      not String.valid?(key) -> {:error, :invalid}
+      byte_size(key) > @max_slot_string_bytes -> {:error, :limit}
+      true -> consume_slot_string(budget, byte_size(key))
+    end
+  end
+
+  defp validate_slot_key(_key, _budget), do: {:error, :invalid}
+
+  defp validate_slot_value(_value, depth, _budget) when depth > @max_slot_depth,
+    do: {:error, :limit}
+
+  defp validate_slot_value(value, _depth, budget)
+       when is_nil(value) or is_boolean(value) or is_atom(value) or is_integer(value),
+       do: consume_slot_node(budget)
+
+  defp validate_slot_value(value, _depth, budget) when is_float(value) do
+    if finite_float?(value), do: consume_slot_node(budget), else: {:error, :invalid}
+  end
+
+  defp validate_slot_value(value, _depth, budget) when is_binary(value) do
+    cond do
+      not String.valid?(value) -> {:error, :invalid}
+      byte_size(value) > @max_slot_string_bytes -> {:error, :limit}
+      true -> consume_slot_string(budget, byte_size(value))
+    end
+  end
+
+  defp validate_slot_value(value, depth, budget)
+       when is_map(value) and not is_struct(value),
+       do: validate_slot_map(value, depth, budget)
+
+  defp validate_slot_value([], _depth, budget), do: consume_slot_node(budget)
+
+  defp validate_slot_value([_head | _tail] = value, depth, budget) do
+    with {:ok, budget} <- consume_slot_node(budget) do
+      validate_slot_list(value, depth, budget, 0)
+    end
+  end
+
+  defp validate_slot_value(_value, _depth, _budget), do: {:error, :invalid}
+
+  defp validate_slot_list([], _depth, budget, _count), do: {:ok, budget}
+
+  defp validate_slot_list([_head | _tail], _depth, _budget, @max_slot_entries),
+    do: {:error, :limit}
+
+  defp validate_slot_list([head | tail], depth, budget, count) do
+    with {:ok, budget} <- validate_slot_value(head, depth + 1, budget) do
+      validate_slot_list(tail, depth, budget, count + 1)
+    end
+  end
+
+  defp validate_slot_list(_improper_tail, _depth, _budget, _count),
+    do: {:error, :invalid}
+
+  defp consume_slot_node(%{nodes: nodes} = budget) when nodes > 0,
+    do: {:ok, %{budget | nodes: nodes - 1}}
+
+  defp consume_slot_node(_budget), do: {:error, :limit}
+
+  defp consume_slot_string(%{string_bytes: remaining} = budget, size)
+       when size <= remaining do
+    with {:ok, budget} <- consume_slot_node(budget) do
+      {:ok, %{budget | string_bytes: remaining - size}}
+    end
+  end
+
+  defp consume_slot_string(_budget, _size), do: {:error, :limit}
+
+  @spec finite_float?(float()) :: boolean()
+  defp finite_float?(value) do
+    representation = value |> :erlang.float_to_binary([:compact]) |> String.downcase()
+    representation not in ["nan", "inf", "-inf"]
+  rescue
+    _error -> false
+  end
+
+  defp validation_result(_scope, []), do: :ok
+  defp validation_result(scope, errors), do: {:error, {scope, errors}}
+
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
@@ -243,12 +740,20 @@ defmodule SpectreKinetic.RuntimeConfig do
       {"mapping_threshold", :mapping_threshold},
       {"tool_selection_fallback", :tool_selection_fallback},
       {"fallback_top_k", :fallback_top_k},
-      {"fallback_margin", :fallback_margin}
+      {"fallback_margin", :fallback_margin},
+      {"reranker_threshold", :reranker_threshold}
     ]
     |> Enum.reduce(map, fn {target_key, request_key}, acc ->
-      maybe_put(acc, target_key, request_value(request, request_key))
+      value = request |> request_value(request_key) |> normalize_request_option(request_key)
+      maybe_put(acc, target_key, value)
     end)
   end
+
+  defp normalize_request_option(value, :tool_selection_fallback) do
+    parse_fallback_mode(value) || value
+  end
+
+  defp normalize_request_option(value, _request_key), do: value
 
   defp request_slots(request) do
     request

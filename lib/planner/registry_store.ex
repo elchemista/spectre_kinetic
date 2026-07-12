@@ -13,6 +13,7 @@ defmodule SpectreKinetic.Planner.RegistryStore do
   alias SpectreKinetic.Planner.Registry.ETS
 
   @type t :: GenServer.server()
+  @typep state :: %{required(:registry_module) => module(), required(:registry) => term()}
 
   @doc """
   Starts the registry store process.
@@ -26,13 +27,13 @@ defmodule SpectreKinetic.Planner.RegistryStore do
   @doc """
   Loads a registry from a JSON file path into the store.
   """
-  @spec load_json(t(), binary()) :: :ok | {:error, term()}
+  @spec load_json(t(), term()) :: :ok | {:error, term()}
   def load_json(store \\ __MODULE__, path), do: GenServer.call(store, {:load_json, path})
 
   @doc """
   Loads a precompiled ETF registry bundle.
   """
-  @spec load_compiled(t(), binary()) :: :ok | {:error, term()}
+  @spec load_compiled(t(), term()) :: :ok | {:error, term()}
   def load_compiled(store \\ __MODULE__, path), do: GenServer.call(store, {:load_compiled, path})
 
   @doc """
@@ -89,7 +90,7 @@ defmodule SpectreKinetic.Planner.RegistryStore do
   @doc """
   Resolves an arg alias to action/canonical arg pairs.
   """
-  @spec resolve_alias(t(), binary()) :: [{binary(), binary()}]
+  @spec resolve_alias(t(), term()) :: [{binary(), binary()}] | {:error, term()}
   def resolve_alias(store \\ __MODULE__, alias_name),
     do: GenServer.call(store, {:resolve_alias, alias_name})
 
@@ -101,9 +102,15 @@ defmodule SpectreKinetic.Planner.RegistryStore do
   def init(opts) do
     registry_module = Keyword.get(opts, :registry_module, ETS)
 
-    case registry_module.new(opts) do
-      {:ok, registry} ->
+    case safe_backend_call(fn -> registry_module.new(opts) end) do
+      {:ok, {:ok, registry}} ->
         {:ok, %{registry_module: registry_module, registry: registry}}
+
+      {:ok, {:error, reason}} ->
+        {:stop, reason}
+
+      {:ok, other} ->
+        {:stop, {:invalid_registry_return, :new, other}}
 
       {:error, reason} ->
         {:stop, reason}
@@ -112,38 +119,68 @@ defmodule SpectreKinetic.Planner.RegistryStore do
 
   @impl GenServer
   def handle_call({:load_json, path}, _from, state) do
-    reply_with_registry_update(state, fn module, registry -> module.load_json(registry, path) end)
-  end
+    case validate_registry_path(path) do
+      :ok ->
+        reply_with_registry_update(state, :load_json, fn module, registry ->
+          module.load_json(registry, path)
+        end)
 
-  def handle_call({:load_compiled, path}, _from, state) do
-    reply_with_registry_update(state, fn module, registry ->
-      module.load_compiled(registry, path)
-    end)
-  end
-
-  def handle_call(:all_actions, _from, state) do
-    {:reply, state.registry_module.all_actions(state.registry), state}
-  end
-
-  def handle_call({:get_action, action_id}, _from, state) do
-    {:reply, state.registry_module.get_action(state.registry, action_id), state}
-  end
-
-  def handle_call(:action_count, _from, state) do
-    {:reply, state.registry_module.action_count(state.registry), state}
-  end
-
-  def handle_call({:add_action, action}, _from, state) do
-    case state.registry_module.add_action(state.registry, action) do
-      {:ok, registry} -> {:reply, :ok, %{state | registry: registry}}
-      {:error, _reason} = error -> {:reply, error, state}
+      {:error, _reason} = error ->
+        {:reply, error, state}
     end
   end
 
+  def handle_call({:load_compiled, path}, _from, state) do
+    case validate_registry_path(path) do
+      :ok ->
+        reply_with_registry_update(state, :load_compiled, fn module, registry ->
+          module.load_compiled(registry, path)
+        end)
+
+      {:error, _reason} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call(:all_actions, _from, state) do
+    reply_with_registry_read(state, :all_actions, fn module, registry ->
+      module.all_actions(registry)
+    end)
+  end
+
+  def handle_call({:get_action, action_id}, _from, state) do
+    reply_with_registry_read(state, :get_action, fn module, registry ->
+      module.get_action(registry, action_id)
+    end)
+  end
+
+  def handle_call(:action_count, _from, state) do
+    reply_with_registry_read(state, :action_count, fn module, registry ->
+      module.action_count(registry)
+    end)
+  end
+
+  def handle_call({:add_action, action}, _from, state) do
+    reply_with_registry_update(state, :add_action, fn module, registry ->
+      module.add_action(registry, action)
+    end)
+  end
+
   def handle_call({:delete_action, action_id}, _from, state) do
-    case state.registry_module.delete_action(state.registry, action_id) do
-      {{:ok, deleted}, registry} ->
+    result =
+      safe_backend_call(fn ->
+        state.registry_module.delete_action(state.registry, action_id)
+      end)
+
+    case result do
+      {:ok, {{:ok, deleted}, registry}} when is_boolean(deleted) ->
         {:reply, {:ok, deleted}, %{state | registry: registry}}
+
+      {:ok, {:error, _reason} = error} ->
+        {:reply, error, state}
+
+      {:ok, other} ->
+        {:reply, {:error, {:invalid_registry_return, :delete_action, other}}, state}
 
       {:error, _reason} = error ->
         {:reply, error, state}
@@ -151,37 +188,84 @@ defmodule SpectreKinetic.Planner.RegistryStore do
   end
 
   def handle_call(:embedding_matrix, _from, state) do
-    {:reply, state.registry_module.embedding_matrix(state.registry), state}
+    reply_with_registry_read(state, :embedding_matrix, fn module, registry ->
+      module.embedding_matrix(registry)
+    end)
   end
 
   def handle_call({:put_embedding, action_id, tensor}, _from, state) do
-    case state.registry_module.put_embedding(state.registry, action_id, tensor) do
-      {:ok, registry} -> {:reply, :ok, %{state | registry: registry}}
-      {:error, _reason} = error -> {:reply, error, state}
-    end
+    reply_with_registry_update(state, :put_embedding, fn module, registry ->
+      module.put_embedding(registry, action_id, tensor)
+    end)
   end
 
   def handle_call(:tool_cards, _from, state) do
-    {:reply, state.registry_module.tool_cards(state.registry), state}
+    reply_with_registry_read(state, :tool_cards, fn module, registry ->
+      module.tool_cards(registry)
+    end)
   end
 
   def handle_call({:resolve_alias, alias_name}, _from, state) do
-    {:reply, state.registry_module.resolve_alias(state.registry, alias_name), state}
+    if is_binary(alias_name) and String.valid?(alias_name) and byte_size(alias_name) <= 256 do
+      reply_with_registry_read(state, :resolve_alias, fn module, registry ->
+        module.resolve_alias(registry, alias_name)
+      end)
+    else
+      {:reply, {:error, {:invalid_registry_input, :alias}}, state}
+    end
   end
 
   @impl GenServer
   def terminate(_reason, state) do
-    state.registry_module.close(state.registry)
+    safe_backend_call(fn -> state.registry_module.close(state.registry) end)
     :ok
   end
 
-  defp reply_with_registry_update(state, loader) do
-    case loader.(state.registry_module, state.registry) do
-      {:ok, registry} ->
+  @spec reply_with_registry_update(state(), atom(), (module(), term() -> term())) ::
+          {:reply, :ok | {:error, term()}, state()}
+  defp reply_with_registry_update(state, operation, callback) do
+    case safe_backend_call(fn -> callback.(state.registry_module, state.registry) end) do
+      {:ok, {:ok, registry}} ->
         {:reply, :ok, %{state | registry: registry}}
 
-      {:error, _reason} = error ->
+      {:ok, {:error, _reason} = error} ->
         {:reply, error, state}
+
+      {:ok, other} ->
+        {:reply, {:error, {:invalid_registry_return, operation, other}}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, {:registry_backend_failed, operation, reason}}, state}
     end
   end
+
+  @spec reply_with_registry_read(state(), atom(), (module(), term() -> term())) ::
+          {:reply, term(), state()}
+  defp reply_with_registry_read(state, operation, callback) do
+    case safe_backend_call(fn -> callback.(state.registry_module, state.registry) end) do
+      {:ok, value} -> {:reply, value, state}
+      {:error, reason} -> {:reply, {:error, {:registry_backend_failed, operation, reason}}, state}
+    end
+  end
+
+  # Registry backends are extension points. A faulty backend must produce a
+  # structured error instead of terminating this compatibility server.
+  @spec safe_backend_call((-> result)) :: {:ok, result} | {:error, term()} when result: term()
+  defp safe_backend_call(callback) do
+    {:ok, callback.()}
+  rescue
+    error -> {:error, {:raise, error.__struct__, Exception.message(error)}}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  @spec validate_registry_path(term()) :: :ok | {:error, {:invalid_registry_input, :path}}
+  defp validate_registry_path(path) when is_binary(path) do
+    if String.valid?(path) and byte_size(path) <= 4_096 and String.trim(path) != "" and
+         not String.contains?(path, <<0>>),
+      do: :ok,
+      else: {:error, {:invalid_registry_input, :path}}
+  end
+
+  defp validate_registry_path(_path), do: {:error, {:invalid_registry_input, :path}}
 end

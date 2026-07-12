@@ -64,6 +64,88 @@ defmodule SpectreKinetic.IntegrationTest do
     assert action.args["package"] == "nginx"
   end
 
+  test "plan_request/2 preserves runtime top_k unless explicitly overridden", %{
+    registry_json: registry_json
+  } do
+    runtime = SpectreKinetic.load_runtime!(registry_json: registry_json, top_k: 1)
+
+    request = %{
+      al: "INSTALL PACKAGE {package} VIA APT",
+      slots: %{package: "nginx"},
+      tool_threshold: 0.0,
+      mapping_threshold: 0.0
+    }
+
+    assert {:ok, %Action{} = action} = SpectreKinetic.plan_request(runtime, request)
+    assert length(action.alternatives) == 1
+
+    assert {:ok, %Action{} = action} =
+             SpectreKinetic.plan_request(runtime, Map.put(request, :top_k, 2))
+
+    assert length(action.alternatives) == 2
+  end
+
+  test "adapter plan_request/2 preserves runtime top_k", %{registry_json: registry_json} do
+    {:ok, pid} =
+      start_supervised({SpectreKinetic, registry_json: registry_json, top_k: 1, name: nil})
+
+    assert {:ok, %Action{} = action} =
+             SpectreKinetic.plan_request(pid, %{
+               al: "INSTALL PACKAGE {package} VIA APT",
+               slots: %{package: "nginx"},
+               tool_threshold: 0.0,
+               mapping_threshold: 0.0
+             })
+
+    assert length(action.alternatives) == 1
+  end
+
+  test "adapter returns structured validation errors and stays alive", %{pid: pid} do
+    assert {:error, {:invalid_request, [%{field: :al, reason: :must_be_binary}]}} =
+             SpectreKinetic.plan(pid, 123)
+
+    assert {:error, {:invalid_options, option_issues}} =
+             SpectreKinetic.plan(pid, "INSTALL PACKAGE WITH: PACKAGE=nginx",
+               slots: [],
+               top_k: 0,
+               tool_threshold: 1.1,
+               mapping_threshold: -0.1,
+               fallback_top_k: 0,
+               fallback_margin: 2.0,
+               reranker_threshold: -1.0
+             )
+
+    assert Enum.map(option_issues, & &1.field) == [
+             :slots,
+             :top_k,
+             :tool_threshold,
+             :mapping_threshold,
+             :fallback_top_k,
+             :fallback_margin,
+             :reranker_threshold
+           ]
+
+    assert {:error, {:invalid_request, request_issues}} =
+             SpectreKinetic.plan_request(pid, %{
+               "al" => "INSTALL PACKAGE WITH: PACKAGE=nginx",
+               "slots" => "not-a-map",
+               "top_k" => 0,
+               "tool_threshold" => "high"
+             })
+
+    assert Enum.map(request_issues, & &1.field) == [:slots, :top_k, :tool_threshold]
+
+    assert {:error, {:invalid_request, [%{field: :json, reason: :must_be_binary}]}} =
+             SpectreKinetic.plan_json(pid, %{not: "json"})
+
+    assert Process.alive?(pid)
+
+    assert {:ok, %Action{status: :ok}} =
+             SpectreKinetic.plan(pid, "INSTALL PACKAGE {package} VIA APT",
+               slots: %{package: "nginx"}
+             )
+  end
+
   test "returns suggestions when no tool matches confidently", %{pid: pid} do
     assert {:ok, %Action{} = action} =
              SpectreKinetic.plan(pid, "DO SOMETHING COMPLETELY UNKNOWN", tool_threshold: 0.99)
@@ -114,10 +196,12 @@ defmodule SpectreKinetic.IntegrationTest do
     runtime =
       SpectreKinetic.load_runtime!(
         registry_json: registry_json,
-        tool_threshold: 0.95,
+        tool_threshold: 0.0,
         tool_selection_fallback: :reranker,
         reranker: :fake,
-        fallback_runtime_module: FakeReranker
+        fallback_runtime_module: FakeReranker,
+        fallback_margin: 1.0,
+        reranker_threshold: 0.0
       )
 
     assert {:ok, %Action{} = email} =
@@ -278,7 +362,7 @@ defmodule SpectreKinetic.IntegrationTest do
 
   test "uses configured tool threshold by default" do
     previous = Application.get_env(:spectre_kinetic, :tool_threshold)
-    Application.put_env(:spectre_kinetic, :tool_threshold, 1.1)
+    Application.put_env(:spectre_kinetic, :tool_threshold, 1.0)
 
     on_exit(fn ->
       if is_nil(previous) do

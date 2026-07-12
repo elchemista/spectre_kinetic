@@ -1,6 +1,8 @@
 defmodule SpectreKinetic.Classifiers.Internal.Trainer do
   @moduledoc false
 
+  alias SpectreKinetic.Training.Options
+
   @default_hidden_dim 32
   @default_batch_size 16
   @default_epochs 10
@@ -10,9 +12,12 @@ defmodule SpectreKinetic.Classifiers.Internal.Trainer do
   @spec train_binary(module(), [map()], keyword()) :: {:ok, map()} | {:error, term()}
   def train_binary(classifier, examples, opts) do
     with {:ok, output_dir} <- fetch_opt(opts, :output_dir),
+         :ok <- Options.validate_path(output_dir, :output_dir),
+         {:ok, values} <- training_options(opts),
          {:ok, {features, labels}} <- binary_tensors(classifier, examples) do
+      opts = normalized_opts(opts, values)
       feature_dim = Nx.axis_size(features, 1)
-      hidden_dim = Keyword.get(opts, :hidden_dim, @default_hidden_dim)
+      hidden_dim = values.hidden_dim
       model = classifier.build_model(%{"feature_dim" => feature_dim, "hidden_dim" => hidden_dim})
       model_state = run_binary_loop(model, features, labels, opts)
       scores = predict(model, model_state, features) |> Nx.to_flat_list()
@@ -37,9 +42,13 @@ defmodule SpectreKinetic.Classifiers.Internal.Trainer do
   def train_multiclass(classifier, examples, opts) do
     with {:ok, output_dir} <- fetch_opt(opts, :output_dir),
          {:ok, labels} <- fetch_opt(opts, :labels),
+         :ok <- Options.validate_path(output_dir, :output_dir),
+         {:ok, values} <- training_options(opts),
+         :ok <- validate_class_labels(labels),
          {:ok, {features, label_tensor}} <- multiclass_tensors(classifier, examples, labels) do
+      opts = normalized_opts(opts, values)
       feature_dim = Nx.axis_size(features, 1)
-      hidden_dim = Keyword.get(opts, :hidden_dim, @default_hidden_dim)
+      hidden_dim = values.hidden_dim
 
       metadata = %{
         "feature_dim" => feature_dim,
@@ -72,7 +81,8 @@ defmodule SpectreKinetic.Classifiers.Internal.Trainer do
   @spec binary_tensors(module(), [map()]) ::
           {:ok, {Nx.Tensor.t(), Nx.Tensor.t()}} | {:error, term()}
   defp binary_tensors(classifier, examples) do
-    with {:ok, feature_rows} <- feature_rows(classifier, examples) do
+    with :ok <- validate_binary_labels(examples),
+         {:ok, feature_rows} <- feature_rows(classifier, examples) do
       labels = Enum.map(examples, &[normalize_binary_label(Map.fetch!(&1, :label))])
       {:ok, {Nx.tensor(feature_rows, type: :f32), Nx.tensor(labels, type: :f32)}}
     end
@@ -81,7 +91,8 @@ defmodule SpectreKinetic.Classifiers.Internal.Trainer do
   @spec multiclass_tensors(module(), [map()], [atom()]) ::
           {:ok, {Nx.Tensor.t(), Nx.Tensor.t()}} | {:error, term()}
   defp multiclass_tensors(classifier, examples, labels) do
-    with {:ok, feature_rows} <- feature_rows(classifier, examples) do
+    with :ok <- validate_multiclass_labels(examples, labels),
+         {:ok, feature_rows} <- feature_rows(classifier, examples) do
       label_indexes = Map.new(Enum.with_index(labels))
 
       targets =
@@ -114,17 +125,28 @@ defmodule SpectreKinetic.Classifiers.Internal.Trainer do
   defp validate_feature_rows([], _expected_dim), do: {:error, :empty_dataset}
 
   defp validate_feature_rows(rows, expected_dim) do
-    case Enum.find_value(rows, &mismatched_dim(&1, expected_dim)) do
+    case Enum.find_index(rows, &(not valid_feature_row?(&1, expected_dim))) do
       nil -> {:ok, rows}
-      actual_dim -> {:error, {:feature_dim_mismatch, expected_dim, actual_dim}}
+      index -> feature_row_error(Enum.at(rows, index), expected_dim, index)
     end
   end
 
-  @spec mismatched_dim([number()], pos_integer()) :: nil | non_neg_integer()
-  defp mismatched_dim(row, expected_dim) do
-    actual_dim = length(row)
-    if actual_dim == expected_dim, do: nil, else: actual_dim
+  defp valid_feature_row?(row, expected_dim) when is_list(row) do
+    length(row) == expected_dim and Enum.all?(row, &is_number/1)
   end
+
+  defp valid_feature_row?(_row, _expected_dim), do: false
+
+  defp feature_row_error(row, expected_dim, index) when is_list(row) do
+    if length(row) == expected_dim do
+      {:error, {:invalid_feature_value, index}}
+    else
+      {:error, {:feature_dim_mismatch, expected_dim, length(row)}}
+    end
+  end
+
+  defp feature_row_error(_row, _expected_dim, index),
+    do: {:error, {:invalid_feature_row, index}}
 
   defp run_binary_loop(model, features, labels, opts) do
     labels = Nx.reshape(labels, {:auto, 1})
@@ -241,9 +263,73 @@ defmodule SpectreKinetic.Classifiers.Internal.Trainer do
     end
   end
 
+  defp training_options(opts) do
+    Options.validate(opts,
+      hidden_dim: @default_hidden_dim,
+      batch_size: @default_batch_size,
+      epochs: @default_epochs,
+      learning_rate: @default_learning_rate
+    )
+  end
+
+  defp normalized_opts(opts, values) do
+    opts
+    |> Keyword.put(:hidden_dim, values.hidden_dim)
+    |> Keyword.put(:batch_size, values.batch_size)
+    |> Keyword.put(:epochs, values.epochs)
+    |> Keyword.put(:learning_rate, values.learning_rate)
+    |> maybe_put_seed(values.seed)
+  end
+
+  defp maybe_put_seed(opts, nil), do: Keyword.delete(opts, :seed)
+  defp maybe_put_seed(opts, seed), do: Keyword.put(opts, :seed, seed)
+
+  defp validate_binary_labels([]), do: {:error, :empty_dataset}
+
+  defp validate_binary_labels(examples) do
+    with :ok <- validate_example_labels(examples, [0, 1, false, true]) do
+      classes = examples |> Enum.map(&normalize_binary_label(&1.label)) |> MapSet.new()
+
+      if classes == MapSet.new([0.0, 1.0]) do
+        :ok
+      else
+        {:error, {:invalid_dataset, :requires_positive_and_negative_examples}}
+      end
+    end
+  end
+
+  defp validate_class_labels(labels)
+       when is_list(labels) and length(labels) >= 2 do
+    if Enum.all?(labels, &is_atom/1) and length(Enum.uniq(labels)) == length(labels) do
+      :ok
+    else
+      {:error, {:invalid_training_option, :labels, labels}}
+    end
+  end
+
+  defp validate_class_labels(labels),
+    do: {:error, {:invalid_training_option, :labels, labels}}
+
+  defp validate_multiclass_labels([], _labels), do: {:error, :empty_dataset}
+
+  defp validate_multiclass_labels(examples, labels) do
+    allowed = labels ++ Enum.map(labels, &Atom.to_string/1)
+    validate_example_labels(examples, allowed)
+  end
+
+  defp validate_example_labels(examples, allowed) do
+    case Enum.find_index(examples, fn example ->
+           not is_map(example) or Map.get(example, :label) not in allowed
+         end) do
+      nil -> :ok
+      index -> {:error, {:invalid_training_label, index}}
+    end
+  end
+
   defp trainer_loop_opts(opts) do
     case Keyword.fetch(opts, :seed) do
-      {:ok, seed} -> [log: 0, seed: seed]
+      {:ok, seed} when not is_nil(seed) -> [log: 0, seed: seed]
+      {:ok, nil} -> [log: 0]
       :error -> [log: 0]
     end
   end

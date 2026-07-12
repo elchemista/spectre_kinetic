@@ -67,6 +67,59 @@ defmodule SpectreKinetic.ParserTest do
              SpectreKinetic.parse_al("SEND ME EMAIL to yuriy.zhar@gmail.com")
   end
 
+  test "quoted values preserve punctuation and support escaped quotes" do
+    assert %{args: %{"BODY" => ~S(Hello, world. "quoted" C:\tmp)}} =
+             SpectreKinetic.parse_al(
+               ~S(SEND MESSAGE WITH: BODY="Hello, world. \"quoted\" C:\\tmp")
+             )
+
+    assert %{args: %{"BODY" => "Ship it, please."}} =
+             SpectreKinetic.parse_al(~S(SEND MESSAGE BODY "Ship it, please."))
+  end
+
+  test "escaped quotes keep WITH inside a value from becoming a section marker" do
+    assert %{
+             args: %{
+               "SUBJECT" => ~S(Working "WITH" teams),
+               "BODY" => "hello"
+             }
+           } =
+             SpectreKinetic.parse_al(
+               ~S(SEND MESSAGE SUBJECT="Working \"WITH\" teams" BODY="hello")
+             )
+  end
+
+  test "unterminated quoted arguments are rejected instead of truncated" do
+    assert {:error, :unterminated_al_quote} =
+             SpectreKinetic.validate_al(~S(SEND MESSAGE WITH: BODY="hello))
+
+    assert {:error, :unterminated_al_quote} =
+             SpectreKinetic.parse_al("SEND MESSAGE WITH: BODY='hello")
+
+    dangling_escape = ~S(SEND MESSAGE WITH: BODY="hello) <> "\\"
+
+    assert {:error, :unterminated_al_quote} = SpectreKinetic.validate_al(dangling_escape)
+  end
+
+  test "unbalanced braced arguments are rejected" do
+    assert {:error, :unterminated_al_brace} =
+             SpectreKinetic.validate_al("SEND WEBHOOK WITH: PAYLOAD={unfinished")
+
+    assert {:error, :unexpected_al_brace} =
+             SpectreKinetic.validate_al("SEND WEBHOOK WITH: PAYLOAD=unfinished}")
+
+    assert {:ok, ~S(SEND WEBHOOK WITH: PAYLOAD={"key": "value"})} =
+             SpectreKinetic.validate_al(~S(SEND WEBHOOK WITH: PAYLOAD={"key": "value"}))
+  end
+
+  test "braces inside quoted values and apostrophes in words remain valid" do
+    al = ~S(SEND MESSAGE WITH: BODY="literal { brace")
+
+    assert {:ok, ^al} = SpectreKinetic.validate_al(al)
+
+    assert {:ok, "CHECK USER'S ACCOUNT"} = SpectreKinetic.validate_al("CHECK USER'S ACCOUNT")
+  end
+
   defp parser_examples do
     explicit_examples =
       for {key, value} <- @explicit_fields,

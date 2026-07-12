@@ -38,6 +38,36 @@ defmodule SpectreKinetic.PlannerTest do
     def score_batch(_runtime, _pairs), do: {:error, :reranker_down}
   end
 
+  defmodule LowScoreReranker do
+    def score_batch(_runtime, pairs), do: {:ok, Enum.map(pairs, fn _pair -> 0.4 end)}
+  end
+
+  defmodule InvalidShapeReranker do
+    def score_batch(_runtime, _pairs), do: {:ok, [0.5]}
+  end
+
+  defmodule InvalidValueReranker do
+    def score_batch(_runtime, pairs) do
+      {:ok, pairs |> Enum.map(fn _pair -> 0.5 end) |> List.replace_at(0, 1.1)}
+    end
+  end
+
+  defmodule RaisingReranker do
+    def score_batch(_runtime, _pairs), do: raise("reranker crashed")
+  end
+
+  defmodule ThrowingReranker do
+    def score_batch(_runtime, _pairs), do: throw(:reranker_threw)
+  end
+
+  defmodule ExitingReranker do
+    def score_batch(_runtime, _pairs), do: exit(:reranker_exited)
+  end
+
+  defmodule UnexpectedReturnReranker do
+    def score_batch(_runtime, _pairs), do: :unexpected
+  end
+
   setup do
     {:ok, store} = RegistryStore.start_link(name: nil)
 
@@ -99,6 +129,74 @@ defmodule SpectreKinetic.PlannerTest do
       assert "body" in result["missing"]
     end
 
+    test "marks mappings below mapping_threshold as ambiguous", %{store: store} do
+      {:ok, result} =
+        Planner.plan(
+          "SEND OUTBOUND EMAIL WITH: TO=user@test.com",
+          %{registry: store, embedder: nil, mapping_threshold: 0.8}
+        )
+
+      assert result["status"] == "AMBIGUOUS_MAPPING"
+      assert result["selected_tool"] == "Dynamic.Email.send/3"
+      assert_in_delta result["mapping_score"], 1 / 3, 0.001
+      assert Enum.sort(result["missing"]) == ["body", "subject"]
+    end
+
+    test "keeps the missing-args status when mapping reaches mapping_threshold", %{store: store} do
+      {:ok, result} =
+        Planner.plan(
+          "SEND OUTBOUND EMAIL WITH: TO=user@test.com",
+          %{registry: store, embedder: nil, mapping_threshold: 0.3}
+        )
+
+      assert result["status"] == "MISSING_ARGS"
+      assert result["mapping_score"] >= 0.3
+    end
+
+    test "positional fallback remains ambiguous at the default threshold", %{store: store} do
+      {:ok, result} =
+        Planner.plan(
+          "DELETE NOTE ENTRY WITH: UNKNOWN=note-42",
+          %{registry: store, embedder: nil}
+        )
+
+      assert result["selected_tool"] == "Dynamic.Note.delete/1"
+      assert result["args"] == %{"id" => "note-42"}
+      assert result["status"] == "AMBIGUOUS_MAPPING"
+      assert result["mapping_score"] == 0.5
+      assert "low-confidence positional slot mapping" in result["notes"]
+    end
+
+    test "an invalid optional argument keeps the action non-executable", %{store: store} do
+      :ok =
+        RegistryStore.add_action(store, %{
+          id: "Dynamic.Worker.configure/2",
+          module: "Dynamic.Worker",
+          name: "configure",
+          arity: 2,
+          doc: "Configure a retry worker",
+          args: [
+            %{name: "name", type: "String.t()", required: true, aliases: []},
+            %{name: "retries", type: "pos_integer()", required: false, aliases: []}
+          ],
+          examples: ["CONFIGURE RETRY WORKER WITH: NAME=mailer RETRIES=3"]
+        })
+
+      assert {:ok, result} =
+               Planner.plan(
+                 "CONFIGURE RETRY WORKER WITH: NAME=mailer RETRIES=many",
+                 %{registry: store, embedder: nil, tool_threshold: 0.0}
+               )
+
+      assert result["selected_tool"] == "Dynamic.Worker.configure/2"
+      assert result["status"] == "AMBIGUOUS_MAPPING"
+      assert result["missing"] == []
+
+      assert result["invalid"] == [
+               %{name: "retries", expected_type: "pos_integer()", reason: :type_mismatch}
+             ]
+    end
+
     test "returns NO_TOOL for garbage input with high threshold", %{store: store} do
       {:ok, result} =
         Planner.plan(
@@ -121,8 +219,11 @@ defmodule SpectreKinetic.PlannerTest do
     end
 
     test "uses embedding matrix when registry and embedder provide one", %{store: store} do
-      :ok = RegistryStore.put_embedding(store, "Dynamic.Email.send/3", Nx.tensor([0.0, 1.0]))
-      :ok = RegistryStore.put_embedding(store, "Dynamic.Sms.send/2", Nx.tensor([1.0, 0.0]))
+      :ok =
+        install_test_embeddings(store, %{
+          "Dynamic.Sms.send/2" => [1.0, 0.0]
+        })
+
       {:ok, embedder} = FakeEmbedder.start_link([1.0, 0.0])
 
       {:ok, result} =
@@ -136,7 +237,7 @@ defmodule SpectreKinetic.PlannerTest do
     end
 
     test "emits telemetry when embedded retrieval falls back to lexical", %{store: store} do
-      :ok = RegistryStore.put_embedding(store, "Dynamic.Email.send/3", Nx.tensor([0.0, 1.0]))
+      :ok = install_test_embeddings(store)
 
       {result, events} =
         TelemetryHelper.capture([@retrieval_fallback_event], fn ->
@@ -162,10 +263,12 @@ defmodule SpectreKinetic.PlannerTest do
             %{
               registry: store,
               embedder: nil,
-              tool_threshold: 0.99,
+              tool_threshold: 0.0,
               tool_selection_fallback: :reranker,
               reranker: :fake,
-              reranker_module: FakeReranker
+              reranker_module: FakeReranker,
+              fallback_margin: 1.0,
+              reranker_threshold: 0.0
             }
           )
         end)
@@ -190,10 +293,11 @@ defmodule SpectreKinetic.PlannerTest do
             %{
               registry: store,
               embedder: nil,
-              tool_threshold: 0.99,
+              tool_threshold: 0.0,
               tool_selection_fallback: :reranker,
               reranker: :fake,
-              reranker_module: ErrorReranker
+              reranker_module: ErrorReranker,
+              fallback_margin: 1.0
             }
           )
         end)
@@ -203,6 +307,157 @@ defmodule SpectreKinetic.PlannerTest do
       assert metadata.reason == :reranker_down
       assert metadata.primary_tool == metadata.chosen_tool
     end
+
+    test "reranker exceptions fall back without crashing the planner", %{store: store} do
+      {result, events} = plan_with_failing_reranker(store, RaisingReranker)
+
+      assert {:ok, %{"selected_tool" => selected_tool}} = result
+      assert is_binary(selected_tool)
+      assert [%{metadata: metadata}] = events
+      assert metadata.result == :error
+
+      assert {:reranker_call_failed,
+              %{
+                kind: :raise,
+                exception: RuntimeError,
+                message: "reranker crashed"
+              }} = metadata.reason
+    end
+
+    test "reranker throws and exits fall back without crashing the planner", %{store: store} do
+      for {module, kind, reason} <- [
+            {ThrowingReranker, :throw, :reranker_threw},
+            {ExitingReranker, :exit, :reranker_exited}
+          ] do
+        {result, events} = plan_with_failing_reranker(store, module)
+
+        assert {:ok, %{"selected_tool" => selected_tool}} = result
+        assert is_binary(selected_tool)
+        assert [%{metadata: metadata}] = events
+        assert metadata.result == :error
+
+        assert {:reranker_call_failed, %{kind: ^kind, reason: ^reason}} = metadata.reason
+      end
+    end
+
+    test "unexpected reranker returns fall back without crashing the planner", %{store: store} do
+      {result, events} = plan_with_failing_reranker(store, UnexpectedReturnReranker)
+
+      assert {:ok, %{"selected_tool" => selected_tool}} = result
+      assert is_binary(selected_tool)
+      assert [%{metadata: metadata}] = events
+      assert metadata.result == :error
+      assert metadata.reason == {:invalid_reranker_return, :unexpected}
+    end
+
+    test "reranker cannot bypass the first-stage tool threshold", %{store: store} do
+      {:ok, result} =
+        Planner.plan(
+          "SEND OUTBOUND MESSAGE WITH: TO=+15551234567 BODY=\"Code 123\"",
+          %{
+            registry: store,
+            embedder: nil,
+            tool_threshold: 0.99,
+            tool_selection_fallback: :reranker,
+            reranker: :fake,
+            reranker_module: FakeReranker,
+            reranker_threshold: 0.0
+          }
+        )
+
+      assert result["status"] == "NO_TOOL"
+      assert result["selected_tool"] == nil
+    end
+
+    test "reranker score must meet its explicit acceptance threshold", %{store: store} do
+      {:ok, result} =
+        Planner.plan(
+          "SEND OUTBOUND MESSAGE WITH: TO=+15551234567 BODY=\"Code 123\"",
+          %{
+            registry: store,
+            embedder: nil,
+            tool_threshold: 0.0,
+            tool_selection_fallback: :reranker,
+            reranker: :fake,
+            reranker_module: LowScoreReranker,
+            fallback_margin: 1.0,
+            reranker_threshold: 0.5
+          }
+        )
+
+      assert result["status"] == "NO_TOOL"
+      assert result["selected_tool"] == nil
+    end
+
+    test "invalid reranker score shape falls back safely", %{store: store} do
+      {result, events} =
+        TelemetryHelper.capture([@reranker_fallback_event], fn ->
+          Planner.plan(
+            "SEND OUTBOUND MESSAGE WITH: TO=+15551234567 BODY=\"Code 123\"",
+            %{
+              registry: store,
+              embedder: nil,
+              tool_threshold: 0.0,
+              tool_selection_fallback: :reranker,
+              reranker: :fake,
+              reranker_module: InvalidShapeReranker,
+              fallback_margin: 1.0
+            }
+          )
+        end)
+
+      assert {:ok, %{"selected_tool" => selected_tool}} = result
+      assert is_binary(selected_tool)
+
+      assert [%{metadata: metadata}] = events
+      assert metadata.result == :error
+
+      assert {:invalid_reranker_scores,
+              {:score_count_mismatch, %{expected: expected, actual: 1}}} = metadata.reason
+
+      assert expected > 1
+    end
+
+    test "non-finite or out-of-range reranker scores fall back safely", %{store: store} do
+      {_result, events} =
+        TelemetryHelper.capture([@reranker_fallback_event], fn ->
+          Planner.plan(
+            "SEND OUTBOUND MESSAGE WITH: TO=+15551234567 BODY=\"Code 123\"",
+            %{
+              registry: store,
+              embedder: nil,
+              tool_threshold: 0.0,
+              tool_selection_fallback: :reranker,
+              reranker: :fake,
+              reranker_module: InvalidValueReranker,
+              fallback_margin: 1.0
+            }
+          )
+        end)
+
+      assert [%{metadata: metadata}] = events
+      assert metadata.result == :error
+
+      assert {:invalid_reranker_scores,
+              {:invalid_score, %{index: 0, value: 1.1}}} = metadata.reason
+    end
+  end
+
+  defp plan_with_failing_reranker(store, reranker_module) do
+    TelemetryHelper.capture([@reranker_fallback_event], fn ->
+      Planner.plan(
+        "SEND OUTBOUND MESSAGE WITH: TO=+15551234567 BODY=\"Code 123\"",
+        %{
+          registry: store,
+          embedder: nil,
+          tool_threshold: 0.0,
+          tool_selection_fallback: :reranker,
+          reranker: :fake,
+          reranker_module: reranker_module,
+          fallback_margin: 1.0
+        }
+      )
+    end)
   end
 
   describe "plan_request/2" do
@@ -216,6 +471,87 @@ defmodule SpectreKinetic.PlannerTest do
       assert result["selected_tool"] == "Dynamic.Note.delete/1"
       assert result["args"]["id"] == "note-1"
     end
+
+    test "propagates all fallback request overrides", %{store: store} do
+      request = %{
+        "al" => "SEND OUTBOUND MESSAGE WITH: TO=+15551234567 BODY=\"Code 123\"",
+        "tool_threshold" => 0.0,
+        "tool_selection_fallback" => "reranker",
+        "fallback_top_k" => 2,
+        "fallback_margin" => 1.0,
+        "reranker_threshold" => 0.0
+      }
+
+      {result, events} =
+        TelemetryHelper.capture([@reranker_fallback_event], fn ->
+          Planner.plan_request(request, %{
+            registry: store,
+            embedder: nil,
+            tool_selection_fallback: :disabled,
+            reranker: :fake,
+            reranker_module: FakeReranker
+          })
+        end)
+
+      assert {:ok, %{"selected_tool" => selected_tool}} = result
+      assert is_binary(selected_tool)
+
+      assert [%{measurements: measurements}] = events
+      assert measurements.candidate_count == 2
+      assert measurements.fallback_top_k == 2
+      assert measurements.reranker_threshold == 0.0
+    end
+
+    test "preserves configured top_k when the request omits it", %{store: store} do
+      request = %{
+        "al" => "DELETE NOTE ENTRY WITH: ID=note-1",
+        "slots" => %{"id" => "note-1"}
+      }
+
+      {result, events} =
+        TelemetryHelper.capture([@retrieval_fallback_event], fn ->
+          Planner.plan_request(request, %{registry: store, embedder: nil, top_k: 1})
+        end)
+
+      assert {:ok, %{"selected_tool" => "Dynamic.Note.delete/1"}} = result
+      assert [%{measurements: %{candidate_count: 1, fallback_top_k: 1}}] = events
+
+      {_result, events} =
+        TelemetryHelper.capture([@retrieval_fallback_event], fn ->
+          Planner.plan_request(Map.put(request, "top_k", 2), %{
+            registry: store,
+            embedder: nil,
+            top_k: 1
+          })
+        end)
+
+      assert [%{measurements: %{candidate_count: 2, fallback_top_k: 2}}] = events
+    end
+  end
+
+  test "direct planner returns structured validation errors" do
+    assert {:error,
+            {:invalid_options,
+             [
+               %{field: :slots, reason: :must_be_map},
+               %{field: :top_k, reason: :must_be_positive_integer},
+               %{field: :tool_threshold, reason: :must_be_probability}
+             ]}} =
+             Planner.plan("SEND MESSAGE", %{slots: [], top_k: 0, tool_threshold: 1.5})
+
+    assert {:error, {:invalid_request, [%{field: :al, reason: :invalid_al_verb}]}} =
+             Planner.plan("123 SEND MESSAGE", %{})
+  end
+
+  # Production registries expose a matrix only when every action has an
+  # embedding. Keeping the fixture complete prevents tests from depending on a
+  # partial index that would silently exclude valid actions from retrieval.
+  @spec install_test_embeddings(GenServer.server(), %{optional(binary()) => [number()]}) :: :ok
+  defp install_test_embeddings(store, overrides \\ %{}) do
+    Enum.each(test_actions(), fn %{"id" => action_id} ->
+      vector = Map.get(overrides, action_id, [0.0, 1.0])
+      :ok = RegistryStore.put_embedding(store, action_id, Nx.tensor(vector))
+    end)
   end
 
   defp test_actions do

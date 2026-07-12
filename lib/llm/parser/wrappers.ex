@@ -12,6 +12,10 @@ defmodule SpectreKinetic.Parser.Wrappers do
   @whitespace_chars [?\s, ?\n, ?\r, ?\t]
   @fence_delimiters ["```", "~~~"]
   @al_fence_languages ["al", "action", "action-language"]
+  @opening_al_tag_pattern ~r/^<al(?:\s+[^>]*)?>/iu
+  @closing_al_tag_pattern ~r/<\/al>/iu
+
+  alias SpectreKinetic.Parser.Syntax
 
   @spec normalize(binary()) :: {:ok, binary()} | {:error, validation_error()}
   def normalize(text) do
@@ -51,7 +55,10 @@ defmodule SpectreKinetic.Parser.Wrappers do
   end
 
   defp unwrap_wrapped_tag(text) do
-    if wrapped_tag?(text), do: unwrap_tag(text), else: {:ok, text}
+    case Regex.run(@opening_al_tag_pattern, text, return: :index) do
+      [{0, open_size}] -> unwrap_tag(text, open_size)
+      nil -> {:ok, text}
+    end
   end
 
   defp unwrap_wrapped_al_fence(text) do
@@ -64,30 +71,23 @@ defmodule SpectreKinetic.Parser.Wrappers do
   defp strip_prefix_marker(<<"a", "l", ":", rest::binary>>), do: rest
   defp strip_prefix_marker(rest), do: rest
 
-  defp wrapped_tag?(text) do
-    lower = String.downcase(text)
-    String.starts_with?(lower, "<al") and String.contains?(lower, "</al>")
-  end
+  defp unwrap_tag(text, open_size) do
+    close_start = Syntax.find_unquoted_regex(text, @closing_al_tag_pattern, open_size)
 
-  defp unwrap_tag(text) do
-    lower = String.downcase(text)
-    open_end = :binary.match(lower, ">")
-    close_start = :binary.match(lower, "</al>")
-
-    unwrap_tag_result(text, open_end, close_start)
+    unwrap_tag_result(text, open_size, close_start)
   end
 
   # Tags are only valid wrappers when we can see both ends. A missing close tag
   # is a diagnostic, not something we silently swallow and regret later.
-  defp unwrap_tag_result(text, {open_index, 1}, {close_index, 5})
-       when close_index > open_index do
-    inner_start = open_index + 1
+  defp unwrap_tag_result(text, open_size, {close_index, _close_size})
+       when close_index >= open_size do
+    inner_start = open_size
     inner_size = close_index - inner_start
     {:ok, binary_part(text, inner_start, inner_size)}
   end
 
-  defp unwrap_tag_result(_text, {_open_index, 1}, :nomatch), do: {:error, :unterminated_al_tag}
-  defp unwrap_tag_result(text, _open_end, _close_start), do: {:ok, text}
+  defp unwrap_tag_result(_text, _open_size, :nomatch), do: {:error, :unterminated_al_tag}
+  defp unwrap_tag_result(text, _open_size, _close_start), do: {:ok, text}
 
   defp wrapped_al_fence?(text), do: opening_fence?(opening_fence(text))
 
@@ -116,7 +116,7 @@ defmodule SpectreKinetic.Parser.Wrappers do
   defp unwrap_known_al_fence(rest, delimiter) do
     close_token = "\n" <> delimiter
 
-    case :binary.match(rest, close_token) do
+    case Syntax.find_unquoted_token(rest, close_token) do
       {close_index, _size} ->
         {:ok, binary_part(rest, 0, close_index)}
 
@@ -163,29 +163,37 @@ defmodule SpectreKinetic.Parser.Wrappers do
   defp collapse_whitespace(text) do
     text
     |> String.to_charlist()
-    |> Enum.reduce({[], nil, false}, &collapse_char/2)
+    |> Enum.reduce({[], nil, false, false}, &collapse_char/2)
     |> elem(0)
     |> Enum.reverse()
     |> List.to_string()
     |> String.trim()
   end
 
-  defp collapse_char(char, {acc, quote, _spaced?}) when quote in [?", ?'] and char == quote,
-    do: {[char | acc], nil, false}
+  defp collapse_char(char, {acc, quote, _spaced?, true}) when quote in [?", ?'],
+    do: {[char | acc], quote, false, false}
 
-  defp collapse_char(char, {acc, quote, _spaced?}) when quote in [?", ?'],
-    do: {[char | acc], quote, false}
+  defp collapse_char(?\\, {acc, quote, _spaced?, false}) when quote in [?", ?'],
+    do: {[?\\ | acc], quote, false, true}
 
-  defp collapse_char(char, {acc, nil, _spaced?}) when char in [?", ?'],
-    do: {[char | acc], char, false}
+  defp collapse_char(char, {acc, quote, _spaced?, false})
+       when quote in [?", ?'] and char == quote,
+       do: {[char | acc], nil, false, false}
 
-  defp collapse_char(char, {acc, nil, true}) when char in @whitespace_chars,
-    do: {acc, nil, true}
+  defp collapse_char(char, {acc, quote, _spaced?, false}) when quote in [?", ?'],
+    do: {[char | acc], quote, false, false}
 
-  defp collapse_char(char, {acc, nil, false}) when char in @whitespace_chars,
-    do: {[?\s | acc], nil, true}
+  defp collapse_char(char, {acc, nil, _spaced?, _escaped?}) when char in [?", ?'],
+    do: {[char | acc], char, false, false}
 
-  defp collapse_char(char, {acc, nil, _spaced?}), do: {[char | acc], nil, false}
+  defp collapse_char(char, {acc, nil, true, _escaped?}) when char in @whitespace_chars,
+    do: {acc, nil, true, false}
+
+  defp collapse_char(char, {acc, nil, false, _escaped?}) when char in @whitespace_chars,
+    do: {[?\s | acc], nil, true, false}
+
+  defp collapse_char(char, {acc, nil, _spaced?, _escaped?}),
+    do: {[char | acc], nil, false, false}
 
   defp split_once(text, separator) do
     text

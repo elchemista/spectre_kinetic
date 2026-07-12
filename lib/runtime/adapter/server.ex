@@ -25,19 +25,19 @@ defmodule SpectreKinetic.Adapter.Server do
   @doc """
   Plans one AL instruction through the server process.
   """
-  @spec plan(GenServer.server(), binary(), keyword()) :: {:ok, Action.t()} | {:error, term()}
+  @spec plan(GenServer.server(), term(), term()) :: {:ok, Action.t()} | {:error, term()}
   def plan(server, al_text, opts \\ []), do: GenServer.call(server, {:plan, al_text, opts})
 
   @doc """
   Plans from an explicit request map.
   """
-  @spec plan_request(GenServer.server(), map()) :: {:ok, Action.t()} | {:error, term()}
+  @spec plan_request(GenServer.server(), term()) :: {:ok, Action.t()} | {:error, term()}
   def plan_request(server, request), do: GenServer.call(server, {:plan_request, request})
 
   @doc """
   Plans from a JSON-encoded request payload.
   """
-  @spec plan_json(GenServer.server(), binary()) :: {:ok, Action.t()} | {:error, term()}
+  @spec plan_json(GenServer.server(), term()) :: {:ok, Action.t()} | {:error, term()}
   def plan_json(server, request_json), do: GenServer.call(server, {:plan_json, request_json})
 
   @doc """
@@ -91,12 +91,9 @@ defmodule SpectreKinetic.Adapter.Server do
 
   def handle_call({:plan_json, request_json}, _from, state) do
     reply =
-      case Jason.decode(request_json) do
-        {:ok, request} ->
-          do_plan_request(state.runtime, request)
-
-        {:error, %Jason.DecodeError{} = reason} ->
-          {:error, {:json_decode, reason}}
+      case RuntimeConfig.decode_request_json(request_json) do
+        {:ok, request} -> do_plan_request(state.runtime, request)
+        {:error, _reason} = error -> error
       end
 
     {:reply, reply, state}
@@ -127,23 +124,37 @@ defmodule SpectreKinetic.Adapter.Server do
     {:reply, PlannerRuntime.action_count(state.runtime), state}
   end
 
+  @impl GenServer
+  def terminate(_reason, state) do
+    PlannerRuntime.close(state.runtime)
+    :ok
+  end
+
   defp do_plan(runtime, al_text, opts) do
-    mode = Keyword.get(opts, :__spectre_mode__, :plan)
-    planner_reply(runtime, al_text, Planner.plan(runtime, al_text, opts), opts, mode)
+    with :ok <- RuntimeConfig.validate_plan_input(al_text, opts) do
+      opts = normalize_plan_opts(opts)
+      mode = Keyword.get(opts, :__spectre_mode__, :plan)
+      planner_reply(runtime, al_text, Planner.plan(runtime, al_text, opts), opts, mode)
+    end
   end
 
   defp do_plan_request(runtime, request) do
-    normalized = RuntimeConfig.normalize_request(request)
+    with :ok <- RuntimeConfig.validate_request(request) do
+      normalized = RuntimeConfig.normalize_request(request)
 
-    planner_reply(
-      runtime,
-      normalized["al"],
-      Planner.plan_request(normalized, PlannerRuntime.plan_opts(runtime)),
-      [],
-      :plan
-    )
+      planner_reply(
+        runtime,
+        normalized["al"],
+        Planner.plan_request(request, PlannerRuntime.plan_opts(runtime)),
+        [],
+        :plan
+      )
+    end
   end
 
   defp planner_reply(runtime, al_text, planner_result, opts, mode),
     do: PlanFinalizer.to_action(runtime, al_text, planner_result, opts, mode)
+
+  defp normalize_plan_opts(opts) when is_map(opts), do: Map.to_list(opts)
+  defp normalize_plan_opts(opts), do: opts
 end

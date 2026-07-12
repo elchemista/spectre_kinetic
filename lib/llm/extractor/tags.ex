@@ -1,6 +1,18 @@
 defmodule SpectreKinetic.Extractor.Tags do
   @moduledoc false
 
+  @open_tag_pattern ~r/<al(?:\s+[^>]*)?>/iu
+  @close_tag_pattern ~r/<\/al>/iu
+
+  alias SpectreKinetic.Parser.Syntax
+
+  @type segment :: %{
+          kind: :closed | :open,
+          start: non_neg_integer(),
+          stop: non_neg_integer(),
+          raw: binary()
+        }
+
   # XML-ish <al> segments inside one line. The scanner handles multi-line state;
   # this module only cuts a line into clean text plus raw AL candidates.
 
@@ -18,16 +30,28 @@ defmodule SpectreKinetic.Extractor.Tags do
     end
   end
 
-  @spec split_close(binary()) :: {:ok, binary(), binary()} | :not_found
-  def split_close(line) do
-    lower = String.downcase(line)
+  @spec locate_segments(binary()) :: [segment()]
+  def locate_segments(line) when is_binary(line) do
+    locate_segments(line, 0, [])
+  end
 
-    case :binary.match(lower, "</al>") do
-      {close_index, 5} ->
+  @spec split_close(binary(), binary()) :: {:ok, binary(), binary()} | :not_found
+  def split_close(line, quote_prefix \\ "") do
+    source = quote_prefix <> line
+    line_offset = byte_size(quote_prefix)
+
+    case Syntax.find_unquoted_regex(source, @close_tag_pattern, line_offset) do
+      {source_index, close_size} ->
+        close_index = source_index - line_offset
+
         {
           :ok,
           binary_part(line, 0, close_index),
-          binary_part(line, close_index + 5, byte_size(line) - close_index - 5)
+          binary_part(
+            line,
+            close_index + close_size,
+            byte_size(line) - close_index - close_size
+          )
         }
 
       :nomatch ->
@@ -57,34 +81,54 @@ defmodule SpectreKinetic.Extractor.Tags do
   end
 
   defp split_open(line) do
-    lower = String.downcase(line)
-
-    case :binary.match(lower, "<al") do
-      {open_index, _size} ->
-        split_open_at(line, lower, open_index)
+    case Syntax.find_unquoted_regex(line, @open_tag_pattern) do
+      {open_index, open_size} ->
+        {
+          :ok,
+          binary_part(line, 0, open_index),
+          binary_part(
+            line,
+            open_index + open_size,
+            byte_size(line) - open_index - open_size
+          )
+        }
 
       :nomatch ->
         :not_found
     end
   end
 
-  # We match using a lowercase copy but slice from the original line, because
-  # callers expect clean text and raw AL to preserve casing. Boring detail,
-  # important result.
-  defp split_open_at(line, lower, open_index) do
-    rest = binary_part(line, open_index, byte_size(line) - open_index)
-    lower_rest = binary_part(lower, open_index, byte_size(lower) - open_index)
+  defp locate_segments(line, minimum_index, segments) do
+    case Syntax.find_unquoted_regex(line, @open_tag_pattern, minimum_index) do
+      {open_index, open_size} ->
+        content_index = open_index + open_size
 
-    case :binary.match(lower_rest, ">") do
-      {gt_index, 1} ->
-        {
-          :ok,
-          binary_part(line, 0, open_index),
-          binary_part(rest, gt_index + 1, byte_size(rest) - gt_index - 1)
-        }
+        case Syntax.find_unquoted_regex(line, @close_tag_pattern, content_index) do
+          {close_index, close_size} ->
+            stop = close_index + close_size
+
+            segment = %{
+              kind: :closed,
+              start: open_index,
+              stop: stop,
+              raw: binary_part(line, content_index, close_index - content_index)
+            }
+
+            locate_segments(line, stop, [segment | segments])
+
+          :nomatch ->
+            segment = %{
+              kind: :open,
+              start: open_index,
+              stop: byte_size(line),
+              raw: binary_part(line, content_index, byte_size(line) - content_index)
+            }
+
+            Enum.reverse([segment | segments])
+        end
 
       :nomatch ->
-        :not_found
+        Enum.reverse(segments)
     end
   end
 end

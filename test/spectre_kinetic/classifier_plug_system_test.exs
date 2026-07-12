@@ -2,6 +2,7 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
   use ExUnit.Case, async: false
 
   alias SpectreKinetic.Action
+  alias SpectreKinetic.ClassifierPipeline.Spec, as: ClassifierSpec
   alias SpectreKinetic.PlanContext
   alias SpectreKinetic.TelemetryHelper
   alias SpectreKinetic.TestRegistryHelper
@@ -156,6 +157,38 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
     assert Agent.get(override_call_agent, & &1) == 2
   end
 
+  test "facade rejects malformed per-call classifier specs before the pipeline" do
+    runtime =
+      SpectreKinetic.load_runtime!(registry_json: TestRegistryHelper.registry_json())
+
+    al = ~s(INSTALL PACKAGE WITH: PACKAGE="nginx")
+
+    assert {:error,
+            {:invalid_options, [%{field: :classifiers, reason: :must_be_list}]}} =
+             SpectreKinetic.plan(runtime, al, classifiers: StatusPlug)
+
+    for classifiers <- [[123], [{StatusPlug, %{status: :rejected}}], [:not_a_classifier_module]] do
+      assert {:error,
+              {:invalid_options,
+               [%{field: :classifiers, reason: :invalid_classifier_spec}]}} =
+               SpectreKinetic.plan(runtime, al, classifiers: classifiers)
+    end
+  end
+
+  test "facade accepts an initialized classifier spec" do
+    runtime =
+      SpectreKinetic.load_runtime!(registry_json: TestRegistryHelper.registry_json())
+
+    spec = %ClassifierSpec{module: StatusPlug, state: :needs_clarification}
+
+    assert {:ok, %Action{status: :needs_clarification}} =
+             SpectreKinetic.plan(
+               runtime,
+               ~s(INSTALL PACKAGE WITH: PACKAGE="nginx"),
+               classifiers: [spec]
+             )
+  end
+
   test "plugs can change public action status through the plan context" do
     runtime =
       SpectreKinetic.load_runtime!(
@@ -210,6 +243,7 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
              SpectreKinetic.plan(runtime, ~s(INSTALL PACKAGE WITH: PACKAGE="nginx"))
 
     assert action.halted?
+    assert action.status == :needs_confirmation
     assert action.warnings == ["plug halted"]
     assert action.classifier_results == %{}
     assert Agent.get(call_agent, & &1) == 0
@@ -232,7 +266,7 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
 
     assert [%{metadata: metadata}] = events
     assert metadata.result == :halt
-    assert metadata.status == :ok
+    assert metadata.status == :needs_confirmation
   end
 
   test "classifier run emits error telemetry" do

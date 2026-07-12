@@ -5,6 +5,20 @@ defmodule SpectreKinetic.ClassifierPipeline do
 
   alias SpectreKinetic.PlanContext
 
+  # A classifier may only move a plan toward a more restrictive outcome.
+  @status_ranks %{
+    ok: 0,
+    needs_confirmation: 10,
+    needs_clarification: 20,
+    ambiguous_mapping: 30,
+    missing_args: 40,
+    no_tool: 50,
+    rejected: 60,
+    error: 70
+  }
+
+  @known_statuses Map.keys(@status_ranks)
+
   defmodule Spec do
     @moduledoc false
 
@@ -18,19 +32,32 @@ defmodule SpectreKinetic.ClassifierPipeline do
   @doc """
   Initializes classifier specs once for runtime/configured pipelines.
   """
-  @spec init_specs([module() | {module(), keyword()}]) ::
+  @spec init_specs([classifier_spec()]) ::
           {:ok, [Spec.t()]} | {:error, {module(), term()} | term()}
   def init_specs(classifier_specs) when is_list(classifier_specs) do
     classifier_specs
     |> Enum.reduce_while({:ok, []}, fn spec, {:ok, acc} ->
-      with {:ok, {module, opts}} <- normalize_declaration(spec),
-           {:ok, state} <- init_classifier(module, opts) do
-        {:cont, {:ok, [%Spec{module: module, state: state} | acc]}}
-      else
+      case initialize_spec(spec) do
+        {:ok, initialized} -> {:cont, {:ok, [initialized | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
     |> initialized_specs()
+  end
+
+  defp initialize_spec(%Spec{module: module} = spec) when is_atom(module) do
+    if Code.ensure_loaded?(module) and function_exported?(module, :call, 2) do
+      {:ok, spec}
+    else
+      {:error, {:invalid_classifier_spec, spec}}
+    end
+  end
+
+  defp initialize_spec(spec) do
+    with {:ok, {module, opts}} <- normalize_declaration(spec),
+         {:ok, state} <- init_classifier(module, opts) do
+      {:ok, %Spec{module: module, state: state}}
+    end
   end
 
   defp initialized_specs({:ok, specs}), do: {:ok, Enum.reverse(specs)}
@@ -83,9 +110,14 @@ defmodule SpectreKinetic.ClassifierPipeline do
   defp run_classifier(module, state, context) do
     case module.call(context, state) do
       {:ok, %PlanContext{} = new_context} ->
-        {:cont, {:ok, new_context}}
+        {:cont, {:ok, reconcile_status(context, new_context)}}
 
       {:halt, %PlanContext{} = halted_context} ->
+        halted_context =
+          context
+          |> reconcile_status(halted_context)
+          |> fail_closed_halt()
+
         {:halt, {:ok, %{halted_context | halted?: true}}}
 
       {:error, reason} ->
@@ -97,4 +129,37 @@ defmodule SpectreKinetic.ClassifierPipeline do
   rescue
     error -> {:halt, {:error, {module, error}}}
   end
+
+  defp reconcile_status(previous, next) do
+    previous_status = normalize_classifier_status(previous.status)
+    next_status = normalize_classifier_status(next.status)
+
+    status =
+      if status_rank(next_status) > status_rank(previous_status) do
+        next_status
+      else
+        previous_status
+      end
+
+    %{
+      next
+      | runtime: previous.runtime,
+        input: previous.input,
+        mode: previous.mode,
+        planner_result: previous.planner_result,
+        metadata: previous.metadata,
+        halted?: previous.halted?,
+        status: status
+    }
+  end
+
+  defp fail_closed_halt(%PlanContext{status: :ok} = context),
+    do: %{context | status: :needs_confirmation}
+
+  defp fail_closed_halt(context), do: context
+
+  defp normalize_classifier_status(status) when status in @known_statuses, do: status
+  defp normalize_classifier_status(_status), do: :error
+
+  defp status_rank(status), do: Map.fetch!(@status_ranks, status)
 end

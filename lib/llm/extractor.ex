@@ -73,13 +73,21 @@ defmodule SpectreKinetic.Extractor do
   """
   @spec scan(binary()) :: scan_result()
   def scan(text) when is_binary(text) do
+    if String.valid?(text) do
+      do_scan(text)
+    else
+      %{clean_text: "", entries: [invalid_entry(text, :invalid_al)]}
+    end
+  end
+
+  def scan(_), do: %{clean_text: "", entries: []}
+
+  defp do_scan(text) do
     text
     |> String.split("\n", trim: false)
     |> Enum.reduce(%{mode: :normal, clean_lines: [], entries: []}, &consume_line/2)
     |> finalize_scan()
   end
-
-  def scan(_), do: %{clean_text: "", entries: []}
 
   # We build lists backwards because appending line-by-line is how tiny scripts
   # become tiny regrets. The public result is put back in order at the boundary.
@@ -88,8 +96,8 @@ defmodule SpectreKinetic.Extractor do
     fence_candidate = drop_list_prefix(trimmed)
 
     case Fences.parse_open(fence_candidate) do
-      {:al_inline, raw} ->
-        state |> add_entry(raw) |> keep_clean("")
+      {:al_inline, _raw} ->
+        handle_normal_line(line, state)
 
       {:al_open, delimiter, initial} ->
         %{state | mode: {:al_fence, delimiter, [initial]}}
@@ -105,7 +113,9 @@ defmodule SpectreKinetic.Extractor do
   end
 
   defp consume_line(line, %{mode: {:al_fence, delimiter, parts}} = state) do
-    case Fences.parse_close(line, delimiter) do
+    quote_prefix = raw_parts(parts) <> "\n"
+
+    case Fences.parse_close(line, delimiter, quote_prefix) do
       {:close, before_close, after_close} ->
         %{state | mode: :normal}
         |> add_entry(multiline_raw(parts, before_close))
@@ -117,7 +127,9 @@ defmodule SpectreKinetic.Extractor do
   end
 
   defp consume_line(line, %{mode: {:al_tag, parts}} = state) do
-    case Tags.split_close(line) do
+    quote_prefix = raw_parts(parts) <> "\n"
+
+    case Tags.split_close(line, quote_prefix) do
       {:ok, before_close, after_close} ->
         %{state | mode: :normal}
         |> add_entry(multiline_raw(parts, before_close))
@@ -170,24 +182,62 @@ defmodule SpectreKinetic.Extractor do
   end
 
   defp handle_normal_line(line, state) do
-    line
-    |> Tags.extract_segments()
-    |> handle_tagged_segments_result(state)
+    segments = ordered_wrapper_segments(line)
+    clean_line = remove_wrapper_segments(line, segments)
+
+    state =
+      segments
+      |> Enum.filter(&(&1.kind == :closed))
+      |> Enum.map(& &1.raw)
+      |> then(&append_raw_entries(state, &1))
+
+    case Enum.find(segments, &(&1.kind == :open)) do
+      nil ->
+        keep_prefixed_al_or_clean(state, clean_line)
+
+      %{raw: raw} ->
+        state
+        |> keep_clean(clean_line)
+        |> Map.put(:mode, {:al_tag, [raw]})
+    end
   end
 
-  defp handle_tagged_segments_result({:tag_open, clean_line, raw}, state) do
-    state
-    |> keep_clean(clean_line)
-    |> Map.put(:mode, {:al_tag, [raw]})
+  defp ordered_wrapper_segments(line) do
+    (Tags.locate_segments(line) ++ Fences.locate_inline_segments(line))
+    |> Enum.sort_by(&{&1.start, -&1.stop})
+    |> Enum.reduce({[], 0}, fn segment, {segments, cursor} ->
+      if segment.start < cursor do
+        {segments, cursor}
+      else
+        {[segment | segments], segment.stop}
+      end
+    end)
+    |> elem(0)
+    |> Enum.reverse()
   end
 
-  defp handle_tagged_segments_result({:ok, clean_line, raws}, state) do
-    {:ok, clean_line, inline_raws} = Fences.extract_inline_segments(clean_line)
+  defp remove_wrapper_segments(line, segments) do
+    {parts, cursor} =
+      Enum.reduce(segments, {[], 0}, fn segment, {parts, cursor} ->
+        clean_size = segment.start - cursor
+        clean_part = binary_part(line, cursor, clean_size)
+        {[clean_part | parts], segment.stop}
+      end)
 
-    state
-    |> append_raw_entries(raws)
-    |> append_raw_entries(inline_raws)
-    |> keep_prefixed_al_or_clean(clean_line)
+    tail = binary_part(line, cursor, byte_size(line) - cursor)
+
+    clean_line =
+      [tail | parts]
+      |> Enum.reverse()
+      |> IO.iodata_to_binary()
+
+    if segments == [], do: clean_line, else: remove_empty_list_prefix(clean_line)
+  end
+
+  defp remove_empty_list_prefix(line) do
+    trimmed = String.trim(line)
+
+    if drop_list_prefix(trimmed) == "", do: "", else: line
   end
 
   defp append_raw_entries(state, raws), do: Enum.reduce(raws, state, &add_entry(&2, &1))
@@ -221,6 +271,8 @@ defmodule SpectreKinetic.Extractor do
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n")
   end
+
+  defp raw_parts(parts), do: parts |> Enum.reverse() |> Enum.join("\n")
 
   defp build_entry(raw) do
     case SpectreKinetic.Parser.validate(raw) do

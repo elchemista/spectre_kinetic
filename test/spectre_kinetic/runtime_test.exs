@@ -1,5 +1,5 @@
 defmodule SpectreKinetic.RuntimeTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias SpectreKinetic.Planner.Registry.ETS
   alias SpectreKinetic.Planner.Runtime, as: PlannerRuntime
@@ -14,6 +14,12 @@ defmodule SpectreKinetic.RuntimeTest do
 
   defmodule ExplicitReranker do
     def load(_opts), do: {:error, :should_not_load_when_runtime_is_explicit}
+    def score_batch(_runtime, _pairs), do: {:ok, []}
+  end
+
+  defmodule CapturingReranker do
+    def load(opts), do: {:ok, {:loaded_with, opts}}
+    def score_batch(_runtime, _pairs), do: {:ok, []}
   end
 
   defmodule FakeEncoder do
@@ -31,6 +37,30 @@ defmodule SpectreKinetic.RuntimeTest do
     end
   end
 
+  defmodule FailingEncoder do
+    use GenServer
+
+    def start_link(), do: GenServer.start_link(__MODULE__, nil)
+
+    @impl GenServer
+    def init(state), do: {:ok, state}
+
+    @impl GenServer
+    def handle_call({:embed_batch, _texts}, _from, state) do
+      {:reply, {:error, :embedding_failed}, state}
+    end
+  end
+
+  defmodule FailingClassifier do
+    @behaviour SpectreKinetic.Classifier
+
+    @impl SpectreKinetic.Classifier
+    def init(_opts), do: raise("classifier init failed")
+
+    @impl SpectreKinetic.Classifier
+    def call(context, _state), do: {:ok, context}
+  end
+
   test "load_runtime/1 emits skipped optional ML load telemetry" do
     registry_json = write_registry_json([email_action()])
 
@@ -46,6 +76,51 @@ defmodule SpectreKinetic.RuntimeTest do
 
     assert event_metadata(events, @reranker_load_event).result == :skipped
     assert event_metadata(events, @reranker_load_event).reason == :fallback_disabled
+  end
+
+  test "load_runtime/1 resolves a registry path from application config" do
+    registry_json = write_registry_json([email_action()])
+    previous = Application.get_env(:spectre_kinetic, :registry_json)
+    Application.put_env(:spectre_kinetic, :registry_json, registry_json)
+
+    on_exit(fn ->
+      if is_nil(previous) do
+        Application.delete_env(:spectre_kinetic, :registry_json)
+      else
+        Application.put_env(:spectre_kinetic, :registry_json, previous)
+      end
+    end)
+
+    assert {:ok, %PlannerRuntime{} = runtime} = SpectreKinetic.load_runtime()
+    assert SpectreKinetic.action_count(runtime) == 1
+  end
+
+  test "load_runtime/1 rejects an empty registry unless explicitly allowed" do
+    registry_json = write_registry_json([])
+
+    assert {:error, :empty_registry} =
+             SpectreKinetic.load_runtime(registry_json: registry_json)
+
+    assert {:ok, %PlannerRuntime{} = runtime} =
+             SpectreKinetic.load_runtime(
+               registry_json: registry_json,
+               allow_empty_registry: true
+             )
+
+    assert SpectreKinetic.action_count(runtime) == 0
+  end
+
+  test "load_runtime/1 closes registry resources when component loading fails" do
+    registry_json = write_registry_json([email_action()])
+    table_count = owned_table_count()
+
+    assert {:error, {FailingClassifier, %RuntimeError{message: "classifier init failed"}}} =
+             SpectreKinetic.load_runtime(
+               registry_json: registry_json,
+               classifiers: [FailingClassifier]
+             )
+
+    assert owned_table_count() == table_count
   end
 
   test "load_runtime/1 builds a persistent runtime that can plan directly" do
@@ -72,6 +147,59 @@ defmodule SpectreKinetic.RuntimeTest do
            }
   end
 
+  test "load_runtime/1 rejects invalid planner defaults before loading components" do
+    assert {:error,
+            {:invalid_options,
+             [
+               %{field: :top_k, reason: :must_be_positive_integer},
+               %{field: :tool_threshold, reason: :must_be_probability}
+             ]}} =
+             SpectreKinetic.load_runtime(
+               registry_json: "/path/that/must/not/be-read.json",
+               top_k: 0,
+               tool_threshold: 1.5
+             )
+  end
+
+  test "load_runtime/1 rejects invalid runtime boundary options" do
+    assert {:error,
+            {:invalid_options,
+             [%{field: :registry_module, reason: :must_implement_registry_backend}]}} =
+             SpectreKinetic.load_runtime(
+               registry_module: String,
+               allow_empty_registry: true
+             )
+
+    assert {:error,
+            {:invalid_options,
+             [
+               %{field: :fallback_runtime_module, reason: :must_implement_reranker_runtime}
+             ]}} =
+             SpectreKinetic.load_runtime(
+               fallback_runtime_module: String,
+               tool_selection_fallback: :reranker,
+               allow_empty_registry: true
+             )
+  end
+
+  test "load_runtime/1 rejects a non-binary application registry path" do
+    previous = Application.get_env(:spectre_kinetic, :registry_json)
+    Application.put_env(:spectre_kinetic, :registry_json, :not_a_path)
+
+    on_exit(fn ->
+      if is_nil(previous) do
+        Application.delete_env(:spectre_kinetic, :registry_json)
+      else
+        Application.put_env(:spectre_kinetic, :registry_json, previous)
+      end
+    end)
+
+    assert {:error,
+            {:invalid_options,
+             [%{field: :registry_json, reason: :must_be_non_blank_binary}]}} =
+             SpectreKinetic.load_runtime()
+  end
+
   test "runtime mutation APIs return updated runtimes" do
     registry_json = write_registry_json([email_action()])
     {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)
@@ -94,13 +222,66 @@ defmodule SpectreKinetic.RuntimeTest do
     notes_json = write_registry_json([note_delete_action()])
 
     {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: email_json)
+    previous_registry = runtime.registry
     assert SpectreKinetic.action_count(runtime) == 1
 
     assert {:ok, runtime} = SpectreKinetic.reload_registry(runtime, notes_json)
     assert SpectreKinetic.action_count(runtime) == 1
+    assert :ets.info(previous_registry.actions) == :undefined
 
     assert {:ok, action} = SpectreKinetic.plan(runtime, "DELETE NOTE ENTRY WITH: ID=note-1")
     assert action.selected_tool == "Dynamic.Note.delete/1"
+  end
+
+  test "runtime reload preserves the active registry when validation fails" do
+    email_json = write_registry_json([email_action()])
+    invalid_json = write_registry_json([note_delete_action(), %{}])
+
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: email_json)
+    active_registry = runtime.registry
+
+    assert {:error,
+            {:invalid_action, 1, {:invalid_field, "module", :must_be_string}}} =
+             SpectreKinetic.reload_registry(runtime, invalid_json)
+
+    assert :ets.info(active_registry.actions) != :undefined
+    assert SpectreKinetic.action_count(runtime) == 1
+    assert ETS.get_action(active_registry, "Dynamic.Email.send/3") != nil
+    assert ETS.get_action(active_registry, "Dynamic.Note.delete/1") == nil
+  end
+
+  test "runtime reload preserves the active registry when embedding fails" do
+    email_json = write_registry_json([email_action()])
+    notes_json = write_registry_json([note_delete_action()])
+
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: email_json)
+    {:ok, encoder} = FailingEncoder.start_link()
+    runtime = %{runtime | encoder: encoder}
+    active_registry = runtime.registry
+
+    assert {:error, :embedding_failed} =
+             SpectreKinetic.reload_registry(runtime, notes_json)
+
+    assert :ets.info(active_registry.actions) != :undefined
+    assert SpectreKinetic.action_count(runtime) == 1
+    assert ETS.get_action(active_registry, "Dynamic.Email.send/3") != nil
+    assert ETS.get_action(active_registry, "Dynamic.Note.delete/1") == nil
+  end
+
+  test "runtime reload preserves the active registry when the embedder exits" do
+    email_json = write_registry_json([email_action()])
+    notes_json = write_registry_json([note_delete_action()])
+
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: email_json)
+    runtime = %{runtime | encoder: :missing_kinetic_encoder}
+    active_registry = runtime.registry
+
+    assert {:error, {:registry_stage_failed, {:exit, _reason}}} =
+             SpectreKinetic.reload_registry(runtime, notes_json)
+
+    assert :ets.info(active_registry.actions) != :undefined
+    assert SpectreKinetic.action_count(runtime) == 1
+    assert ETS.get_action(active_registry, "Dynamic.Email.send/3") != nil
   end
 
   test "load_runtime/1 accepts compiled registries without requiring an encoder" do
@@ -135,6 +316,27 @@ defmodule SpectreKinetic.RuntimeTest do
     assert event_metadata(events, @reranker_load_event).reason == :explicit_runtime
   end
 
+  test "passes explicit ONNX output semantics to the reranker runtime" do
+    registry_json = write_registry_json([email_action()])
+
+    assert {:ok, %PlannerRuntime{} = runtime} =
+             SpectreKinetic.load_runtime(
+               registry_json: registry_json,
+               tool_selection_fallback: :reranker,
+               fallback_model_dir: "/tmp/reranker-model",
+               fallback_runtime_module: CapturingReranker,
+               reranker_max_length: 256,
+               reranker_score_index: 1,
+               reranker_score_transform: :softmax
+             )
+
+    assert {:loaded_with, opts} = runtime.reranker
+    assert opts[:fallback_model_dir] == "/tmp/reranker-model"
+    assert opts[:max_length] == 256
+    assert opts[:score_index] == 1
+    assert opts[:score_transform] == :softmax
+  end
+
   test "reload_registry/2 rejects unknown registry formats" do
     registry_json = write_registry_json([email_action()])
     {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)
@@ -150,6 +352,22 @@ defmodule SpectreKinetic.RuntimeTest do
     assert metadata.result == :error
     assert metadata.reason == :unknown_registry_format
     assert metadata.format == :unknown
+  end
+
+  test "reload_registry/2 rejects non-binary and blank paths without losing the registry" do
+    registry_json = write_registry_json([email_action()])
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)
+    active_registry = runtime.registry
+
+    for path <- [42, " "] do
+      assert {:error,
+              {:invalid_options,
+               [%{field: :registry_path, reason: :must_be_non_blank_binary}]}} =
+               SpectreKinetic.reload_registry(runtime, path)
+    end
+
+    assert :ets.info(active_registry.actions) != :undefined
+    assert SpectreKinetic.action_count(runtime) == 1
   end
 
   test "runtime mutation emits registry and embedding telemetry" do
@@ -194,7 +412,11 @@ defmodule SpectreKinetic.RuntimeTest do
     registry_json = write_registry_json([email_action()])
     {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)
     {:ok, encoder} = FakeEncoder.start_link([1.0, 0.0])
-    runtime = %{runtime | encoder: encoder}
+
+    {:ok, registry} =
+      ETS.put_embedding(runtime.registry, "Dynamic.Email.send/3", Nx.tensor([1.0, 0.0]))
+
+    runtime = %{runtime | registry: registry, encoder: encoder}
 
     {result, events} =
       TelemetryHelper.capture([@registry_add_event, @registry_embed_event], fn ->
@@ -207,6 +429,27 @@ defmodule SpectreKinetic.RuntimeTest do
     assert event_metadata(events, @registry_add_event).embedding_attempted == true
     assert event_metadata(events, @registry_embed_event).result == :ok
     assert event_metadata(events, @registry_embed_event).scope == :action
+  end
+
+  test "add_action/2 leaves an existing action unchanged when embedding fails" do
+    registry_json = write_registry_json([email_action()])
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)
+    {:ok, encoder} = FailingEncoder.start_link()
+    runtime = %{runtime | encoder: encoder}
+
+    replacement =
+      email_action()
+      |> Map.put("doc", "Replacement that must not be committed")
+      |> Map.update!("args", fn [to | rest] ->
+        [Map.put(to, "aliases", ["destination"]) | rest]
+      end)
+
+    assert {:error, :embedding_failed} = SpectreKinetic.add_action(runtime, replacement)
+
+    stored = ETS.get_action(runtime.registry, "Dynamic.Email.send/3")
+    assert stored["doc"] == "Send an outbound email message"
+    assert ETS.resolve_alias(runtime.registry, "recipient") == [{"Dynamic.Email.send/3", "to"}]
+    assert ETS.resolve_alias(runtime.registry, "destination") == []
   end
 
   test "ETS registry backend can be used directly without the compatibility server" do
@@ -227,6 +470,43 @@ defmodule SpectreKinetic.RuntimeTest do
     after
       ETS.close(registry)
     end
+  end
+
+  test "close_runtime/1 releases registry tables and is idempotent" do
+    registry_json = write_registry_json([email_action()])
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)
+    registry = runtime.registry
+
+    assert :ok = SpectreKinetic.close_runtime(runtime)
+    assert :ets.info(registry.actions) == :undefined
+    assert :ok = SpectreKinetic.close_runtime(runtime)
+  end
+
+  test "process-owned runtimes reject mutations and closure from other processes" do
+    registry_json = write_registry_json([email_action()])
+    notes_json = write_registry_json([note_delete_action()])
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)
+    owner = self()
+
+    task =
+      Task.async(fn ->
+        {
+          SpectreKinetic.add_action(runtime, note_delete_action()),
+          SpectreKinetic.delete_action(runtime, "Dynamic.Email.send/3"),
+          SpectreKinetic.reload_registry(runtime, notes_json),
+          SpectreKinetic.close_runtime(runtime)
+        }
+      end)
+
+    assert {
+             {:error, {:registry_not_owner, ^owner}},
+             {:error, {:registry_not_owner, ^owner}},
+             {:error, {:registry_not_owner, ^owner}},
+             {:error, {:registry_not_owner, ^owner}}
+           } = Task.await(task)
+
+    assert SpectreKinetic.action_count(runtime) == 1
+    assert :ets.info(runtime.registry.actions) != :undefined
   end
 
   defp write_registry_json(actions) do
@@ -258,6 +538,13 @@ defmodule SpectreKinetic.RuntimeTest do
     events
     |> Enum.find(&(&1.event == event))
     |> Map.fetch!(:metadata)
+  end
+
+  defp owned_table_count do
+    owner = self()
+
+    :ets.all()
+    |> Enum.count(fn table -> :ets.info(table, :owner) == owner end)
   end
 
   defp email_action do

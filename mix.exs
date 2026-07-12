@@ -7,7 +7,7 @@ defmodule SpectreKinetic.MixProject do
     [
       app: :spectre_kinetic,
       version: @version,
-      elixir: "~> 1.15",
+      elixir: "~> 1.17",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -29,7 +29,7 @@ defmodule SpectreKinetic.MixProject do
 
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:crypto, :logger]
     ]
   end
 
@@ -61,6 +61,7 @@ defmodule SpectreKinetic.MixProject do
       {:jason, "~> 1.2"},
       {:nx, "~> 0.11"},
       {:axon, "~> 0.7"},
+      {:polaris, "~> 0.1"},
       {:ortex, "~> 0.1"},
       {:tokenizers, "~> 0.5"},
       {:telemetry, "~> 1.0"},

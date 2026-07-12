@@ -16,5 +16,156 @@ defmodule SpectreKinetic.RuntimeConfigTest do
       assert normalized["al"] == "SEND MESSAGE WITH: FORCE=false"
       assert normalized["slots"] == %{"force" => false, "optional" => nil}
     end
+
+    test "normalizes and preserves fallback request overrides" do
+      normalized =
+        RuntimeConfig.normalize_request(%{
+          "al" => "SEND MESSAGE",
+          "tool_selection_fallback" => "RERANKER",
+          "fallback_top_k" => 2,
+          "fallback_margin" => 0.2,
+          "reranker_threshold" => 0.7
+        })
+
+      assert normalized["tool_selection_fallback"] == :reranker
+      assert normalized["fallback_top_k"] == 2
+      assert normalized["fallback_margin"] == 0.2
+      assert normalized["reranker_threshold"] == 0.7
+    end
+  end
+
+  describe "public input validation" do
+    test "returns field-level errors for malformed requests" do
+      assert {:error, {:invalid_request, issues}} =
+               RuntimeConfig.validate_request(%{
+                 "al" => 123,
+                 "slots" => [],
+                 "top_k" => 0,
+                 "tool_threshold" => 1.1,
+                 "mapping_threshold" => -0.1,
+                 "tool_selection_fallback" => "magic",
+                 "fallback_top_k" => 0,
+                 "fallback_margin" => "close",
+                 "reranker_threshold" => 2.0
+               })
+
+      assert Enum.map(issues, & &1.field) == [
+               :al,
+               :slots,
+               :top_k,
+               :tool_threshold,
+               :mapping_threshold,
+               :tool_selection_fallback,
+               :fallback_top_k,
+               :fallback_margin,
+               :reranker_threshold
+             ]
+
+      assert Enum.all?(issues, &(Map.keys(&1) |> Enum.sort() == [:field, :reason]))
+    end
+
+    test "rejects invalid option containers and slot values" do
+      assert {:error,
+              {:invalid_options,
+               [%{field: :options, reason: :must_be_keyword_or_atom_keyed_map}]}} =
+               RuntimeConfig.validate_options([:not_a_keyword])
+
+      assert {:error,
+              {:invalid_options, [%{field: :options, reason: :must_have_unique_keys}]}} =
+               RuntimeConfig.validate_options(top_k: 5, top_k: 0)
+
+      assert {:error,
+              {:invalid_options,
+               [%{field: :slots, reason: :must_be_json_compatible_map}]}} =
+               RuntimeConfig.validate_options(slots: %{callback: fn -> :ok end})
+
+      assert {:error,
+              {:invalid_options,
+               [%{field: :slots, reason: :must_be_json_compatible_map}]}} =
+               RuntimeConfig.validate_options(slots: %{items: [1 | :improper]})
+    end
+
+    test "does not let callers use the former missing-value sentinel" do
+      sentinel = :__spectre_kinetic_missing__
+
+      assert {:error,
+              {:invalid_options,
+               [%{field: :top_k, reason: :must_be_positive_integer}]}} =
+               RuntimeConfig.validate_options(top_k: sentinel)
+
+      assert {:error,
+              {:invalid_request,
+               [%{field: :top_k, reason: :must_be_positive_integer}]}} =
+               RuntimeConfig.validate_request(%{"al" => "SEND MESSAGE", "top_k" => sentinel})
+    end
+
+    test "validates runtime paths, modules, and the empty-registry flag" do
+      assert {:error, {:invalid_options, issues}} =
+               RuntimeConfig.validate_options(
+                 encoder_model_dir: nil,
+                 compiled_registry: " ",
+                 registry_json: 42,
+                 fallback_model_dir: [],
+                 registry_module: :spectre_missing_registry_module,
+                 fallback_runtime_module: "not-a-module",
+                 allow_empty_registry: :yes
+               )
+
+      assert Enum.map(issues, & &1.field) == [
+               :encoder_model_dir,
+               :compiled_registry,
+               :registry_json,
+               :fallback_model_dir,
+               :registry_module,
+               :fallback_runtime_module,
+               :allow_empty_registry
+             ]
+
+      assert Enum.map(issues, & &1.reason) == [
+               :must_be_non_blank_binary,
+               :must_be_non_blank_binary,
+               :must_be_non_blank_binary,
+               :must_be_non_blank_binary,
+               :must_be_module,
+               :must_be_module,
+               :must_be_boolean
+             ]
+    end
+
+    test "accepts bounded options and JSON-compatible nested slots" do
+      assert :ok =
+               RuntimeConfig.validate_plan_input(
+                 "SEND MESSAGE WITH: ID=42",
+                 slots: %{id: 42, metadata: %{"tags" => ["urgent"], "enabled" => true}},
+                 top_k: 1,
+                 tool_threshold: 0.0,
+                 mapping_threshold: 1.0,
+                 fallback_top_k: 2,
+                 fallback_margin: 0.25,
+                 reranker_threshold: 0.75,
+                 tool_selection_fallback: :reranker
+               )
+    end
+
+    test "rejects oversized AL and pathological slot containers" do
+      assert {:error,
+              {:invalid_request, [%{field: :al, reason: :exceeds_size_limit}]}} =
+               RuntimeConfig.validate_plan_input(String.duplicate("A", 32 * 1_024 + 1), [])
+
+      too_many_slots = Map.new(1..257, &{"slot_#{&1}", &1})
+
+      assert {:error,
+              {:invalid_request,
+               [%{field: :slots, reason: :exceeds_complexity_limit}]}} =
+               RuntimeConfig.validate_request(%{"al" => "RUN TEST", "slots" => too_many_slots})
+
+      deeply_nested =
+        Enum.reduce(1..17, "value", fn index, value -> %{"level_#{index}" => value} end)
+
+      assert {:error,
+              {:invalid_options,
+               [%{field: :slots, reason: :exceeds_complexity_limit}]}} =
+               RuntimeConfig.validate_options(slots: deeply_nested)
+    end
   end
 end

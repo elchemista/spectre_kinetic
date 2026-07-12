@@ -11,6 +11,7 @@ defmodule SpectreKinetic.Reranker.Runtime.Axon do
   `hidden_dim`.
   """
 
+  alias SpectreKinetic.Artifact
   alias SpectreKinetic.ONNX
   alias SpectreKinetic.Planner.EmbeddingRuntime
   alias SpectreKinetic.Reranker.FeatureBuilder
@@ -28,13 +29,19 @@ defmodule SpectreKinetic.Reranker.Runtime.Axon do
   @spec load(keyword()) :: {:ok, t()} | {:error, term()}
   def load(opts) do
     embedding_module = Keyword.get(opts, :embedding_module, EmbeddingRuntime)
-    model_dir = Keyword.fetch!(opts, :fallback_model_dir)
-    metadata_path = Path.join(model_dir, "metadata.json")
-    params_path = Path.join(model_dir, "params.etf")
 
-    with {:ok, metadata_json} <- File.read(metadata_path),
-         {:ok, metadata} <- Jason.decode(metadata_json),
-         {:ok, params_binary} <- File.read(params_path),
+    with {:ok, model_dir} <- fetch_model_dir(opts),
+         {:ok, metadata} <-
+           Artifact.read_json(
+             Path.join(model_dir, "metadata.json"),
+             artifact_opts(opts, :metadata_max_bytes)
+           ),
+         :ok <- validate_metadata(metadata),
+         {:ok, model_state} <-
+           Artifact.read_term(
+             Path.join(model_dir, "params.etf"),
+             artifact_opts(opts, :params_max_bytes)
+           ),
          {:ok, embedder} <-
            embedding_module.load(
              encoder_model_dir:
@@ -51,10 +58,48 @@ defmodule SpectreKinetic.Reranker.Runtime.Axon do
          embedder: embedder,
          embedding_module: embedding_module,
          model: model,
-         model_state: :erlang.binary_to_term(params_binary)
+         model_state: model_state
        }}
     else
       {:error, _reason} = error -> error
+    end
+  end
+
+  defp fetch_model_dir(opts) do
+    case Keyword.fetch(opts, :fallback_model_dir) do
+      {:ok, model_dir} when is_binary(model_dir) -> {:ok, model_dir}
+      {:ok, _invalid} -> {:error, {:invalid_option, :fallback_model_dir}}
+      :error -> {:error, {:missing_option, :fallback_model_dir}}
+    end
+  end
+
+  defp validate_metadata(metadata) when is_map(metadata) do
+    required = ["encoder_model_dir", "feature_dim", "hidden_dim"]
+
+    cond do
+      Enum.any?(required, &(not Map.has_key?(metadata, &1))) ->
+        {:error, {:invalid_metadata, :missing_fields}}
+
+      not is_binary(metadata["encoder_model_dir"]) ->
+        {:error, {:invalid_metadata, :encoder_model_dir}}
+
+      not is_integer(metadata["feature_dim"]) or metadata["feature_dim"] <= 0 ->
+        {:error, {:invalid_metadata, :feature_dim}}
+
+      not is_integer(metadata["hidden_dim"]) or metadata["hidden_dim"] <= 0 ->
+        {:error, {:invalid_metadata, :hidden_dim}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_metadata(_metadata), do: {:error, {:invalid_metadata, :root}}
+
+  defp artifact_opts(opts, key) do
+    case Keyword.get(opts, key, Keyword.get(opts, :artifact_max_bytes)) do
+      nil -> []
+      max_bytes -> [max_bytes: max_bytes]
     end
   end
 

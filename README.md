@@ -1,6 +1,6 @@
 # SpectreKinetic
 
-Elixir-first planning for turning Action Language into real function calls.
+Elixir-first planning from Action Language to validated function-call candidates.
 
 ## Why Use This?
 
@@ -25,10 +25,10 @@ into a small Action Language candidate:
 SEND MAIL TO="ops@example.com" BODY="Deploy failed: https://logs.example/run/42"
 ```
 
-Then `spectre_kinetic` maps it to your real function:
+Then `spectre_kinetic` maps it to a structured proposal for your real function:
 
 ```elixir
-%SpectreKinetic.ActionPlan{
+%SpectreKinetic.Action{
   selected_tool: "MyApp.Emailer.send/2",
   args: %{
     "email" => "ops@example.com",
@@ -164,6 +164,13 @@ action.status
 The planner returns data. It does not call `MyApp.Emailer.send/2` for you.
 That boundary is the whole point.
 
+Primitive argument types declared by the registry are enforced during slot
+mapping. Integer, float, and boolean AL literals are safely coerced; invalid
+required values are omitted, remain in `missing`, and keep the action
+non-executable. Date and URI values are validated while remaining strings for
+JSON-friendly output. Literal unions and typed lists are checked recursively;
+unknown custom types fail closed until an explicit coercer is defined.
+
 ## Compile A Fast Registry
 
 For production-ish use, download an encoder and compile the registry with
@@ -172,17 +179,47 @@ embeddings:
 ```bash
 mix spectre.download_encoder \
   --model BAAI/bge-small-en-v1.5 \
+  --revision 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a \
   --out artifacts/encoder
 ```
 
-This writes:
+The revision is an immutable Hugging Face commit SHA. When using the default
+model, omitting `--revision` uses the pinned SHA above; custom models must pass
+their own full commit SHA.
+
+Each download is staged, structurally checked, SHA-256 hashed, and atomically
+renamed into place. An exclusive output lock prevents concurrent runs from
+interleaving, and a failed install rolls back files already renamed. The task
+also writes `encoder-manifest.json`, containing the immutable model identity,
+byte sizes, source URLs, and hashes:
 
 ```text
 artifacts/encoder/
 |-- config.json
+|-- encoder-manifest.json
 |-- model.onnx
 `-- tokenizer.json
 ```
+
+To verify a later download against a trusted manifest, pass it explicitly:
+
+```bash
+mix spectre.download_encoder \
+  --model BAAI/bge-small-en-v1.5 \
+  --revision 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a \
+  --checksum-manifest trusted/encoder-manifest.json \
+  --out artifacts/encoder \
+  --force
+```
+
+The task checks the manifest's model and revision before downloading, then
+checks every artifact hash before replacing any existing artifact. Failed or
+partial downloads are removed from the staging directory. JSON artifacts must
+decode to objects, and a Git LFS pointer is rejected in place of ONNX bytes.
+Without `--force`, existing artifacts are skipped only after verification
+against either the explicit manifest or `encoder-manifest.json` already in the
+output directory. Use `--force` once for encoder directories created by an
+older task that have no manifest.
 
 Then compile the registry:
 
@@ -229,7 +266,10 @@ config :spectre_kinetic,
   tool_selection_fallback: :disabled,
   fallback_model_dir: "/abs/path/to/artifacts/reranker",
   fallback_top_k: 3,
-  fallback_margin: 0.12
+  fallback_margin: 0.12,
+  reranker_threshold: 0.5,
+  reranker_score_index: 1,
+  reranker_score_transform: :softmax
 ```
 
 Environment variables work too:
@@ -245,9 +285,44 @@ export SPECTRE_KINETIC_TOOL_SELECTION_FALLBACK=reranker
 export SPECTRE_KINETIC_FALLBACK_MODEL_DIR=/abs/path/to/artifacts/reranker
 export SPECTRE_KINETIC_FALLBACK_TOP_K=3
 export SPECTRE_KINETIC_FALLBACK_MARGIN=0.12
+export SPECTRE_KINETIC_RERANKER_THRESHOLD=0.5
 ```
 
 Explicit options passed to `load_runtime!/1` win over config.
+
+`mapping_threshold` is an execution gate, not just telemetry: a selected tool
+whose slot-mapping score falls below it is returned with
+`status: :ambiguous_mapping` and must not be executed without clarification.
+
+Public planning calls validate AL, slots, candidate limits, and every score
+threshold before touching the runtime. Invalid input returns field-level data,
+for example `{:error, {:invalid_options, [%{field: :top_k, reason:
+:must_be_positive_integer}]}}`; the supervised adapter remains available for
+the next request.
+
+For ONNX rerankers that return more than one class, set
+`reranker_score_index` to the relevance-class index. Kinetic deliberately
+rejects ambiguous multiclass output instead of assuming class `0`. Use
+`reranker_score_transform: :softmax` for multiclass logits or `:sigmoid` for a
+single raw logit; already-normalized scores use the default `:identity`.
+
+Library-first runtimes own protected ETS tables in the process that loads
+them. Other processes may plan with the runtime, but reload/add/delete and
+closure must run in the owner process. Close the runtime when it is no longer
+needed:
+
+```elixir
+runtime = SpectreKinetic.load_runtime!(registry_json: "registry.json")
+
+try do
+  SpectreKinetic.plan(runtime, "SEND EMAIL WITH: TO=dev@example.com")
+after
+  SpectreKinetic.close_runtime(runtime)
+end
+```
+
+Use the supervised `SpectreKinetic` child when several callers need shared
+registry mutations; its server owns and closes the runtime automatically.
 
 ## Classifier Plugs
 
@@ -267,6 +342,11 @@ A classifier should not:
 - call an LLM
 - secretly replace the selected action
 - turn planning into workflow orchestration with a trench coat
+
+Classifier decisions are monotone: a later classifier cannot promote a
+restrictive status such as `:rejected`, `:needs_confirmation`, or
+`:needs_clarification` back to `:ok`. Selection and mapped arguments remain
+owned by the planner.
 
 Custom classifier plugs implement `SpectreKinetic.Classifier`:
 
@@ -403,6 +483,9 @@ Each classifier training run writes:
 - `metadata.json`
 - `calibration.json`
 
+`calibration.json` is loaded with the artifact but does not currently choose
+runtime thresholds automatically. Configure classifier thresholds explicitly.
+
 The real workflow is:
 
 1. embed/compile your registry
@@ -434,7 +517,7 @@ every call:
 LLM responses are often a polite paragraph wrapped around the one useful thing.
 `plan_chain/3` extracts AL blocks and plans each step:
 
-```elixir
+````elixir
 {:ok, chain} =
   SpectreKinetic.plan_chain(runtime, """
   I will do this in order.
@@ -444,8 +527,12 @@ LLM responses are often a polite paragraph wrapped around the one useful thing.
   ```al
   LIST DIRECTORY WITH: PATH="/var/log"
   ```
-  """)
-```
+    """)
+````
+
+Configured action classifiers run independently on each extracted action.
+Kinetic intentionally has no separate `chain_classifiers` pipeline: ordering,
+dependencies, retries, and whole-workflow policy belong to Spectre Directive.
 
 ## Reranker Fallback
 
