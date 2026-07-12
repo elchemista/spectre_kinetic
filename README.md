@@ -257,6 +257,12 @@ Explicit options passed to `load_runtime!/1` win over config.
 whose slot-mapping score falls below it is returned with
 `status: :ambiguous_mapping` and must not be executed without clarification.
 
+Public planning calls validate AL, slots, candidate limits, and every score
+threshold before touching the runtime. Invalid input returns field-level data,
+for example `{:error, {:invalid_options, [%{field: :top_k, reason:
+:must_be_positive_integer}]}}`; the supervised adapter remains available for
+the next request.
+
 For ONNX rerankers that return more than one class, set
 `reranker_score_index` to the relevance-class index. Kinetic deliberately
 rejects ambiguous multiclass output instead of assuming class `0`. Use

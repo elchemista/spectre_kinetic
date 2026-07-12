@@ -64,6 +64,52 @@ defmodule SpectreKinetic.IntegrationTest do
     assert action.args["package"] == "nginx"
   end
 
+  test "adapter returns structured validation errors and stays alive", %{pid: pid} do
+    assert {:error, {:invalid_request, [%{field: :al, reason: :must_be_binary}]}} =
+             SpectreKinetic.plan(pid, 123)
+
+    assert {:error, {:invalid_options, option_issues}} =
+             SpectreKinetic.plan(pid, "INSTALL PACKAGE WITH: PACKAGE=nginx",
+               slots: [],
+               top_k: 0,
+               tool_threshold: 1.1,
+               mapping_threshold: -0.1,
+               fallback_top_k: 0,
+               fallback_margin: 2.0,
+               reranker_threshold: -1.0
+             )
+
+    assert Enum.map(option_issues, & &1.field) == [
+             :slots,
+             :top_k,
+             :tool_threshold,
+             :mapping_threshold,
+             :fallback_top_k,
+             :fallback_margin,
+             :reranker_threshold
+           ]
+
+    assert {:error, {:invalid_request, request_issues}} =
+             SpectreKinetic.plan_request(pid, %{
+               "al" => "INSTALL PACKAGE WITH: PACKAGE=nginx",
+               "slots" => "not-a-map",
+               "top_k" => 0,
+               "tool_threshold" => "high"
+             })
+
+    assert Enum.map(request_issues, & &1.field) == [:slots, :top_k, :tool_threshold]
+
+    assert {:error, {:invalid_request, [%{field: :json, reason: :must_be_binary}]}} =
+             SpectreKinetic.plan_json(pid, %{not: "json"})
+
+    assert Process.alive?(pid)
+
+    assert {:ok, %Action{status: :ok}} =
+             SpectreKinetic.plan(pid, "INSTALL PACKAGE {package} VIA APT",
+               slots: %{package: "nginx"}
+             )
+  end
+
   test "returns suggestions when no tool matches confidently", %{pid: pid} do
     assert {:ok, %Action{} = action} =
              SpectreKinetic.plan(pid, "DO SOMETHING COMPLETELY UNKNOWN", tool_threshold: 0.99)

@@ -381,6 +381,20 @@ defmodule SpectreKinetic.PlannerTest do
     end
   end
 
+  test "direct planner returns structured validation errors" do
+    assert {:error,
+            {:invalid_options,
+             [
+               %{field: :slots, reason: :must_be_map},
+               %{field: :top_k, reason: :must_be_positive_integer},
+               %{field: :tool_threshold, reason: :must_be_probability}
+             ]}} =
+             Planner.plan("SEND MESSAGE", %{slots: [], top_k: 0, tool_threshold: 1.5})
+
+    assert {:error, {:invalid_request, [%{field: :al, reason: :invalid_al_verb}]}} =
+             Planner.plan("123 SEND MESSAGE", %{})
+  end
+
   defp test_actions do
     [
       %{

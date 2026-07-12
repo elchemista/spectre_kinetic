@@ -139,6 +139,20 @@ defmodule SpectreKinetic.RuntimeTest do
            }
   end
 
+  test "load_runtime/1 rejects invalid planner defaults before loading components" do
+    assert {:error,
+            {:invalid_options,
+             [
+               %{field: :top_k, reason: :must_be_positive_integer},
+               %{field: :tool_threshold, reason: :must_be_probability}
+             ]}} =
+             SpectreKinetic.load_runtime(
+               registry_json: "/path/that/must/not/be-read.json",
+               top_k: 0,
+               tool_threshold: 1.5
+             )
+  end
+
   test "runtime mutation APIs return updated runtimes" do
     registry_json = write_registry_json([email_action()])
     {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)

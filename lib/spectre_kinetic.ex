@@ -13,6 +13,7 @@ defmodule SpectreKinetic do
   alias SpectreKinetic.Planner
   alias SpectreKinetic.Planner.Runtime, as: PlannerRuntime
   alias SpectreKinetic.Prompt
+  alias SpectreKinetic.RuntimeConfig
 
   defmacro __using__(_opts) do
     quote do
@@ -100,56 +101,54 @@ defmodule SpectreKinetic do
   @doc """
   Plans one AL instruction against an explicit runtime or adapter target.
   """
-  @spec plan(PlannerRuntime.t() | GenServer.server(), binary()) ::
+  @spec plan(PlannerRuntime.t() | GenServer.server(), term()) ::
           {:ok, Action.t()} | {:error, term()}
-  def plan(%PlannerRuntime{} = runtime, al_text) when is_binary(al_text) do
-    plan(runtime, al_text, [])
-  end
-
-  def plan(server, al_text) when is_binary(al_text) do
-    plan(server, al_text, [])
-  end
+  def plan(target, al_text), do: plan(target, al_text, [])
 
   @doc """
   Plans one AL instruction against an explicit runtime or adapter target.
   """
-  @spec plan(PlannerRuntime.t() | GenServer.server(), binary(), [plan_option()]) ::
+  @spec plan(PlannerRuntime.t() | GenServer.server(), term(), term()) ::
           {:ok, Action.t()} | {:error, term()}
-  def plan(%PlannerRuntime{} = runtime, al_text, opts)
-      when is_binary(al_text) and is_list(opts) do
-    mode = Keyword.get(opts, :__spectre_mode__, :plan)
-    planner_reply(runtime, al_text, Planner.plan(runtime, al_text, opts), opts, mode)
+  def plan(%PlannerRuntime{} = runtime, al_text, opts) do
+    with :ok <- RuntimeConfig.validate_plan_input(al_text, opts) do
+      opts = normalize_plan_opts(opts)
+      mode = Keyword.get(opts, :__spectre_mode__, :plan)
+      planner_reply(runtime, al_text, Planner.plan(runtime, al_text, opts), opts, mode)
+    end
   end
 
-  def plan(server, al_text, opts) when is_binary(al_text) and is_list(opts) do
+  def plan(server, al_text, opts) do
     AdapterServer.plan(server, al_text, opts)
   end
 
   @doc """
   Plans from an explicit request map against an explicit runtime or adapter target.
   """
-  @spec plan_request(PlannerRuntime.t() | GenServer.server(), map()) ::
+  @spec plan_request(PlannerRuntime.t() | GenServer.server(), term()) ::
           {:ok, Action.t()} | {:error, term()}
-  def plan_request(%PlannerRuntime{} = runtime, request) when is_map(request) do
-    normalized = SpectreKinetic.RuntimeConfig.normalize_request(request)
+  def plan_request(%PlannerRuntime{} = runtime, request) do
+    with :ok <- RuntimeConfig.validate_request(request) do
+      normalized = RuntimeConfig.normalize_request(request)
 
-    planner_reply(
-      runtime,
-      normalized["al"],
-      Planner.plan_request(runtime, normalized, []),
-      [],
-      :plan
-    )
+      planner_reply(
+        runtime,
+        normalized["al"],
+        Planner.plan_request(runtime, normalized, []),
+        [],
+        :plan
+      )
+    end
   end
 
-  def plan_request(server, request) when is_map(request) do
+  def plan_request(server, request) do
     AdapterServer.plan_request(server, request)
   end
 
   @doc """
   Plans from a JSON-encoded request payload against an explicit runtime or adapter target.
   """
-  @spec plan_json(PlannerRuntime.t() | GenServer.server(), binary()) ::
+  @spec plan_json(PlannerRuntime.t() | GenServer.server(), term()) ::
           {:ok, Action.t()} | {:error, term()}
   def plan_json(%PlannerRuntime{} = runtime, request_json) when is_binary(request_json) do
     with {:ok, request} <- Jason.decode(request_json),
@@ -161,7 +160,11 @@ defmodule SpectreKinetic do
     end
   end
 
-  def plan_json(server, request_json) when is_binary(request_json) do
+  def plan_json(%PlannerRuntime{}, _request_json) do
+    {:error, {:invalid_request, [%{field: :json, reason: :must_be_binary}]}}
+  end
+
+  def plan_json(server, request_json) do
     AdapterServer.plan_json(server, request_json)
   end
 
@@ -169,16 +172,21 @@ defmodule SpectreKinetic do
   Extracts and plans multiple AL instructions, preserving execution order.
   """
   @spec plan_chain(PlannerRuntime.t() | GenServer.server(), binary() | [binary()], [plan_option()]) ::
-          {:ok, ActionChain.t()}
+          {:ok, ActionChain.t()} | {:error, term()}
   def plan_chain(target, text_or_lines, opts \\ [])
 
-  def plan_chain(target, text, opts) when is_binary(text) and is_list(opts) do
-    scan = Extractor.scan(text)
-    {:ok, build_chain_from_scan(target, scan, opts)}
+  def plan_chain(target, text, opts) when is_binary(text) do
+    with :ok <- RuntimeConfig.validate_options(opts) do
+      opts = normalize_plan_opts(opts)
+      scan = Extractor.scan(text)
+      {:ok, build_chain_from_scan(target, scan, opts)}
+    end
   end
 
-  def plan_chain(target, al_lines, opts) when is_list(al_lines) and is_list(opts) do
-    {:ok, build_chain(target, al_lines, opts)}
+  def plan_chain(target, al_lines, opts) when is_list(al_lines) do
+    with :ok <- RuntimeConfig.validate_options(opts) do
+      {:ok, build_chain(target, al_lines, normalize_plan_opts(opts))}
+    end
   end
 
   @doc """
@@ -362,6 +370,9 @@ defmodule SpectreKinetic do
 
   defp planner_reply(runtime, al_text, planner_result, opts, mode),
     do: PlanFinalizer.to_action(runtime, al_text, planner_result, opts, mode)
+
+  defp normalize_plan_opts(opts) when is_map(opts), do: Map.to_list(opts)
+  defp normalize_plan_opts(opts), do: opts
 
   defp extract_tool_params(args) do
     args

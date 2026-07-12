@@ -48,46 +48,62 @@ defmodule SpectreKinetic.Planner do
 
   @type plan_result :: %{optional(binary()) => plan_result_value()}
 
-  @spec plan(PlannerRuntime.t(), binary(), keyword()) :: {:ok, plan_result()} | {:error, term()}
+  @spec plan(PlannerRuntime.t(), term(), term()) :: {:ok, plan_result()} | {:error, term()}
   def plan(%PlannerRuntime{} = runtime, al_text, opts) do
-    plan(al_text, PlannerRuntime.plan_opts(runtime, opts))
+    with :ok <- RuntimeConfig.validate_plan_input(al_text, opts) do
+      plan(al_text, PlannerRuntime.plan_opts(runtime, normalize_runtime_opts(opts)))
+    end
   end
 
-  @spec plan(binary(), plan_opts()) :: {:ok, plan_result()} | {:error, term()}
+  @spec plan(term(), term()) :: {:ok, plan_result()} | {:error, term()}
   def plan(al_text, opts \\ %{}) do
+    with :ok <- RuntimeConfig.validate_plan_input(al_text, opts) do
+      do_plan(al_text, normalize_plan_opts(opts))
+    end
+  end
+
+  defp do_plan(al_text, opts) do
     with {:ok, normalized} <- normalize_al(al_text),
          parsed_args <- Parser.args(normalized),
          provided_slots <- Map.get(opts, :slots, parsed_args),
+         provided_slots <- RuntimeConfig.stringify_map(provided_slots),
          {:ok, candidates} <- Retrieval.retrieve(normalized, Retrieval.options(opts)),
          {:ok, scored} <- score_candidates(normalized, provided_slots, candidates) do
       Selection.select(normalized, scored, provided_slots, Selection.options(opts))
     end
   end
 
-  @spec plan_request(PlannerRuntime.t(), map(), keyword()) ::
+  @spec plan_request(PlannerRuntime.t(), term(), term()) ::
           {:ok, plan_result()} | {:error, term()}
   def plan_request(%PlannerRuntime{} = runtime, request, opts) do
-    plan_request(request, PlannerRuntime.plan_opts(runtime, opts))
+    with :ok <- RuntimeConfig.validate_request(request),
+         :ok <- RuntimeConfig.validate_options(opts) do
+      plan_request(request, PlannerRuntime.plan_opts(runtime, normalize_runtime_opts(opts)))
+    end
   end
 
-  @spec plan_request(map(), plan_opts()) :: {:ok, plan_result()} | {:error, term()}
+  @spec plan_request(term(), term()) :: {:ok, plan_result()} | {:error, term()}
   def plan_request(request, opts \\ %{}) do
-    request = RuntimeConfig.normalize_request(request)
-    al_text = Map.get(request, "al", "")
-    slots = Map.get(request, "slots", %{})
+    with :ok <- RuntimeConfig.validate_request(request),
+         :ok <- RuntimeConfig.validate_options(opts) do
+      request = RuntimeConfig.normalize_request(request)
+      al_text = Map.get(request, "al", "")
+      slots = Map.get(request, "slots", %{})
 
-    merged_opts =
-      opts
-      |> Map.put(:slots, slots)
-      |> maybe_put(:top_k, Map.get(request, "top_k"))
-      |> maybe_put(:tool_threshold, Map.get(request, "tool_threshold"))
-      |> maybe_put(:mapping_threshold, Map.get(request, "mapping_threshold"))
-      |> maybe_put(:tool_selection_fallback, Map.get(request, "tool_selection_fallback"))
-      |> maybe_put(:fallback_top_k, Map.get(request, "fallback_top_k"))
-      |> maybe_put(:fallback_margin, Map.get(request, "fallback_margin"))
-      |> maybe_put(:reranker_threshold, Map.get(request, "reranker_threshold"))
+      merged_opts =
+        opts
+        |> normalize_plan_opts()
+        |> Map.put(:slots, slots)
+        |> maybe_put(:top_k, Map.get(request, "top_k"))
+        |> maybe_put(:tool_threshold, Map.get(request, "tool_threshold"))
+        |> maybe_put(:mapping_threshold, Map.get(request, "mapping_threshold"))
+        |> maybe_put(:tool_selection_fallback, Map.get(request, "tool_selection_fallback"))
+        |> maybe_put(:fallback_top_k, Map.get(request, "fallback_top_k"))
+        |> maybe_put(:fallback_margin, Map.get(request, "fallback_margin"))
+        |> maybe_put(:reranker_threshold, Map.get(request, "reranker_threshold"))
 
-    plan(al_text, merged_opts)
+      do_plan(al_text, merged_opts)
+    end
   end
 
   defp normalize_al(al_text) do
@@ -127,4 +143,10 @@ defmodule SpectreKinetic.Planner do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp normalize_plan_opts(opts) when is_list(opts), do: Map.new(opts)
+  defp normalize_plan_opts(opts) when is_map(opts), do: opts
+
+  defp normalize_runtime_opts(opts) when is_map(opts), do: Map.to_list(opts)
+  defp normalize_runtime_opts(opts), do: opts
 end

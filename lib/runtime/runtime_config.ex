@@ -17,6 +17,7 @@ defmodule SpectreKinetic.RuntimeConfig do
   """
 
   @app :spectre_kinetic
+  @missing :__spectre_kinetic_missing__
   @built_in_plan_defaults [
     top_k: 5,
     tool_threshold: 0.3,
@@ -141,6 +142,57 @@ defmodule SpectreKinetic.RuntimeConfig do
     %{"al" => "", "slots" => %{}, "top_k" => built_in_default!(:top_k)}
   end
 
+  @typedoc "One machine-readable public input validation issue."
+  @type validation_issue :: %{required(:field) => atom(), required(:reason) => atom()}
+
+  @doc """
+  Validates an AL value and public planner options before any planner work.
+
+  Errors deliberately contain field names and stable reason atoms rather than
+  echoing AL or slot values back to logs and callers.
+  """
+  @spec validate_plan_input(term(), term()) ::
+          :ok | {:error, {:invalid_request | :invalid_options, [validation_issue()]}}
+  def validate_plan_input(al, opts) do
+    with :ok <- validation_result(:invalid_request, al_issues(al)),
+         :ok <- validate_options(opts) do
+      :ok
+    end
+  end
+
+  @doc """
+  Validates the external request-map shape accepted by `plan_request/2`.
+  """
+  @spec validate_request(term()) ::
+          :ok | {:error, {:invalid_request, [validation_issue()]}}
+  def validate_request(request) when is_map(request) and not is_struct(request) do
+    errors =
+      al_issues(request_value(request, :al, @missing)) ++
+        slots_issues(request_value(request, :slots, %{})) ++
+        request_option_issues(request)
+
+    validation_result(:invalid_request, errors)
+  end
+
+  def validate_request(_request) do
+    validation_result(:invalid_request, [%{field: :request, reason: :must_be_map}])
+  end
+
+  @doc """
+  Validates planner option containers and the bounded numeric options they expose.
+
+  Both keyword lists and atom-keyed maps are accepted because the public facade
+  uses keywords while the internal planner uses maps.
+  """
+  @spec validate_options(term()) ::
+          :ok | {:error, {:invalid_options, [validation_issue()]}}
+  def validate_options(opts) do
+    case options_map(opts) do
+      {:ok, options} -> validation_result(:invalid_options, option_issues(options, :options))
+      {:error, issue} -> validation_result(:invalid_options, [issue])
+    end
+  end
+
   @doc """
   Formats a readable error message for missing required paths.
   """
@@ -235,6 +287,178 @@ defmodule SpectreKinetic.RuntimeConfig do
   defp parse_fallback_mode_result("disabled"), do: :disabled
   defp parse_fallback_mode_result("reranker"), do: :reranker
   defp parse_fallback_mode_result(_value), do: nil
+
+  defp al_issues(al) when is_binary(al) do
+    if String.valid?(al) do
+      case SpectreKinetic.Parser.validate(al) do
+        {:ok, _normalized} -> []
+        {:error, reason} -> [%{field: :al, reason: reason}]
+      end
+    else
+      [%{field: :al, reason: :must_be_utf8_binary}]
+    end
+  end
+
+  defp al_issues(_al), do: [%{field: :al, reason: :must_be_binary}]
+
+  defp slots_issues(slots) when is_map(slots) and not is_struct(slots) do
+    if json_compatible_slots?(slots) do
+      []
+    else
+      [%{field: :slots, reason: :must_be_json_compatible_map}]
+    end
+  end
+
+  defp slots_issues(_slots), do: [%{field: :slots, reason: :must_be_map}]
+
+  defp request_option_issues(request) do
+    request
+    |> request_options_map()
+    |> option_issues(:request)
+  end
+
+  defp request_options_map(request) do
+    Map.new(
+      [
+        :top_k,
+        :tool_threshold,
+        :mapping_threshold,
+        :tool_selection_fallback,
+        :fallback_top_k,
+        :fallback_margin,
+        :reranker_threshold
+      ],
+      fn key -> {key, request_value(request, key, @missing)} end
+    )
+  end
+
+  defp option_issues(options, source) do
+    slots_issues_if_present(options) ++
+      positive_integer_issues(options, :top_k) ++
+      probability_issues(options, :tool_threshold) ++
+      probability_issues(options, :mapping_threshold) ++
+      fallback_mode_issues(options, source) ++
+      positive_integer_issues(options, :fallback_top_k) ++
+      probability_issues(options, :fallback_margin) ++
+      probability_issues(options, :reranker_threshold)
+  end
+
+  defp slots_issues_if_present(options) do
+    case Map.get(options, :slots, @missing) do
+      @missing -> []
+      slots -> slots_issues(slots)
+    end
+  end
+
+  defp positive_integer_issues(options, key) do
+    case Map.get(options, key, @missing) do
+      @missing -> []
+      value when is_integer(value) and value > 0 -> []
+      _value -> [%{field: key, reason: :must_be_positive_integer}]
+    end
+  end
+
+  defp probability_issues(options, key) do
+    case Map.get(options, key, @missing) do
+      @missing -> []
+      value when is_number(value) -> probability_value_issues(key, value)
+      _value -> [%{field: key, reason: :must_be_probability}]
+    end
+  end
+
+  defp probability_value_issues(key, value) do
+    if value == value and value >= 0.0 and value <= 1.0 do
+      []
+    else
+      [%{field: key, reason: :must_be_probability}]
+    end
+  end
+
+  defp fallback_mode_issues(options, source) do
+    case Map.get(options, :tool_selection_fallback, @missing) do
+      @missing ->
+        []
+
+      value ->
+        if valid_fallback_mode?(value, source) do
+          []
+        else
+          [%{field: :tool_selection_fallback, reason: :must_be_fallback_mode}]
+        end
+    end
+  end
+
+  defp valid_fallback_mode?(value, :options), do: value in [:disabled, :reranker]
+  defp valid_fallback_mode?(value, :request), do: not is_nil(parse_fallback_mode(value))
+
+  defp options_map(opts) when is_list(opts) do
+    cond do
+      not Keyword.keyword?(opts) ->
+        {:error, %{field: :options, reason: :must_be_keyword_or_atom_keyed_map}}
+
+      duplicate_keyword_keys?(opts) ->
+        {:error, %{field: :options, reason: :must_have_unique_keys}}
+
+      true ->
+        {:ok, Map.new(opts)}
+    end
+  end
+
+  defp options_map(opts) when is_map(opts) and not is_struct(opts) do
+    if Enum.all?(Map.keys(opts), &is_atom/1) do
+      {:ok, opts}
+    else
+      {:error, %{field: :options, reason: :must_be_keyword_or_atom_keyed_map}}
+    end
+  end
+
+  defp options_map(_opts) do
+    {:error, %{field: :options, reason: :must_be_keyword_or_atom_keyed_map}}
+  end
+
+  defp duplicate_keyword_keys?(opts) do
+    keys = Keyword.keys(opts)
+    length(keys) != MapSet.size(MapSet.new(keys))
+  end
+
+  defp json_compatible_slots?(slots) do
+    Enum.all?(slots, fn {key, value} ->
+      valid_slot_key?(key) and json_compatible_slot_value?(value)
+    end)
+  end
+
+  defp valid_slot_key?(key) when is_atom(key), do: true
+  defp valid_slot_key?(key) when is_binary(key), do: String.valid?(key)
+  defp valid_slot_key?(_key), do: false
+
+  defp json_compatible_slot_value?(nil), do: true
+  defp json_compatible_slot_value?(value) when is_boolean(value), do: true
+  defp json_compatible_slot_value?(value) when is_binary(value), do: String.valid?(value)
+  defp json_compatible_slot_value?(value) when is_atom(value), do: true
+  defp json_compatible_slot_value?(value) when is_integer(value), do: true
+
+  defp json_compatible_slot_value?(value) when is_float(value),
+    do: value == value
+
+  defp json_compatible_slot_value?([]), do: true
+
+  defp json_compatible_slot_value?([head | tail]),
+    do: json_compatible_slot_value?(head) and json_compatible_slot_list_tail?(tail)
+
+  defp json_compatible_slot_value?(value) when is_map(value) and not is_struct(value),
+    do: json_compatible_slots?(value)
+
+  defp json_compatible_slot_value?(_value), do: false
+
+  defp json_compatible_slot_list_tail?([]), do: true
+
+  defp json_compatible_slot_list_tail?([head | tail]),
+    do: json_compatible_slot_value?(head) and json_compatible_slot_list_tail?(tail)
+
+  defp json_compatible_slot_list_tail?(_improper_tail), do: false
+
+  defp validation_result(_scope, []), do: :ok
+  defp validation_result(scope, errors), do: {:error, {scope, errors}}
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
