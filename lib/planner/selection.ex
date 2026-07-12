@@ -1,5 +1,16 @@
 defmodule SpectreKinetic.Planner.Selection do
-  @moduledoc false
+  @moduledoc """
+  Chooses the final tool candidate and applies selection safety gates.
+
+  Retrieval and scoring produce an ordered candidate list. This module maps
+  slots for the leading candidate, optionally invokes the bounded reranker,
+  and converts close scores, weak mappings, invalid values, and reranker
+  failures into non-executable planner statuses.
+
+  The embedding threshold is always authoritative. A reranker may disambiguate
+  nearby candidates, but it cannot promote a candidate that failed the primary
+  `tool_threshold` or its own configured `reranker_threshold`.
+  """
 
   alias SpectreKinetic.Planner.Registry
   alias SpectreKinetic.Planner.SlotMapper
@@ -19,6 +30,9 @@ defmodule SpectreKinetic.Planner.Selection do
           reranker: term() | nil
         }
 
+  @doc """
+  Extracts the validated selection options used by the planning stage.
+  """
   @spec options(map()) :: opts()
   def options(opts) do
     %{
@@ -33,6 +47,13 @@ defmodule SpectreKinetic.Planner.Selection do
     }
   end
 
+  @doc """
+  Selects and maps one tool from an ordered scored-candidate list.
+
+  Empty registries and candidates below the configured gates return structured
+  `NO_TOOL` results. Ambiguous tool or slot mappings remain visible in the
+  result and are never marked executable.
+  """
   @spec select(binary(), [map()], map(), opts()) :: {:ok, map()} | {:error, term()}
   def select(_al_text, [], _slots, _selection_opts), do: {:ok, empty_registry_result()}
 
