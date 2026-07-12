@@ -339,10 +339,8 @@ defmodule Mix.Tasks.Spectre.DownloadEncoder do
       report(opts, "downloading #{url}")
 
       with :ok <- invoke_downloader(opts, url, temporary),
-           :ok <- validate_artifact_file(file, temporary),
-           {:ok, artifact} <-
-             describe_artifact(file, url, temporary, destination, expected_checksums) do
-        {:ok, artifact}
+           :ok <- validate_artifact_file(file, temporary) do
+        describe_artifact(file, url, temporary, destination, expected_checksums)
       end
     end
   end
@@ -518,21 +516,25 @@ defmodule Mix.Tasks.Spectre.DownloadEncoder do
   defp prepare_backups(entries, staging_dir) do
     backup_dir = Path.join(staging_dir, "backups")
 
-    with :ok <- File.mkdir(backup_dir) do
-      entries
-      |> Enum.with_index()
-      |> Enum.reduce_while({:ok, []}, fn {entry, index}, {:ok, prepared} ->
-        case prepare_backup(entry, index, backup_dir) do
-          {:ok, prepared_entry} -> {:cont, {:ok, [prepared_entry | prepared]}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
-      end)
-      |> case do
-        {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
-        {:error, _reason} = error -> error
-      end
-    else
+    case File.mkdir(backup_dir) do
+      :ok -> prepare_backup_entries(entries, backup_dir)
       {:error, reason} -> {:error, {:backup_directory_failed, backup_dir, reason}}
+    end
+  end
+
+  @spec prepare_backup_entries([map()], Path.t()) :: {:ok, [map()]} | {:error, term()}
+  defp prepare_backup_entries(entries, backup_dir) do
+    entries
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {entry, index}, {:ok, prepared} ->
+      case prepare_backup(entry, index, backup_dir) do
+        {:ok, prepared_entry} -> {:cont, {:ok, [prepared_entry | prepared]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
+      {:error, _reason} = error -> error
     end
   end
 
