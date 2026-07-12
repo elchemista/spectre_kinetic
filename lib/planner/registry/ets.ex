@@ -267,12 +267,16 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
         not_owner(registry.owner)
 
       true ->
-        Enum.each(registry_tables(registry), fn table ->
-          if :ets.info(table) != :undefined, do: :ets.delete(table)
-        end)
-
+        delete_registry_tables(registry)
         :ok
     end
+  end
+
+  @spec delete_registry_tables(t()) :: :ok
+  defp delete_registry_tables(registry) do
+    Enum.each(registry_tables(registry), fn table ->
+      if :ets.info(table) != :undefined, do: :ets.delete(table)
+    end)
   end
 
   defp maybe_load_json(registry, nil), do: {:ok, registry}
