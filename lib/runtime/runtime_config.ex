@@ -85,6 +85,9 @@ defmodule SpectreKinetic.RuntimeConfig do
   @max_slot_string_bytes 64 * 1_024
   @max_total_slot_string_bytes 1_024 * 1_024
 
+  @typep slot_budget :: %{nodes: non_neg_integer(), string_bytes: non_neg_integer()}
+  @typep slot_validation :: {:ok, slot_budget()} | {:error, :invalid | :limit}
+
   @doc """
   Returns the planner defaults before application config or environment overrides.
   """
@@ -614,6 +617,7 @@ defmodule SpectreKinetic.RuntimeConfig do
     length(keys) != MapSet.size(MapSet.new(keys))
   end
 
+  @spec validate_slot_map(map(), non_neg_integer(), slot_budget()) :: slot_validation()
   defp validate_slot_map(_slots, depth, _budget) when depth > @max_slot_depth,
     do: {:error, :limit}
 
@@ -622,14 +626,26 @@ defmodule SpectreKinetic.RuntimeConfig do
 
   defp validate_slot_map(slots, depth, budget) do
     with {:ok, budget} <- consume_slot_node(budget) do
-      Enum.reduce_while(slots, {:ok, budget}, fn {key, value}, {:ok, remaining} ->
-        with {:ok, remaining} <- validate_slot_key(key, remaining),
-             {:ok, next} <- validate_slot_value(value, depth + 1, remaining) do
-          {:cont, {:ok, next}}
-        else
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
-      end)
+      validate_slot_entries(slots, depth, budget)
+    end
+  end
+
+  @spec validate_slot_entries(map(), non_neg_integer(), slot_budget()) :: slot_validation()
+  defp validate_slot_entries(slots, depth, budget) do
+    Enum.reduce_while(slots, {:ok, budget}, fn {key, value}, {:ok, remaining} ->
+      case validate_slot_entry(key, value, depth, remaining) do
+        {:ok, next} -> {:cont, {:ok, next}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  @spec validate_slot_entry(term(), term(), non_neg_integer(), slot_budget()) ::
+          slot_validation()
+  defp validate_slot_entry(key, value, depth, budget) do
+    with {:ok, budget} <- validate_slot_key(key, budget),
+         {:ok, budget} <- validate_slot_value(value, depth + 1, budget) do
+      {:ok, budget}
     end
   end
 
