@@ -24,9 +24,13 @@ defmodule SpectreKinetic.Parser do
           | :empty_al
           | :unterminated_al_tag
           | :unterminated_al_fence
+          | :unterminated_al_quote
+          | :unterminated_al_brace
+          | :unexpected_al_brace
           | :invalid_al_verb
 
   alias SpectreKinetic.Parser.Args
+  alias SpectreKinetic.Parser.Syntax
   alias SpectreKinetic.Parser.Wrappers
 
   @doc """
@@ -91,9 +95,9 @@ defmodule SpectreKinetic.Parser do
   defp validate_normalized(""), do: {:error, :empty_al}
 
   defp validate_normalized(normalized) do
-    normalized
-    |> first_token()
-    |> validate_first_token()
+    with :ok <- normalized |> first_token() |> validate_first_token() do
+      Syntax.validate(normalized)
+    end
   end
 
   defp validate_first_token(nil), do: {:error, :empty_al}

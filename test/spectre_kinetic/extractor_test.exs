@@ -153,6 +153,25 @@ defmodule SpectreKinetic.ExtractorTest do
     assert {:error, :unterminated_al_fence} = SpectreKinetic.validate_al("```al\nSEND EMAIL")
   end
 
+  test "scan reports malformed argument syntax without returning executable AL" do
+    scan =
+      SpectreKinetic.extract_al_scan("""
+      AL: SEND MESSAGE WITH: BODY="hello
+      AL: SEND WEBHOOK WITH: PAYLOAD={unfinished
+      """)
+
+    assert [
+             %{al: nil, error: :unterminated_al_quote},
+             %{al: nil, error: :unterminated_al_brace}
+           ] = scan.entries
+
+    assert {"", []} =
+             SpectreKinetic.extract_al("""
+             AL: SEND MESSAGE WITH: BODY="hello
+             AL: SEND WEBHOOK WITH: PAYLOAD={unfinished
+             """)
+  end
+
   test "extract_al_scan/1 handles uppercase multiline tags and inline fences" do
     scan =
       SpectreKinetic.extract_al_scan("""
