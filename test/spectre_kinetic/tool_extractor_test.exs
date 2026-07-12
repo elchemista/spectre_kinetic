@@ -1,7 +1,7 @@
 defmodule SpectreKinetic.ToolExtractorTest do
   use ExUnit.Case, async: false
 
-  alias Mix.Tasks.ExtractKinetic
+  alias Mix.Tasks.SpectreKinetic.Extract
   alias SpectreKinetic.Tool.Extractor
   alias SpectreKinetic.ToolFixtures.Emailer
   alias SpectreKinetic.ToolFixtures.Sms
@@ -98,15 +98,15 @@ defmodule SpectreKinetic.ToolExtractorTest do
     assert plan.args == %{"email" => "ops@example.com", "text" => "pager"}
   end
 
-  test "mix extract_kinetic writes registry json from compiled tool modules" do
+  test "mix spectre_kinetic.extract writes registry json from compiled tool modules" do
     path =
       Path.join(
         System.tmp_dir!(),
         "spectre_extract_kinetic_#{System.unique_integer([:positive])}.json"
       )
 
-    Mix.Task.reenable("extract_kinetic")
-    ExtractKinetic.run(["--app", "spectre_kinetic", "--out", path])
+    Mix.Task.reenable("spectre_kinetic.extract")
+    Extract.run(["--app", "spectre_kinetic", "--out", path])
 
     assert {:ok, payload} = File.read(path)
     decoded = Jason.decode!(payload)

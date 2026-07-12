@@ -1,7 +1,7 @@
 defmodule SpectreKinetic.ClassifierAxonTest do
   use ExUnit.Case, async: false
 
-  alias Mix.Tasks.Spectre.TrainClassifier
+  alias Mix.Tasks.SpectreKinetic.TrainClassifier
   alias SpectreKinetic.ClassifierPipeline
   alias SpectreKinetic.Classifiers.BuiltIn
   alias SpectreKinetic.Classifiers.Internal.AxonRuntime
@@ -193,7 +193,7 @@ defmodule SpectreKinetic.ClassifierAxonTest do
     row1 = Jason.encode!(%{"features" => List.duplicate(1.0, 12), "label" => 1})
     File.write!(dataset_path, row0 <> "\n" <> row1 <> "\n")
 
-    Mix.Task.reenable("spectre.train_classifier")
+    Mix.Task.reenable("spectre_kinetic.train_classifier")
 
     TrainClassifier.run([
       "plan_confidence",
@@ -218,7 +218,7 @@ defmodule SpectreKinetic.ClassifierAxonTest do
     output_root = tmp_dir("bundled-classifier-training")
 
     for %{id: classifier, dataset_path: dataset_path} <- BuiltIn.all() do
-      Mix.Task.reenable("spectre.train_classifier")
+      Mix.Task.reenable("spectre_kinetic.train_classifier")
 
       output_dir = Path.join(output_root, classifier)
 

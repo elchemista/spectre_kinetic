@@ -35,7 +35,7 @@ rows from real planner outputs after the registry is embedded.
 ## 1. Download The Encoder
 
 ```bash
-mix spectre.download_encoder \
+mix spectre_kinetic.download_encoder \
   --model BAAI/bge-small-en-v1.5 \
   --revision 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a \
   --out artifacts/encoder
@@ -61,7 +61,7 @@ a manifest.
 To extract tools from your Elixir app into JSON:
 
 ```bash
-mix extract_kinetic \
+mix spectre_kinetic.extract \
   --app my_app \
   --out artifacts/registry/registry.json
 ```
@@ -72,7 +72,7 @@ JSON file.
 Then compile that JSON with encoder embeddings:
 
 ```bash
-mix compile_kinetic \
+mix spectre_kinetic.compile \
   --registry artifacts/registry/registry.json \
   --encoder artifacts/encoder \
   --out artifacts/registry/registry.etf
@@ -84,7 +84,7 @@ is faster than re-reading JSON and recomputing embeddings.
 You can also extract and compile in one command:
 
 ```bash
-mix extract_kinetic \
+mix spectre_kinetic.extract \
   --app my_app \
   --encoder artifacts/encoder \
   --out artifacts/registry/registry.etf
@@ -144,13 +144,13 @@ Labels:
 Train from the bundled seed dataset:
 
 ```bash
-mix spectre.train_classifier plan_confidence \
+mix spectre_kinetic.train_classifier plan_confidence \
   --out artifacts/classifiers/plan_confidence
 
-mix spectre.train_classifier slot_confidence \
+mix spectre_kinetic.train_classifier slot_confidence \
   --out artifacts/classifiers/slot_confidence
 
-mix spectre.train_classifier safety_risk \
+mix spectre_kinetic.train_classifier safety_risk \
   --out artifacts/classifiers/safety_risk
 ```
 
@@ -160,15 +160,15 @@ three built-ins.
 Train from your own dataset:
 
 ```bash
-mix spectre.train_classifier plan_confidence \
+mix spectre_kinetic.train_classifier plan_confidence \
   --dataset data/classifiers/plan_confidence.jsonl \
   --out artifacts/classifiers/plan_confidence
 
-mix spectre.train_classifier slot_confidence \
+mix spectre_kinetic.train_classifier slot_confidence \
   --dataset data/classifiers/slot_confidence.jsonl \
   --out artifacts/classifiers/slot_confidence
 
-mix spectre.train_classifier safety_risk \
+mix spectre_kinetic.train_classifier safety_risk \
   --dataset data/classifiers/safety_risk.jsonl \
   --out artifacts/classifiers/safety_risk
 ```
@@ -182,7 +182,7 @@ Each command writes:
 Useful training options:
 
 ```bash
-mix spectre.train_classifier plan_confidence \
+mix spectre_kinetic.train_classifier plan_confidence \
   --dataset data/classifiers/plan_confidence.jsonl \
   --out artifacts/classifiers/plan_confidence \
   --epochs 20 \
@@ -213,7 +213,7 @@ runtime =
 ```
 
 `compiled_registry` loads the embedded planner registry. Each classifier
-`model_dir` loads the artifacts produced by `mix spectre.train_classifier`.
+`model_dir` loads the artifacts produced by `mix spectre_kinetic.train_classifier`.
 
 For development without trained artifacts, use deterministic heuristics:
 

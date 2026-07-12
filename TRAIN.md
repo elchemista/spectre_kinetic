@@ -59,7 +59,7 @@ The training code is in [lib/reranker/trainer.ex](https://github.com/elchemista/
 Run:
 
 ```bash
-mix spectre.train_reranker \
+mix spectre_kinetic.train_reranker \
   --encoder artifacts/encoder \
   --dataset data/reranker.jsonl \
   --out artifacts/reranker
@@ -75,7 +75,7 @@ Supported options:
 - `--epochs`
 - `--learning_rate`
 
-The task implementation is in [lib/mix/tasks/spectre.train_reranker.ex](https://github.com/elchemista/spectre_kinetic/blob/master/lib/mix/tasks/spectre.train_reranker.ex).
+The task implementation is in [lib/mix/tasks/spectre_kinetic.train_reranker.ex](https://github.com/elchemista/spectre_kinetic/blob/master/lib/mix/tasks/spectre_kinetic.train_reranker.ex).
 
 ## Dataset Format
 
@@ -383,11 +383,11 @@ It expects:
 - `params.etf`
 - `metadata.json`
 
-This is the runtime that matches `mix spectre.train_reranker`.
+This is the runtime that matches `mix spectre_kinetic.train_reranker`.
 
 ### Practical consequence
 
-Training with `mix spectre.train_reranker` does **not** produce artifacts for the default ONNX reranker runtime.
+Training with `mix spectre_kinetic.train_reranker` does **not** produce artifacts for the default ONNX reranker runtime.
 
 To use the trained Axon reranker, load the planner with:
 

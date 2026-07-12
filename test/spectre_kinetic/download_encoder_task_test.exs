@@ -1,7 +1,7 @@
 defmodule SpectreKinetic.DownloadEncoderTaskTest do
   use ExUnit.Case, async: true
 
-  alias Mix.Tasks.Spectre.DownloadEncoder
+  alias Mix.Tasks.SpectreKinetic.DownloadEncoder
 
   @default_model "BAAI/bge-small-en-v1.5"
   @default_revision "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"

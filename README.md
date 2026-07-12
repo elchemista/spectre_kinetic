@@ -132,7 +132,7 @@ end
 Extract tools from your app:
 
 ```bash
-mix extract_kinetic \
+mix spectre_kinetic.extract \
   --app my_app \
   --out artifacts/registry/registry.json
 ```
@@ -177,7 +177,7 @@ For production-ish use, download an encoder and compile the registry with
 embeddings:
 
 ```bash
-mix spectre.download_encoder \
+mix spectre_kinetic.download_encoder \
   --model BAAI/bge-small-en-v1.5 \
   --revision 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a \
   --out artifacts/encoder
@@ -204,7 +204,7 @@ artifacts/encoder/
 To verify a later download against a trusted manifest, pass it explicitly:
 
 ```bash
-mix spectre.download_encoder \
+mix spectre_kinetic.download_encoder \
   --model BAAI/bge-small-en-v1.5 \
   --revision 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a \
   --checksum-manifest trusted/encoder-manifest.json \
@@ -224,7 +224,7 @@ older task that have no manifest.
 Then compile the registry:
 
 ```bash
-mix compile_kinetic \
+mix spectre_kinetic.compile \
   --registry artifacts/registry/registry.json \
   --encoder artifacts/encoder \
   --out artifacts/registry/registry.etf
@@ -233,7 +233,7 @@ mix compile_kinetic \
 Or extract and compile in one pass:
 
 ```bash
-mix extract_kinetic \
+mix spectre_kinetic.extract \
   --app my_app \
   --encoder artifacts/encoder \
   --out artifacts/registry/registry.etf
@@ -454,20 +454,20 @@ You edit text, planner scores, args, actions, slot definitions, and labels;
 the training task derives features.
 
 ```bash
-mix spectre.train_classifier plan_confidence \
+mix spectre_kinetic.train_classifier plan_confidence \
   --out artifacts/classifiers/plan_confidence
 
-mix spectre.train_classifier slot_confidence \
+mix spectre_kinetic.train_classifier slot_confidence \
   --out artifacts/classifiers/slot_confidence
 
-mix spectre.train_classifier safety_risk \
+mix spectre_kinetic.train_classifier safety_risk \
   --out artifacts/classifiers/safety_risk
 ```
 
 Train from your own dataset:
 
 ```bash
-mix spectre.train_classifier plan_confidence \
+mix spectre_kinetic.train_classifier plan_confidence \
   --dataset data/classifiers/plan_confidence.jsonl \
   --out artifacts/classifiers/plan_confidence \
   --epochs 20 \
@@ -540,7 +540,7 @@ The first-stage planner is fast. If top candidates are close, you can train an
 Axon reranker for bounded fallback:
 
 ```bash
-mix spectre.train_reranker \
+mix spectre_kinetic.train_reranker \
   --encoder artifacts/encoder \
   --dataset data/reranker.jsonl \
   --out artifacts/reranker
