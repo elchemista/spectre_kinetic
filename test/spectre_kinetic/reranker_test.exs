@@ -126,6 +126,44 @@ defmodule SpectreKinetic.RerankerTest do
     assert hd(action.alternatives).id == "Dynamic.Email.send/2"
   end
 
+  test "runtime safely rejects unknown atoms and oversized parameters" do
+    output_dir = tmp_dir("reranker-unsafe-artifact")
+
+    metadata = %{
+      encoder_model_dir: "test://deterministic",
+      feature_dim: 8,
+      hidden_dim: 4
+    }
+
+    File.write!(
+      Path.join(output_dir, "metadata.json"),
+      Jason.encode!(metadata, pretty: true)
+    )
+
+    atom_name =
+      "spectre_kinetic_untrusted_reranker_#{System.unique_integer([:positive, :monotonic])}"
+
+    File.write!(
+      Path.join(output_dir, "params.etf"),
+      <<131, 118, byte_size(atom_name)::16, atom_name::binary>>
+    )
+
+    assert {:error, {:invalid_artifact_term, %ArgumentError{}}} =
+             AxonRuntime.load(
+               fallback_model_dir: output_dir,
+               embedding_module: DeterministicEmbedding
+             )
+
+    File.write!(Path.join(output_dir, "params.etf"), :erlang.term_to_binary(%{safe: true}))
+
+    assert {:error, {:artifact_too_large, _path, _size, 4}} =
+             AxonRuntime.load(
+               fallback_model_dir: output_dir,
+               embedding_module: DeterministicEmbedding,
+               params_max_bytes: 4
+             )
+  end
+
   defp reranker_examples do
     email_card = email_tool_card()
     sms_card = sms_tool_card()

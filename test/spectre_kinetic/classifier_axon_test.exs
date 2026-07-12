@@ -63,6 +63,31 @@ defmodule SpectreKinetic.ClassifierAxonTest do
              AxonRuntime.load(PlanConfidence, model_dir: model_dir)
   end
 
+  test "axon runtime safely rejects unknown atoms and oversized parameters" do
+    model_dir =
+      write_artifacts!(PlanConfidence, %{
+        "classifier" => "plan_confidence",
+        "feature_dim" => PlanConfidence.feature_dim(),
+        "hidden_dim" => 4
+      })
+
+    atom_name =
+      "spectre_kinetic_untrusted_param_#{System.unique_integer([:positive, :monotonic])}"
+
+    File.write!(
+      Path.join(model_dir, "params.etf"),
+      <<131, 118, byte_size(atom_name)::16, atom_name::binary>>
+    )
+
+    assert {:error, {:invalid_params, {:invalid_artifact_term, %ArgumentError{}}}} =
+             AxonRuntime.load(PlanConfidence, model_dir: model_dir)
+
+    File.write!(Path.join(model_dir, "params.etf"), :erlang.term_to_binary(%{safe: true}))
+
+    assert {:error, {:invalid_params, {:artifact_too_large, _path, _size, 4}}} =
+             AxonRuntime.load(PlanConfidence, model_dir: model_dir, params_max_bytes: 4)
+  end
+
   test "feature builders keep stable vector lengths" do
     context = context()
 
