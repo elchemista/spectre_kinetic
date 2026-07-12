@@ -449,31 +449,16 @@ defmodule SpectreKinetic.Planner.Registry do
     end)
   end
 
+  @spec normalize_examples(term()) :: {:ok, [binary()]} | {:error, term()}
   defp normalize_examples(examples) when is_list(examples) do
-    cond do
-      list_exceeds_limit?(examples, @max_examples) ->
-        {:error, {:invalid_field, "examples", :too_many_entries}}
-
-      true ->
-        examples
-        |> Enum.reduce_while({:ok, []}, fn example, {:ok, normalized} ->
-          case example do
-            value when is_binary(value) ->
-              case non_blank_string(value, "examples") do
-                {:ok, value} -> {:cont, {:ok, [value | normalized]}}
-                {:error, _reason} = error -> {:halt, error}
-              end
-
-            _value ->
-              {:halt,
-               {:error,
-                {:invalid_field, "examples", :must_contain_non_blank_strings}}}
-          end
-        end)
-        |> then(fn
-          {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
-          {:error, _reason} = error -> error
-        end)
+    if list_exceeds_limit?(examples, @max_examples) do
+      {:error, {:invalid_field, "examples", :too_many_entries}}
+    else
+      normalize_non_blank_strings(
+        examples,
+        "examples",
+        :must_contain_non_blank_strings
+      )
     end
   end
 
