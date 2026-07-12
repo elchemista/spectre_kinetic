@@ -114,10 +114,12 @@ defmodule SpectreKinetic.IntegrationTest do
     runtime =
       SpectreKinetic.load_runtime!(
         registry_json: registry_json,
-        tool_threshold: 0.95,
+        tool_threshold: 0.0,
         tool_selection_fallback: :reranker,
         reranker: :fake,
-        fallback_runtime_module: FakeReranker
+        fallback_runtime_module: FakeReranker,
+        fallback_margin: 1.0,
+        reranker_threshold: 0.0
       )
 
     assert {:ok, %Action{} = email} =

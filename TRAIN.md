@@ -23,13 +23,19 @@ Today the planner triggers reranking only when all of these are true:
 - a reranker runtime is loaded
 - the first-stage choice is weak or ambiguous
 
-The ambiguity conditions are:
+The first-stage candidate must meet `tool_threshold`. Once that gate passes,
+the ambiguity conditions are:
 
-- top candidate is below `tool_threshold`
 - required args are still missing after slot mapping
 - margin between top-1 and top-2 is less than or equal to `fallback_margin`
 
 When that happens, the planner reranks only the top `fallback_top_k` candidates, not the full registry.
+
+Reranking does not override the first-stage safety gate. The selected candidate
+must still meet `tool_threshold`, and its reranker score must meet
+`reranker_threshold` (default `0.5`). If you train the bundled Axon reranker,
+you can set this option from `reranker_accept_threshold` in
+`calibration.json`.
 
 That logic lives in [lib/planner/planner.ex](https://github.com/elchemista/spectre_kinetic/blob/master/lib/planner/planner.ex).
 

@@ -29,6 +29,7 @@ defmodule SpectreKinetic.Planner do
           optional(:tool_selection_fallback) => :disabled | :reranker,
           optional(:fallback_top_k) => pos_integer(),
           optional(:fallback_margin) => float(),
+          optional(:reranker_threshold) => float(),
           optional(:slots) => map(),
           optional(:registry_module) => module(),
           optional(:registry) => GenServer.server(),

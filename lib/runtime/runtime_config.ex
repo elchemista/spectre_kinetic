@@ -23,7 +23,8 @@ defmodule SpectreKinetic.RuntimeConfig do
     mapping_threshold: 0.0,
     tool_selection_fallback: :disabled,
     fallback_top_k: 3,
-    fallback_margin: 0.12
+    fallback_margin: 0.12,
+    reranker_threshold: 0.5
   ]
 
   @plan_option_sources [
@@ -32,7 +33,8 @@ defmodule SpectreKinetic.RuntimeConfig do
     {:mapping_threshold, :float, "SPECTRE_KINETIC_MAPPING_THRESHOLD"},
     {:tool_selection_fallback, :fallback_mode, "SPECTRE_KINETIC_TOOL_SELECTION_FALLBACK"},
     {:fallback_top_k, :integer, "SPECTRE_KINETIC_FALLBACK_TOP_K"},
-    {:fallback_margin, :float, "SPECTRE_KINETIC_FALLBACK_MARGIN"}
+    {:fallback_margin, :float, "SPECTRE_KINETIC_FALLBACK_MARGIN"},
+    {:reranker_threshold, :float, "SPECTRE_KINETIC_RERANKER_THRESHOLD"}
   ]
 
   @runtime_path_sources [

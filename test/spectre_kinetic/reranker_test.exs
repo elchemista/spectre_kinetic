@@ -109,10 +109,12 @@ defmodule SpectreKinetic.RerankerTest do
     runtime =
       SpectreKinetic.load_runtime!(
         registry_json: TestRegistryHelper.registry_json([email_action(), sms_action()]),
-        tool_threshold: 0.95,
+        tool_threshold: 0.0,
         tool_selection_fallback: :reranker,
         reranker: reranker,
-        fallback_runtime_module: AxonRuntime
+        fallback_runtime_module: AxonRuntime,
+        fallback_margin: 1.0,
+        reranker_threshold: 0.0
       )
 
     assert {:ok, %Action{} = action} =

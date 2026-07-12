@@ -17,7 +17,8 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
     :mapping_threshold,
     :tool_selection_fallback,
     :fallback_top_k,
-    :fallback_margin
+    :fallback_margin,
+    :reranker_threshold
   ]
 
   @reranker_runtime_options [

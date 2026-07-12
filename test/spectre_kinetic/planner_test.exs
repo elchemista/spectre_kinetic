@@ -38,6 +38,20 @@ defmodule SpectreKinetic.PlannerTest do
     def score_batch(_runtime, _pairs), do: {:error, :reranker_down}
   end
 
+  defmodule LowScoreReranker do
+    def score_batch(_runtime, pairs), do: {:ok, Enum.map(pairs, fn _pair -> 0.4 end)}
+  end
+
+  defmodule InvalidShapeReranker do
+    def score_batch(_runtime, _pairs), do: {:ok, [0.5]}
+  end
+
+  defmodule InvalidValueReranker do
+    def score_batch(_runtime, pairs) do
+      {:ok, pairs |> Enum.map(fn _pair -> 0.5 end) |> List.replace_at(0, 1.1)}
+    end
+  end
+
   setup do
     {:ok, store} = RegistryStore.start_link(name: nil)
 
@@ -162,10 +176,12 @@ defmodule SpectreKinetic.PlannerTest do
             %{
               registry: store,
               embedder: nil,
-              tool_threshold: 0.99,
+              tool_threshold: 0.0,
               tool_selection_fallback: :reranker,
               reranker: :fake,
-              reranker_module: FakeReranker
+              reranker_module: FakeReranker,
+              fallback_margin: 1.0,
+              reranker_threshold: 0.0
             }
           )
         end)
@@ -190,10 +206,11 @@ defmodule SpectreKinetic.PlannerTest do
             %{
               registry: store,
               embedder: nil,
-              tool_threshold: 0.99,
+              tool_threshold: 0.0,
               tool_selection_fallback: :reranker,
               reranker: :fake,
-              reranker_module: ErrorReranker
+              reranker_module: ErrorReranker,
+              fallback_margin: 1.0
             }
           )
         end)
@@ -202,6 +219,98 @@ defmodule SpectreKinetic.PlannerTest do
       assert metadata.result == :error
       assert metadata.reason == :reranker_down
       assert metadata.primary_tool == metadata.chosen_tool
+    end
+
+    test "reranker cannot bypass the first-stage tool threshold", %{store: store} do
+      {:ok, result} =
+        Planner.plan(
+          "SEND OUTBOUND MESSAGE WITH: TO=+15551234567 BODY=\"Code 123\"",
+          %{
+            registry: store,
+            embedder: nil,
+            tool_threshold: 0.99,
+            tool_selection_fallback: :reranker,
+            reranker: :fake,
+            reranker_module: FakeReranker,
+            reranker_threshold: 0.0
+          }
+        )
+
+      assert result["status"] == "NO_TOOL"
+      assert result["selected_tool"] == nil
+    end
+
+    test "reranker score must meet its explicit acceptance threshold", %{store: store} do
+      {:ok, result} =
+        Planner.plan(
+          "SEND OUTBOUND MESSAGE WITH: TO=+15551234567 BODY=\"Code 123\"",
+          %{
+            registry: store,
+            embedder: nil,
+            tool_threshold: 0.0,
+            tool_selection_fallback: :reranker,
+            reranker: :fake,
+            reranker_module: LowScoreReranker,
+            fallback_margin: 1.0,
+            reranker_threshold: 0.5
+          }
+        )
+
+      assert result["status"] == "NO_TOOL"
+      assert result["selected_tool"] == nil
+    end
+
+    test "invalid reranker score shape falls back safely", %{store: store} do
+      {result, events} =
+        TelemetryHelper.capture([@reranker_fallback_event], fn ->
+          Planner.plan(
+            "SEND OUTBOUND MESSAGE WITH: TO=+15551234567 BODY=\"Code 123\"",
+            %{
+              registry: store,
+              embedder: nil,
+              tool_threshold: 0.0,
+              tool_selection_fallback: :reranker,
+              reranker: :fake,
+              reranker_module: InvalidShapeReranker,
+              fallback_margin: 1.0
+            }
+          )
+        end)
+
+      assert {:ok, %{"selected_tool" => selected_tool}} = result
+      assert is_binary(selected_tool)
+
+      assert [%{metadata: metadata}] = events
+      assert metadata.result == :error
+
+      assert {:invalid_reranker_scores,
+              {:score_count_mismatch, %{expected: expected, actual: 1}}} = metadata.reason
+
+      assert expected > 1
+    end
+
+    test "non-finite or out-of-range reranker scores fall back safely", %{store: store} do
+      {_result, events} =
+        TelemetryHelper.capture([@reranker_fallback_event], fn ->
+          Planner.plan(
+            "SEND OUTBOUND MESSAGE WITH: TO=+15551234567 BODY=\"Code 123\"",
+            %{
+              registry: store,
+              embedder: nil,
+              tool_threshold: 0.0,
+              tool_selection_fallback: :reranker,
+              reranker: :fake,
+              reranker_module: InvalidValueReranker,
+              fallback_margin: 1.0
+            }
+          )
+        end)
+
+      assert [%{metadata: metadata}] = events
+      assert metadata.result == :error
+
+      assert {:invalid_reranker_scores,
+              {:invalid_score, %{index: 0, value: 1.1}}} = metadata.reason
     end
   end
 

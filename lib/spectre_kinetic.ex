@@ -76,6 +76,7 @@ defmodule SpectreKinetic do
           | {:tool_selection_fallback, :disabled | :reranker}
           | {:fallback_top_k, pos_integer()}
           | {:fallback_margin, float()}
+          | {:reranker_threshold, float()}
           | {:classifiers, [module() | {module(), keyword()}]}
 
   @doc """

@@ -230,6 +230,7 @@ config :spectre_kinetic,
   fallback_model_dir: "/abs/path/to/artifacts/reranker",
   fallback_top_k: 3,
   fallback_margin: 0.12,
+  reranker_threshold: 0.5,
   reranker_score_index: 1,
   reranker_score_transform: :softmax
 ```
@@ -247,6 +248,7 @@ export SPECTRE_KINETIC_TOOL_SELECTION_FALLBACK=reranker
 export SPECTRE_KINETIC_FALLBACK_MODEL_DIR=/abs/path/to/artifacts/reranker
 export SPECTRE_KINETIC_FALLBACK_TOP_K=3
 export SPECTRE_KINETIC_FALLBACK_MARGIN=0.12
+export SPECTRE_KINETIC_RERANKER_THRESHOLD=0.5
 ```
 
 Explicit options passed to `load_runtime!/1` win over config.

@@ -54,7 +54,7 @@ defmodule SpectreKinetic.Planner.Runtime do
     * `:top_k`, `:tool_threshold`, `:mapping_threshold` — default planner opts
     * `:tool_selection_fallback` — `:disabled` or `:reranker`
     * `:fallback_model_dir` — path to reranker ONNX directory
-    * `:fallback_top_k`, `:fallback_margin` — reranker fallback tuning
+    * `:fallback_top_k`, `:fallback_margin`, `:reranker_threshold` — reranker fallback tuning
     * `:classifiers` — planning-time classifier pipeline specs
   """
   @spec load(keyword()) :: {:ok, t()} | {:error, term()}

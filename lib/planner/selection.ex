@@ -14,6 +14,7 @@ defmodule SpectreKinetic.Planner.Selection do
           tool_selection_fallback: :disabled | :reranker,
           fallback_top_k: pos_integer(),
           fallback_margin: float(),
+          reranker_threshold: float(),
           reranker_module: module() | nil,
           reranker: term() | nil
         }
@@ -26,6 +27,7 @@ defmodule SpectreKinetic.Planner.Selection do
       tool_selection_fallback: Map.get(opts, :tool_selection_fallback, :disabled),
       fallback_top_k: plan_option(opts, :fallback_top_k),
       fallback_margin: plan_option(opts, :fallback_margin),
+      reranker_threshold: plan_option(opts, :reranker_threshold),
       reranker_module: Map.get(opts, :reranker_module),
       reranker: Map.get(opts, :reranker)
     }
@@ -42,16 +44,20 @@ defmodule SpectreKinetic.Planner.Selection do
   end
 
   defp finalize_selection(chosen, mapping, reranker_notes, scored_candidates, selection_opts) do
-    if accepted_selection?(chosen, reranker_notes, selection_opts.tool_threshold) do
+    if accepted_selection?(chosen, selection_opts) do
       {:ok, mapped_tool_result(chosen, mapping, reranker_notes, scored_candidates)}
     else
       no_tool_result(scored_candidates, selection_opts.tool_threshold)
     end
   end
 
-  defp accepted_selection?(chosen, reranker_notes, tool_threshold) do
-    chosen.fused_score >= tool_threshold or reranker_notes != []
+  defp accepted_selection?(chosen, selection_opts) do
+    chosen.fused_score >= selection_opts.tool_threshold and
+      reranker_score_accepted?(chosen, selection_opts.reranker_threshold)
   end
+
+  defp reranker_score_accepted?(%{reranker_score: score}, threshold), do: score >= threshold
+  defp reranker_score_accepted?(_chosen, _threshold), do: true
 
   defp mapped_tool_result(chosen, mapping, reranker_notes, scored_candidates) do
     %{
@@ -96,9 +102,9 @@ defmodule SpectreKinetic.Planner.Selection do
   end
 
   defp reranker_would_help?(best, rest, mapping, selection_opts) do
-    best.fused_score < selection_opts.tool_threshold or
-      mapping.missing != [] or
-      candidate_margin(best, rest) <= selection_opts.fallback_margin
+    best.fused_score >= selection_opts.tool_threshold and
+      (mapping.missing != [] or
+         candidate_margin(best, rest) <= selection_opts.fallback_margin)
   end
 
   defp choose_with_reranker(
@@ -114,6 +120,51 @@ defmodule SpectreKinetic.Planner.Selection do
     pairs = reranker_pairs(al_text, pool)
 
     case selection_opts.reranker_module.score_batch(selection_opts.reranker, pairs) do
+      {:ok, scores} ->
+        handle_reranker_scores(
+          scores,
+          al_text,
+          pool,
+          slots,
+          selection_opts,
+          primary,
+          primary_mapping,
+          start
+        )
+
+      {:error, reason} ->
+        reranker_error_fallback(
+          reason,
+          start,
+          selection_opts,
+          pool,
+          primary,
+          primary_mapping
+        )
+
+      other ->
+        reranker_error_fallback(
+          {:invalid_reranker_return, other},
+          start,
+          selection_opts,
+          pool,
+          primary,
+          primary_mapping
+        )
+    end
+  end
+
+  defp handle_reranker_scores(
+         scores,
+         _al_text,
+         pool,
+         slots,
+         selection_opts,
+         primary,
+         primary_mapping,
+         start
+       ) do
+    case validate_reranker_scores(scores, length(pool)) do
       {:ok, scores} ->
         chosen = select_reranked_candidate(pool, scores)
         mapping = SlotMapper.map_slots(slots, chosen.action)
@@ -132,14 +183,69 @@ defmodule SpectreKinetic.Planner.Selection do
          }}
 
       {:error, reason} ->
-        emit_reranker_event(start, selection_opts, pool, primary, primary, primary_mapping, %{
-          result: :error,
-          reason: reason
-        })
-
-        {:ok, %{candidate: primary, mapping: primary_mapping, notes: []}}
+        reranker_error_fallback(
+          reason,
+          start,
+          selection_opts,
+          pool,
+          primary,
+          primary_mapping
+        )
     end
   end
+
+  defp reranker_error_fallback(
+         reason,
+         start,
+         selection_opts,
+         pool,
+         primary,
+         primary_mapping
+       ) do
+    emit_reranker_event(start, selection_opts, pool, primary, primary, primary_mapping, %{
+      result: :error,
+      reason: reason
+    })
+
+    {:ok, %{candidate: primary, mapping: primary_mapping, notes: []}}
+  end
+
+  defp validate_reranker_scores(scores, expected_count) when is_list(scores) do
+    cond do
+      length(scores) != expected_count ->
+        {:error,
+         {:invalid_reranker_scores,
+          {:score_count_mismatch, %{expected: expected_count, actual: length(scores)}}}}
+
+      true ->
+        validate_score_values(scores)
+    end
+  end
+
+  defp validate_reranker_scores(scores, _expected_count) do
+    {:error, {:invalid_reranker_scores, {:invalid_shape, scores}}}
+  end
+
+  defp validate_score_values(scores) do
+    case Enum.find_index(scores, &(not valid_probability?(&1))) do
+      nil ->
+        {:ok, Enum.map(scores, &(&1 / 1))}
+
+      index ->
+        {:error,
+         {:invalid_reranker_scores,
+          {:invalid_score, %{index: index, value: Enum.at(scores, index)}}}}
+    end
+  end
+
+  # The range check rejects infinities and NaN in addition to ordinary
+  # out-of-range values. NaN is never equal to itself and cannot satisfy both
+  # bounds.
+  defp valid_probability?(score) when is_number(score) do
+    score == score and score >= 0.0 and score <= 1.0
+  end
+
+  defp valid_probability?(_score), do: false
 
   defp reranker_pairs(al_text, candidates) do
     Enum.map(candidates, fn candidate ->
@@ -254,6 +360,7 @@ defmodule SpectreKinetic.Planner.Selection do
         duration: System.monotonic_time() - start,
         candidate_count: length(pool),
         fallback_top_k: selection_opts.fallback_top_k,
+        reranker_threshold: selection_opts.reranker_threshold,
         missing_count: length(mapping.missing)
       },
       Map.merge(metadata, %{
