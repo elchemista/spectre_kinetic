@@ -150,18 +150,10 @@ defmodule SpectreKinetic do
   """
   @spec plan_json(PlannerRuntime.t() | GenServer.server(), term()) ::
           {:ok, Action.t()} | {:error, term()}
-  def plan_json(%PlannerRuntime{} = runtime, request_json) when is_binary(request_json) do
-    with {:ok, request} <- Jason.decode(request_json),
-         {:ok, action} <- plan_request(runtime, request) do
-      {:ok, action}
-    else
-      {:error, %Jason.DecodeError{} = reason} -> {:error, {:json_decode, reason}}
-      {:error, reason} -> {:error, reason}
+  def plan_json(%PlannerRuntime{} = runtime, request_json) do
+    with {:ok, request} <- RuntimeConfig.decode_request_json(request_json) do
+      plan_request(runtime, request)
     end
-  end
-
-  def plan_json(%PlannerRuntime{}, _request_json) do
-    {:error, {:invalid_request, [%{field: :json, reason: :must_be_binary}]}}
   end
 
   def plan_json(server, request_json) do

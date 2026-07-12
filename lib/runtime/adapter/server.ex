@@ -91,16 +91,9 @@ defmodule SpectreKinetic.Adapter.Server do
 
   def handle_call({:plan_json, request_json}, _from, state) do
     reply =
-      if is_binary(request_json) do
-        case Jason.decode(request_json) do
-          {:ok, request} ->
-            do_plan_request(state.runtime, request)
-
-          {:error, %Jason.DecodeError{} = reason} ->
-            {:error, {:json_decode, reason}}
-        end
-      else
-        {:error, {:invalid_request, [%{field: :json, reason: :must_be_binary}]}}
+      case RuntimeConfig.decode_request_json(request_json) do
+        {:ok, request} -> do_plan_request(state.runtime, request)
+        {:error, _reason} = error -> error
       end
 
     {:reply, reply, state}

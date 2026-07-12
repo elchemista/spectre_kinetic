@@ -49,6 +49,7 @@ defmodule SpectreKinetic.RuntimeConfig do
   @runtime_path_keys Enum.map(@runtime_path_sources, &elem(&1, 0))
   @runtime_module_keys [:registry_module, :fallback_runtime_module]
   @max_al_bytes 32 * 1_024
+  @max_request_json_bytes 1_024 * 1_024
   @max_slot_depth 16
   @max_slot_entries 256
   @max_slot_nodes 4_096
@@ -133,6 +134,23 @@ defmodule SpectreKinetic.RuntimeConfig do
           :ok | {:error, {:invalid_options, [validation_issue()]}}
   def validate_module(module, key) do
     validation_result(:invalid_options, module_value_issues(module, key))
+  end
+
+  @doc false
+  @spec decode_request_json(term()) :: {:ok, term()} | {:error, term()}
+  def decode_request_json(request_json) when is_binary(request_json) do
+    if byte_size(request_json) > @max_request_json_bytes do
+      validation_result(:invalid_request, [%{field: :json, reason: :exceeds_size_limit}])
+    else
+      case Jason.decode(request_json) do
+        {:ok, request} -> {:ok, request}
+        {:error, %Jason.DecodeError{} = reason} -> {:error, {:json_decode, reason}}
+      end
+    end
+  end
+
+  def decode_request_json(_request_json) do
+    validation_result(:invalid_request, [%{field: :json, reason: :must_be_binary}])
   end
 
   @doc """
