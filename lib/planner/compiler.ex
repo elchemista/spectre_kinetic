@@ -203,30 +203,41 @@ defmodule SpectreKinetic.Planner.Compiler do
     end
   end
 
+  @spec embed_in_batches(term(), [binary()], pos_integer(), pos_integer(), module()) ::
+          {:ok, Nx.Tensor.t()} | {:error, term()}
   defp embed_in_batches(embedder, texts, batch_size, embedding_dim, embedding_module) do
     texts
     |> Enum.chunk_every(batch_size)
     |> Enum.reduce_while({:ok, []}, fn batch, {:ok, tensors} ->
-      case embedding_module.embed_batch(embedder, batch) do
-        {:ok, %Nx.Tensor{} = tensor} ->
-          case Nx.shape(tensor) do
-            {rows, ^embedding_dim} when rows == length(batch) ->
-              {:cont, {:ok, [tensor | tensors]}}
-
-            shape ->
-              {:halt,
-               {:error,
-                {:invalid_embedding_batch_shape, shape, {length(batch), embedding_dim}}}}
-          end
-
-        {:ok, invalid} ->
-          {:halt, {:error, {:invalid_embedding_batch, invalid}}}
-
+      case embed_batch(embedding_module, embedder, batch, embedding_dim) do
+        {:ok, tensor} -> {:cont, {:ok, [tensor | tensors]}}
         {:error, _reason} = error ->
           {:halt, error}
       end
     end)
     |> concatenate_batches()
+  end
+
+  @spec embed_batch(module(), term(), [binary()], pos_integer()) ::
+          {:ok, Nx.Tensor.t()} | {:error, term()}
+  defp embed_batch(embedding_module, embedder, batch, embedding_dim) do
+    case embedding_module.embed_batch(embedder, batch) do
+      {:ok, %Nx.Tensor{} = tensor} -> validate_embedded_batch(tensor, batch, embedding_dim)
+      {:ok, invalid} -> {:error, {:invalid_embedding_batch, invalid}}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @spec validate_embedded_batch(Nx.Tensor.t(), [binary()], pos_integer()) ::
+          {:ok, Nx.Tensor.t()} | {:error, term()}
+  defp validate_embedded_batch(tensor, batch, embedding_dim) do
+    case Nx.shape(tensor) do
+      {rows, ^embedding_dim} when rows == length(batch) ->
+        {:ok, tensor}
+
+      shape ->
+        {:error, {:invalid_embedding_batch_shape, shape, {length(batch), embedding_dim}}}
+    end
   end
 
   defp concatenate_batches({:ok, tensors}),
