@@ -82,7 +82,7 @@ il repository deve vietare i push diretti tramite branch protection/ruleset.
 - [ ] `mix compile --warnings-as-errors`
 - [ ] `mix test`
 - [ ] `mix credo --strict`
-- [ ] `mix dialyzer`
+- [x] `mix dialyzer` — eseguito esternamente il 2026-07-12: zero errori.
 - [x] Parsing statico di tutti i 102 file Elixir senza errori di sintassi.
 - [x] Parsing YAML dei workflow e `git diff --check` senza errori.
 
@@ -96,7 +96,9 @@ il repository deve vietare i push diretti tramite branch protection/ruleset.
 - [x] Test che reranker e mapping rispettino le soglie.
 - [x] Test artifact corrotti, incompatibili e sovradimensionati.
 
-Nota: l'ambiente locale corrente non include Erlang, Elixir o Mix. L'esecuzione
-dei controlli Elixir è lasciata all'autore; i workflow sono pronti sul branch e
-diventeranno avviabili manualmente dall'interfaccia GitHub dopo il merge sul
-default branch.
+Nota: l'ambiente locale corrente non include una VM Erlang eseguibile, quindi
+Mix non può avviare i controlli. L'ultimo log esterno ha confermato Dialyzer
+pulito; le sei failure ExUnit e i quindici rilievi Credo riportati in quel log
+sono stati corretti e attendono il rerun esterno. I workflow sono pronti sul
+branch e diventeranno avviabili manualmente dall'interfaccia GitHub dopo il
+merge sul default branch.
