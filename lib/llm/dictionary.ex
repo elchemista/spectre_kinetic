@@ -8,6 +8,8 @@ defmodule SpectreKinetic.Dictionary do
 
   @derive {Jason.Encoder, only: [:action_ids, :keywords, :slots, :examples]}
 
+  alias SpectreKinetic.Planner.Registry.ETS
+
   defstruct action_ids: [],
             keywords: [],
             slots: [],
@@ -21,26 +23,29 @@ defmodule SpectreKinetic.Dictionary do
         }
 
   @default_top_n 200
+  @default_example_limit 20
+  @max_dictionary_items 1_000
 
   @doc """
   Builds a scoped dictionary from the configured registry JSON file.
   """
   @spec build(keyword()) :: {:ok, t()} | {:error, term()}
   def build(opts \\ []) do
-    with {:ok, path} <- registry_json_path(opts),
-         {:ok, payload} <- File.read(path),
-         {:ok, registry} <- Jason.decode(payload) do
-      actions =
-        registry
-        |> Map.get("actions", Map.get(registry, "tools", []))
-        |> filter_actions(opts[:actions])
+    with :ok <- SpectreKinetic.RuntimeConfig.validate_options(opts),
+         {:ok, path} <- registry_json_path(opts),
+         {:ok, action_scope} <- action_scope(opts),
+         {:ok, top_n} <- bounded_count(opts, :top_n, @default_top_n),
+         {:ok, example_limit} <-
+           bounded_count(opts, :example_limit, @default_example_limit),
+         {:ok, actions} <- load_actions(path) do
+      actions = filter_actions(actions, action_scope)
 
       {:ok,
        %__MODULE__{
          action_ids: Enum.map(actions, & &1["id"]),
-         keywords: collect_keywords(actions, Keyword.get(opts, :top_n, @default_top_n)),
+         keywords: collect_keywords(actions, top_n),
          slots: collect_slots(actions),
-         examples: collect_examples(actions, Keyword.get(opts, :example_limit, 20))
+         examples: collect_examples(actions, example_limit)
        }}
     else
       {:error, _} = error -> error
@@ -90,15 +95,61 @@ defmodule SpectreKinetic.Dictionary do
     |> Enum.join("\n")
   end
 
-  defp registry_json_path(opts),
-    do:
-      SpectreKinetic.RuntimeConfig.resolve_optional_path(
-        opts,
-        :registry_json,
-        :registry_json,
-        "SPECTRE_KINETIC_REGISTRY_JSON"
-      )
-      |> wrap_registry_json_path()
+  defp registry_json_path(opts) do
+    SpectreKinetic.RuntimeConfig.resolve_required_path(
+      opts,
+      :registry_json,
+      :registry_json,
+      "SPECTRE_KINETIC_REGISTRY_JSON"
+    )
+  end
+
+  defp load_actions(path) do
+    case ETS.new(registry_json: path) do
+      {:ok, registry} ->
+        try do
+          {:ok, ETS.all_actions(registry)}
+        after
+          ETS.close(registry)
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp action_scope(opts) do
+    case Keyword.get(opts, :actions) do
+      nil ->
+        {:ok, nil}
+
+      ids when is_list(ids) ->
+        if valid_action_scope?(ids, @max_dictionary_items),
+          do: {:ok, ids},
+          else: {:error, {:invalid_option, :actions}}
+
+      _invalid ->
+        {:error, {:invalid_option, :actions}}
+    end
+  end
+
+  defp valid_action_scope?([], _remaining), do: true
+  defp valid_action_scope?([_id | _tail], 0), do: false
+
+  defp valid_action_scope?([id | tail], remaining) when is_binary(id),
+    do: valid_action_scope?(tail, remaining - 1)
+
+  defp valid_action_scope?(_invalid, _remaining), do: false
+
+  defp bounded_count(opts, key, default) do
+    case Keyword.get(opts, key, default) do
+      value when is_integer(value) and value >= 0 and value <= @max_dictionary_items ->
+        {:ok, value}
+
+      _invalid ->
+        {:error, {:invalid_option, key}}
+    end
+  end
 
   defp filter_actions(actions, nil), do: actions
 
@@ -163,7 +214,4 @@ defmodule SpectreKinetic.Dictionary do
     Regex.scan(~r/[A-Za-z0-9_-]+/, text)
     |> List.flatten()
   end
-
-  defp wrap_registry_json_path(nil), do: {:error, :missing_registry_json}
-  defp wrap_registry_json_path(path), do: {:ok, path}
 end
