@@ -76,7 +76,15 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   def load_json(%__MODULE__{owner: owner}, _path) when owner != self(),
     do: not_owner(owner)
 
-  def load_json(%__MODULE__{} = registry, path) do
+  def load_json(%__MODULE__{} = registry, path) when is_binary(path) do
+    if valid_registry_path?(path),
+      do: do_load_json(registry, path),
+      else: {:error, {:invalid_registry_input, :path}}
+  end
+
+  def load_json(%__MODULE__{}, _path), do: {:error, {:invalid_registry_input, :path}}
+
+  defp do_load_json(registry, path) do
     with {:ok, decoded} <- Artifact.read_json(path),
          {:ok, actions} <- json_actions(decoded),
          {:ok, actions} <- normalize_actions(actions) do
@@ -90,7 +98,15 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   def load_compiled(%__MODULE__{owner: owner}, _path) when owner != self(),
     do: not_owner(owner)
 
-  def load_compiled(%__MODULE__{} = registry, path) do
+  def load_compiled(%__MODULE__{} = registry, path) when is_binary(path) do
+    if valid_registry_path?(path),
+      do: do_load_compiled(registry, path),
+      else: {:error, {:invalid_registry_input, :path}}
+  end
+
+  def load_compiled(%__MODULE__{}, _path), do: {:error, {:invalid_registry_input, :path}}
+
+  defp do_load_compiled(registry, path) do
     case Artifact.read_term(path) do
       {:ok, bundle} ->
         try do
@@ -230,12 +246,18 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   end
 
   @impl Registry
-  def resolve_alias(%__MODULE__{} = registry, alias_name) do
-    alias_name
-    |> String.downcase()
-    |> then(&:ets.lookup(registry.aliases, &1))
-    |> Enum.map(fn {_key, action_id, canonical} -> {action_id, canonical} end)
+  def resolve_alias(%__MODULE__{} = registry, alias_name) when is_binary(alias_name) do
+    if String.valid?(alias_name) and byte_size(alias_name) <= 256 do
+      alias_name
+      |> String.downcase()
+      |> then(&:ets.lookup(registry.aliases, &1))
+      |> Enum.map(fn {_key, action_id, canonical} -> {action_id, canonical} end)
+    else
+      []
+    end
   end
+
+  def resolve_alias(%__MODULE__{}, _alias_name), do: []
 
   @impl Registry
   def close(%__MODULE__{} = registry) do
@@ -270,6 +292,11 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   end
 
   defp not_owner(owner), do: {:error, {:registry_not_owner, owner}}
+
+  defp valid_registry_path?(path) do
+    String.valid?(path) and byte_size(path) <= 4_096 and String.trim(path) != "" and
+      not String.contains?(path, <<0>>)
+  end
 
   defp clear_tables(%__MODULE__{} = registry) do
     :ets.delete_all_objects(registry.actions)
