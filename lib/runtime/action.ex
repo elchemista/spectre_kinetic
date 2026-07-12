@@ -22,26 +22,27 @@ defmodule SpectreKinetic.Action do
   make an action more executable than the validated planner result.
   """
 
-  @derive {Jason.Encoder,
-           only: [
-             :index,
-             :al,
-             :status,
-             :selected_tool,
-             :confidence,
-             :tool_score,
-             :mapping_score,
-             :combined_score,
-             :args,
-             :invalid,
-             :missing,
-             :notes,
-             :classifier_results,
-             :warnings,
-             :halted?,
-             :alternatives,
-             :error
-           ]}
+  @json_fields [
+    :index,
+    :al,
+    :status,
+    :selected_tool,
+    :confidence,
+    :tool_score,
+    :mapping_score,
+    :combined_score,
+    :args,
+    :invalid,
+    :missing,
+    :notes,
+    :classifier_results,
+    :warnings,
+    :halted?,
+    :alternatives,
+    :error
+  ]
+
+  @max_json_depth 32
 
   defstruct index: nil,
             al: nil,
@@ -186,6 +187,15 @@ defmodule SpectreKinetic.Action do
     }
   end
 
+  @doc false
+  @spec json_map(t()) :: map()
+  def json_map(%__MODULE__{} = action) do
+    action
+    |> Map.from_struct()
+    |> Map.take(@json_fields)
+    |> json_safe(0)
+  end
+
   # Status text crosses from maps and JSON into the VM. We keep the door narrow;
   # atoms are forever, and forever is a long time to debug.
   defp normalize_status(other) when is_binary(other) do
@@ -219,4 +229,70 @@ defmodule SpectreKinetic.Action do
   end
 
   defp build_alternatives(_plan), do: []
+
+  defp json_safe(_term, depth) when depth >= @max_json_depth,
+    do: "<max-depth>"
+
+  defp json_safe(nil, _depth), do: nil
+  defp json_safe(value, _depth) when is_boolean(value), do: value
+  defp json_safe(value, _depth) when is_integer(value), do: value
+  defp json_safe(value, _depth) when is_atom(value), do: value
+
+  defp json_safe(value, _depth) when is_binary(value) do
+    if String.valid?(value), do: value, else: "base64:" <> Base.encode64(value)
+  end
+
+  defp json_safe(value, _depth) when is_float(value) do
+    representation = value |> :erlang.float_to_binary([:compact]) |> String.downcase()
+    if representation in ["nan", "inf", "-inf"], do: representation, else: value
+  rescue
+    _error -> inspect(value)
+  end
+
+  defp json_safe(value, depth) when is_map(value) and not is_struct(value) do
+    Map.new(value, fn {key, item} ->
+      {json_safe_key(key), json_safe(item, depth + 1)}
+    end)
+  end
+
+  defp json_safe(%{__struct__: module} = struct, depth) when is_atom(module) do
+    %{
+      type: Atom.to_string(module),
+      fields: struct |> Map.from_struct() |> json_safe(depth + 1)
+    }
+  end
+
+  defp json_safe(value, depth) when is_tuple(value) do
+    case Tuple.to_list(value) do
+      [code | details] when is_atom(code) ->
+        %{code: code, details: json_safe(details, depth + 1)}
+
+      items ->
+        json_safe(items, depth + 1)
+    end
+  end
+
+  defp json_safe([], _depth), do: []
+
+  defp json_safe([_head | _tail] = value, depth),
+    do: json_safe_list(value, depth + 1, [])
+
+  defp json_safe(value, _depth),
+    do: inspect(value, limit: 20, printable_limit: 1_000)
+
+  defp json_safe_list([], _depth, acc), do: Enum.reverse(acc)
+
+  defp json_safe_list([head | tail], depth, acc),
+    do: json_safe_list(tail, depth, [json_safe(head, depth) | acc])
+
+  defp json_safe_list(improper_tail, depth, acc) do
+    Enum.reverse([%{improper_tail: json_safe(improper_tail, depth)} | acc])
+  end
+
+  defp json_safe_key(key) when is_atom(key) or is_binary(key), do: key
+  defp json_safe_key(key), do: inspect(key, limit: 5, printable_limit: 100)
+end
+
+defimpl Jason.Encoder, for: SpectreKinetic.Action do
+  def encode(action, opts), do: Jason.Encode.map(SpectreKinetic.Action.json_map(action), opts)
 end
