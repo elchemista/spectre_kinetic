@@ -62,23 +62,37 @@ defmodule SpectreKinetic.Classifiers.BuiltIn do
         classifier: PlanConfidence,
         feature_module: PlanConfidence.Features,
         trainer: PlanConfidence.Trainer,
-        dataset_path: "priv/dataset/plan_confidence.jsonl"
+        dataset_path: dataset_path("plan_confidence.jsonl")
       },
       %{
         id: "slot_confidence",
         classifier: SlotConfidence,
         feature_module: SlotConfidence.Features,
         trainer: SlotConfidence.Trainer,
-        dataset_path: "priv/dataset/slot_confidence.jsonl"
+        dataset_path: dataset_path("slot_confidence.jsonl")
       },
       %{
         id: "safety_risk",
         classifier: SafetyRisk,
         feature_module: SafetyRisk.Features,
         trainer: SafetyRisk.Trainer,
-        dataset_path: "priv/dataset/safety_risk.jsonl",
+        dataset_path: dataset_path("safety_risk.jsonl"),
         labels: SafetyRisk.labels()
       }
     ]
+  end
+
+  defp dataset_path(file_name) do
+    :spectre_kinetic
+    |> :code.priv_dir()
+    |> priv_dir!()
+    |> Path.join("dataset")
+    |> Path.join(file_name)
+  end
+
+  defp priv_dir!(path) when is_list(path), do: List.to_string(path)
+
+  defp priv_dir!({:error, reason}) do
+    raise "cannot resolve :spectre_kinetic priv directory: #{inspect(reason)}"
   end
 end

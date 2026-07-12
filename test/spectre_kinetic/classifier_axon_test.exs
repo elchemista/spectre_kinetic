@@ -107,6 +107,7 @@ defmodule SpectreKinetic.ClassifierAxonTest do
     for entry <- BuiltIn.all() do
       assert entry.feature_module.feature_names() == entry.classifier.feature_names()
       assert length(entry.classifier.feature_names()) == entry.classifier.feature_dim()
+      assert Path.type(entry.dataset_path) == :absolute
       assert File.exists?(entry.dataset_path)
 
       entry.dataset_path
