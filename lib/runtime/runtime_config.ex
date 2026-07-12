@@ -231,9 +231,8 @@ defmodule SpectreKinetic.RuntimeConfig do
   @spec validate_plan_input(term(), term()) ::
           :ok | {:error, {:invalid_request | :invalid_options, [validation_issue()]}}
   def validate_plan_input(al, opts) do
-    with :ok <- validation_result(:invalid_request, al_issues(al)),
-         :ok <- validate_options(opts) do
-      :ok
+    with :ok <- validation_result(:invalid_request, al_issues(al)) do
+      validate_options(opts)
     end
   end
 

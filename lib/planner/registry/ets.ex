@@ -530,15 +530,15 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
 
   defp finite_number?(_value), do: false
 
+  @spec validate_embedding(t(), binary(), term()) :: :ok | {:error, term()}
   defp validate_embedding(_registry, _action_id, nil), do: :ok
 
   defp validate_embedding(registry, action_id, %Nx.Tensor{} = tensor) do
     case Nx.shape(tensor) do
       {dimension} when dimension > 0 and dimension <= @max_embedding_dim ->
         with :ok <- validate_embedding_type(tensor),
-             :ok <- validate_embedding_values(tensor),
-             :ok <- validate_embedding_dimension(registry, action_id, dimension) do
-          :ok
+             :ok <- validate_embedding_values(tensor) do
+          validate_embedding_dimension(registry, action_id, dimension)
         end
 
       shape ->

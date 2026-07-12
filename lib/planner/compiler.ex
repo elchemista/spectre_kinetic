@@ -239,15 +239,15 @@ defmodule SpectreKinetic.Planner.Compiler do
        do: :ok
   defp validate_embedding_dim(dim), do: {:error, {:invalid_embedding_dim, dim}}
 
+  @spec atomic_write(Path.t(), binary()) :: :ok | {:error, term()}
   defp atomic_write(output_path, binary) do
     output_dir = Path.dirname(output_path)
     temp_path = temporary_path(output_path)
 
     with :ok <- File.mkdir_p(output_dir) do
       try do
-        with :ok <- File.write(temp_path, binary, [:binary, :exclusive]),
-             :ok <- File.rename(temp_path, output_path) do
-          :ok
+        with :ok <- File.write(temp_path, binary, [:binary, :exclusive]) do
+          File.rename(temp_path, output_path)
         end
       after
         File.rm(temp_path)
