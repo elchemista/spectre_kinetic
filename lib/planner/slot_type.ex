@@ -9,7 +9,7 @@ defmodule SpectreKinetic.Planner.SlotType do
   @spec coerce(term(), term()) :: {:ok, term()} | {:error, coercion_error()}
   def coerce(value, type) when is_binary(type) do
     type
-    |> String.split(~r/\s*\|\s*/, trim: true)
+    |> split_union()
     |> coerce_union(value, nil)
   end
 
@@ -24,6 +24,40 @@ defmodule SpectreKinetic.Planner.SlotType do
       {:error, :type_mismatch} -> coerce_union(rest, value, unsupported)
       {:error, {:unsupported_type, _type} = error} -> coerce_union(rest, value, error)
     end
+  end
+
+  defp split_union(type), do: split_union(type, 0, 0, [], [])
+
+  defp split_union(<<>>, _paren_depth, _list_depth, current, parts) do
+    current
+    |> add_union_part(parts)
+    |> Enum.reverse()
+  end
+
+  defp split_union(<<"|", rest::binary>>, 0, 0, current, parts) do
+    split_union(rest, 0, 0, [], add_union_part(current, parts))
+  end
+
+  defp split_union(<<"(", rest::binary>>, paren_depth, list_depth, current, parts),
+    do: split_union(rest, paren_depth + 1, list_depth, [?( | current], parts)
+
+  defp split_union(<<"[", rest::binary>>, paren_depth, list_depth, current, parts),
+    do: split_union(rest, paren_depth, list_depth + 1, [?[ | current], parts)
+
+  defp split_union(<<")", rest::binary>>, paren_depth, list_depth, current, parts)
+       when paren_depth > 0,
+       do: split_union(rest, paren_depth - 1, list_depth, [?) | current], parts)
+
+  defp split_union(<<"]", rest::binary>>, paren_depth, list_depth, current, parts)
+       when list_depth > 0,
+       do: split_union(rest, paren_depth, list_depth - 1, [?] | current], parts)
+
+  defp split_union(<<byte, rest::binary>>, paren_depth, list_depth, current, parts),
+    do: split_union(rest, paren_depth, list_depth, [byte | current], parts)
+
+  defp add_union_part(current, parts) do
+    part = current |> Enum.reverse() |> IO.iodata_to_binary() |> String.trim()
+    if part == "", do: parts, else: [part | parts]
   end
 
   defp normalize_type(type) do
