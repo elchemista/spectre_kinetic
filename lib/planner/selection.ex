@@ -81,6 +81,8 @@ defmodule SpectreKinetic.Planner.Selection do
 
   defp mapped_status(%{invalid: [_ | _]}, _threshold), do: "AMBIGUOUS_MAPPING"
 
+  defp mapped_status(%{selection_ambiguous?: true}, _threshold), do: "AMBIGUOUS_MAPPING"
+
   defp mapped_status(%{positional: [_ | _]}, _threshold), do: "AMBIGUOUS_MAPPING"
 
   defp mapped_status(%{missing: []}, _threshold), do: "ok"
@@ -99,7 +101,15 @@ defmodule SpectreKinetic.Planner.Selection do
         primary_mapping
       )
     else
-      {:ok, %{candidate: best, mapping: primary_mapping, notes: []}}
+      {mapping, notes} =
+        mark_close_tool_selection(
+          primary_mapping,
+          candidate_margin(best, rest),
+          rest,
+          selection_opts.fallback_margin
+        )
+
+      {:ok, %{candidate: best, mapping: mapping, notes: notes}}
     end
   end
 
@@ -190,9 +200,19 @@ defmodule SpectreKinetic.Planner.Selection do
        ) do
     case validate_reranker_scores(scores, length(pool)) do
       {:ok, scores} ->
-        chosen = select_reranked_candidate(pool, scores)
+        {chosen, reranked_rest} = select_reranked_candidate(pool, scores)
         mapping = SlotMapper.map_slots(slots, chosen.action)
-        notes = reranker_notes(chosen, primary, mapping, primary_mapping)
+
+        {mapping, ambiguity_notes} =
+          mark_close_tool_selection(
+            mapping,
+            reranker_candidate_margin(chosen, reranked_rest),
+            reranked_rest,
+            selection_opts.fallback_margin
+          )
+
+        notes =
+          reranker_notes(chosen, primary, mapping, primary_mapping) ++ ambiguity_notes
 
         emit_reranker_event(start, selection_opts, pool, primary, chosen, mapping, %{
           result: :fallback,
@@ -231,7 +251,10 @@ defmodule SpectreKinetic.Planner.Selection do
       reason: reason
     })
 
-    {:ok, %{candidate: primary, mapping: primary_mapping, notes: []}}
+    mapping = Map.put(primary_mapping, :selection_ambiguous?, true)
+    notes = ["reranker failed; tool selection remains ambiguous"]
+
+    {:ok, %{candidate: primary, mapping: mapping, notes: notes}}
   end
 
   defp validate_reranker_scores(scores, expected_count) when is_list(scores) do
@@ -278,14 +301,30 @@ defmodule SpectreKinetic.Planner.Selection do
   end
 
   defp select_reranked_candidate(pool, scores) do
-    pool
-    |> Enum.zip(scores)
-    |> Enum.map(fn {candidate, reranker_score} ->
-      Map.put(candidate, :reranker_score, reranker_score)
-    end)
-    |> Enum.sort_by(&{&1.reranker_score, &1.fused_score}, :desc)
-    |> hd()
+    [chosen | rest] =
+      pool
+      |> Enum.zip(scores)
+      |> Enum.map(fn {candidate, reranker_score} ->
+        Map.put(candidate, :reranker_score, reranker_score)
+      end)
+      |> Enum.sort_by(&{&1.reranker_score, &1.fused_score}, :desc)
+
+    {chosen, rest}
   end
+
+  defp mark_close_tool_selection(mapping, _margin, [], _required_margin),
+    do: {mapping, []}
+
+  defp mark_close_tool_selection(mapping, margin, _rest, required_margin)
+       when margin <= required_margin do
+    {
+      Map.put(mapping, :selection_ambiguous?, true),
+      ["top tool candidates are too close to select safely"]
+    }
+  end
+
+  defp mark_close_tool_selection(mapping, _margin, _rest, _required_margin),
+    do: {mapping, []}
 
   defp empty_registry_result do
     %{
@@ -342,6 +381,11 @@ defmodule SpectreKinetic.Planner.Selection do
 
   defp candidate_margin(_best, []), do: 1.0
   defp candidate_margin(best, [next | _rest]), do: best.fused_score - next.fused_score
+
+  defp reranker_candidate_margin(_best, []), do: 1.0
+
+  defp reranker_candidate_margin(best, [next | _rest]),
+    do: best.reranker_score - next.reranker_score
 
   defp reranker_notes(
          %{action: %{"id" => chosen_id}},
