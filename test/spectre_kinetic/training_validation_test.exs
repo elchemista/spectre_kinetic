@@ -15,11 +15,13 @@ defmodule SpectreKinetic.TrainingValidationTest do
     assert {:error, {:invalid_training_option, :epochs, -1}} =
              RerankerTrainer.train(reranker_examples(), Keyword.put(opts, :epochs, -1))
 
-    assert {:error, {:invalid_training_option, :learning_rate, 0.0}} =
+    assert {:error, {:invalid_training_option, :learning_rate, learning_rate}} =
              RerankerTrainer.train(
                reranker_examples(),
                Keyword.put(opts, :learning_rate, 0.0)
              )
+
+    assert learning_rate == 0.0
   end
 
   test "reranker requires valid examples from both classes" do
