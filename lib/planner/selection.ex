@@ -126,7 +126,11 @@ defmodule SpectreKinetic.Planner.Selection do
     pool = Enum.take(scored_candidates, selection_opts.fallback_top_k)
     pairs = reranker_pairs(al_text, pool)
 
-    case selection_opts.reranker_module.score_batch(selection_opts.reranker, pairs) do
+    case safe_score_batch(
+           selection_opts.reranker_module,
+           selection_opts.reranker,
+           pairs
+         ) do
       {:ok, scores} ->
         handle_reranker_scores(
           scores,
@@ -148,17 +152,28 @@ defmodule SpectreKinetic.Planner.Selection do
           primary,
           primary_mapping
         )
+    end
+  end
+
+  defp safe_score_batch(module, runtime, pairs) do
+    case module.score_batch(runtime, pairs) do
+      {:ok, _scores} = ok ->
+        ok
+
+      {:error, _reason} = error ->
+        error
 
       other ->
-        reranker_error_fallback(
-          {:invalid_reranker_return, other},
-          start,
-          selection_opts,
-          pool,
-          primary,
-          primary_mapping
-        )
+        {:error, {:invalid_reranker_return, other}}
     end
+  rescue
+    error ->
+      {:error,
+       {:reranker_call_failed,
+        %{kind: :raise, exception: error.__struct__, message: Exception.message(error)}}}
+  catch
+    kind, reason when kind in [:throw, :exit] ->
+      {:error, {:reranker_call_failed, %{kind: kind, reason: reason}}}
   end
 
   defp handle_reranker_scores(

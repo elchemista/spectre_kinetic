@@ -52,6 +52,22 @@ defmodule SpectreKinetic.PlannerTest do
     end
   end
 
+  defmodule RaisingReranker do
+    def score_batch(_runtime, _pairs), do: raise("reranker crashed")
+  end
+
+  defmodule ThrowingReranker do
+    def score_batch(_runtime, _pairs), do: throw(:reranker_threw)
+  end
+
+  defmodule ExitingReranker do
+    def score_batch(_runtime, _pairs), do: exit(:reranker_exited)
+  end
+
+  defmodule UnexpectedReturnReranker do
+    def score_batch(_runtime, _pairs), do: :unexpected
+  end
+
   setup do
     {:ok, store} = RegistryStore.start_link(name: nil)
 
@@ -275,6 +291,48 @@ defmodule SpectreKinetic.PlannerTest do
       assert metadata.primary_tool == metadata.chosen_tool
     end
 
+    test "reranker exceptions fall back without crashing the planner", %{store: store} do
+      {result, events} = plan_with_failing_reranker(store, RaisingReranker)
+
+      assert {:ok, %{"selected_tool" => selected_tool}} = result
+      assert is_binary(selected_tool)
+      assert [%{metadata: metadata}] = events
+      assert metadata.result == :error
+
+      assert {:reranker_call_failed,
+              %{
+                kind: :raise,
+                exception: RuntimeError,
+                message: "reranker crashed"
+              }} = metadata.reason
+    end
+
+    test "reranker throws and exits fall back without crashing the planner", %{store: store} do
+      for {module, kind, reason} <- [
+            {ThrowingReranker, :throw, :reranker_threw},
+            {ExitingReranker, :exit, :reranker_exited}
+          ] do
+        {result, events} = plan_with_failing_reranker(store, module)
+
+        assert {:ok, %{"selected_tool" => selected_tool}} = result
+        assert is_binary(selected_tool)
+        assert [%{metadata: metadata}] = events
+        assert metadata.result == :error
+
+        assert {:reranker_call_failed, %{kind: ^kind, reason: ^reason}} = metadata.reason
+      end
+    end
+
+    test "unexpected reranker returns fall back without crashing the planner", %{store: store} do
+      {result, events} = plan_with_failing_reranker(store, UnexpectedReturnReranker)
+
+      assert {:ok, %{"selected_tool" => selected_tool}} = result
+      assert is_binary(selected_tool)
+      assert [%{metadata: metadata}] = events
+      assert metadata.result == :error
+      assert metadata.reason == {:invalid_reranker_return, :unexpected}
+    end
+
     test "reranker cannot bypass the first-stage tool threshold", %{store: store} do
       {:ok, result} =
         Planner.plan(
@@ -366,6 +424,23 @@ defmodule SpectreKinetic.PlannerTest do
       assert {:invalid_reranker_scores,
               {:invalid_score, %{index: 0, value: 1.1}}} = metadata.reason
     end
+  end
+
+  defp plan_with_failing_reranker(store, reranker_module) do
+    TelemetryHelper.capture([@reranker_fallback_event], fn ->
+      Planner.plan(
+        "SEND OUTBOUND MESSAGE WITH: TO=+15551234567 BODY=\"Code 123\"",
+        %{
+          registry: store,
+          embedder: nil,
+          tool_threshold: 0.0,
+          tool_selection_fallback: :reranker,
+          reranker: :fake,
+          reranker_module: reranker_module,
+          fallback_margin: 1.0
+        }
+      )
+    end)
   end
 
   describe "plan_request/2" do
