@@ -278,15 +278,17 @@ defmodule SpectreKinetic.Planner.Selection do
     {:ok, %{candidate: primary, mapping: mapping, notes: notes}}
   end
 
+  @spec validate_reranker_scores(term(), non_neg_integer()) ::
+          {:ok, [float()]} | {:error, term()}
   defp validate_reranker_scores(scores, expected_count) when is_list(scores) do
-    cond do
-      length(scores) != expected_count ->
-        {:error,
-         {:invalid_reranker_scores,
-          {:score_count_mismatch, %{expected: expected_count, actual: length(scores)}}}}
+    actual_count = length(scores)
 
-      true ->
-        validate_score_values(scores)
+    if actual_count == expected_count do
+      validate_score_values(scores)
+    else
+      {:error,
+       {:invalid_reranker_scores,
+        {:score_count_mismatch, %{expected: expected_count, actual: actual_count}}}}
     end
   end
 
@@ -294,6 +296,7 @@ defmodule SpectreKinetic.Planner.Selection do
     {:error, {:invalid_reranker_scores, {:invalid_shape, scores}}}
   end
 
+  @spec validate_score_values([term()]) :: {:ok, [float()]} | {:error, term()}
   defp validate_score_values(scores) do
     case Enum.find_index(scores, &(not valid_probability?(&1))) do
       nil ->
