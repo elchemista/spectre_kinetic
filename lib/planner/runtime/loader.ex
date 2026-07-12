@@ -199,30 +199,50 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
   defp close_replaced_stage(registry_module, original, _replacement),
     do: safe_close(registry_module, original)
 
+  @spec validate_registry_module(term()) :: :ok | {:error, term()}
   defp validate_registry_module(module) do
-    with :ok <- RuntimeConfig.validate_module(module, :registry_module) do
-      if Enum.all?(@registry_functions, fn {name, arity} ->
-           function_exported?(module, name, arity)
-         end) do
-        :ok
-      else
-        invalid_module(:registry_module, :must_implement_registry_backend)
-      end
+    case RuntimeConfig.validate_module(module, :registry_module) do
+      :ok ->
+        validate_module_exports(
+          module,
+          @registry_functions,
+          :registry_module,
+          :must_implement_registry_backend
+        )
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
+  @spec validate_reranker_module(keyword()) :: :ok | {:error, term()}
   defp validate_reranker_module(opts) do
     module = Keyword.get(opts, :fallback_runtime_module, RerankerRuntime)
 
-    with :ok <- RuntimeConfig.validate_module(module, :fallback_runtime_module) do
-      required = required_reranker_functions(opts)
+    case RuntimeConfig.validate_module(module, :fallback_runtime_module) do
+      :ok ->
+        validate_module_exports(
+          module,
+          required_reranker_functions(opts),
+          :fallback_runtime_module,
+          :must_implement_reranker_runtime
+        )
 
-      if Enum.all?(required, fn {name, arity} -> function_exported?(module, name, arity) end) do
-        :ok
-      else
-        invalid_module(:fallback_runtime_module, :must_implement_reranker_runtime)
-      end
+      {:error, _reason} = error ->
+        error
     end
+  end
+
+  @spec validate_module_exports(module(), keyword(), atom(), atom()) :: :ok | {:error, term()}
+  defp validate_module_exports(module, required, field, reason) do
+    if module_exports_all?(module, required),
+      do: :ok,
+      else: invalid_module(field, reason)
+  end
+
+  @spec module_exports_all?(module(), keyword()) :: boolean()
+  defp module_exports_all?(module, required) do
+    Enum.all?(required, fn {name, arity} -> function_exported?(module, name, arity) end)
   end
 
   defp required_reranker_functions(opts) do
