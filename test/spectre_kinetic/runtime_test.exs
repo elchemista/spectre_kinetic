@@ -206,6 +206,22 @@ defmodule SpectreKinetic.RuntimeTest do
     assert ETS.get_action(active_registry, "Dynamic.Note.delete/1") == nil
   end
 
+  test "runtime reload preserves the active registry when the embedder exits" do
+    email_json = write_registry_json([email_action()])
+    notes_json = write_registry_json([note_delete_action()])
+
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: email_json)
+    runtime = %{runtime | encoder: :missing_kinetic_encoder}
+    active_registry = runtime.registry
+
+    assert {:error, {:registry_stage_failed, {:exit, _reason}}} =
+             SpectreKinetic.reload_registry(runtime, notes_json)
+
+    assert :ets.info(active_registry.actions) != :undefined
+    assert SpectreKinetic.action_count(runtime) == 1
+    assert ETS.get_action(active_registry, "Dynamic.Email.send/3") != nil
+  end
+
   test "load_runtime/1 accepts compiled registries without requiring an encoder" do
     compiled_registry = write_compiled_registry([email_action()])
 

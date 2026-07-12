@@ -35,9 +35,18 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     }
 
     result =
-      case maybe_load_json(registry, Keyword.get(opts, :registry_json)) do
-        {:ok, registry} -> maybe_load_compiled(registry, Keyword.get(opts, :compiled_registry))
-        {:error, _reason} = error -> error
+      try do
+        case maybe_load_json(registry, Keyword.get(opts, :registry_json)) do
+          {:ok, registry} ->
+            maybe_load_compiled(registry, Keyword.get(opts, :compiled_registry))
+
+          {:error, _reason} = error ->
+            error
+        end
+      rescue
+        error -> {:error, {:registry_load_failed, Exception.message(error)}}
+      catch
+        kind, reason -> {:error, {:registry_load_failed, {kind, reason}}}
       end
 
     case result do

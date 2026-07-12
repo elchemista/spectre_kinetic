@@ -46,23 +46,25 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
 
   defp load_owned_components(registry_module, registry, reranker_module, opts) do
     result =
-      with {:ok, encoder} <- load_encoder(opts),
-           {:ok, reranker} <- load_reranker(opts, reranker_module),
-           {:ok, classifiers} <- configured_classifiers(opts, :classifiers),
-           {:ok, chain_classifiers} <- configured_classifiers(opts, :chain_classifiers) do
-        {:ok,
-         %{
-           registry_module: registry_module,
-           registry: registry,
-           encoder: encoder,
-           reranker_module: reranker_module,
-           reranker: reranker,
-           allow_empty_registry: Keyword.get(opts, :allow_empty_registry, false),
-           defaults: planner_defaults(opts),
-           classifiers: classifiers,
-           chain_classifiers: chain_classifiers
-         }}
-      end
+      safely(fn ->
+        with {:ok, encoder} <- load_encoder(opts),
+             {:ok, reranker} <- load_reranker(opts, reranker_module),
+             {:ok, classifiers} <- configured_classifiers(opts, :classifiers),
+             {:ok, chain_classifiers} <- configured_classifiers(opts, :chain_classifiers) do
+          {:ok,
+           %{
+             registry_module: registry_module,
+             registry: registry,
+             encoder: encoder,
+             reranker_module: reranker_module,
+             reranker: reranker,
+             allow_empty_registry: Keyword.get(opts, :allow_empty_registry, false),
+             defaults: planner_defaults(opts),
+             classifiers: classifiers,
+             chain_classifiers: chain_classifiers
+           }}
+        end
+      end)
 
     case result do
       {:ok, _components} = ok ->
@@ -94,7 +96,7 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
 
       {:ok, loader} ->
         with {:ok, registry} <- registry_module.new([]) do
-          case loader.(registry, path) do
+          case safely(fn -> loader.(registry, path) end) do
             {:ok, registry} -> validate_staged_registry(registry_module, registry, opts)
             {:error, _reason} = error -> close_staged(registry_module, registry, error)
           end
@@ -114,6 +116,14 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
   defp close_staged(registry_module, registry, result) do
     registry_module.close(registry)
     result
+  end
+
+  defp safely(fun) do
+    fun.()
+  rescue
+    error -> {:error, {:runtime_component_failed, Exception.message(error)}}
+  catch
+    kind, reason -> {:error, {:runtime_component_failed, {kind, reason}}}
   end
 
   defp planner_defaults(opts) do

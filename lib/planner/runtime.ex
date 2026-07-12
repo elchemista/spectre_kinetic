@@ -62,7 +62,7 @@ defmodule SpectreKinetic.Planner.Runtime do
     with {:ok, components} <- Loader.components(opts) do
       runtime = struct(__MODULE__, components)
 
-      case Embeddings.embed_loaded_registry(runtime, opts) do
+      case safely(fn -> Embeddings.embed_loaded_registry(runtime, opts) end) do
         {:ok, runtime} ->
           {:ok, runtime}
 
@@ -222,18 +222,32 @@ defmodule SpectreKinetic.Planner.Runtime do
   end
 
   defp complete_staged_registry(runtime, registry, path) do
+    case safely(fn -> complete_staged_registry_resources(runtime, registry, path) end) do
+      {:ok, result} ->
+        result
+
+      {:error, reason} ->
+        runtime.registry_module.close(registry)
+        {{:error, {:registry_stage_failed, reason}}, false}
+    end
+  end
+
+  defp complete_staged_registry_resources(runtime, registry, path) do
     staged_runtime = %{runtime | registry: registry}
     embedding_attempted? = Embeddings.reembed_after_reload?(staged_runtime, path)
 
-    case Embeddings.reembed_after_reload(staged_runtime, path) do
-      {:ok, next_runtime} ->
-        :ok = runtime.registry_module.close(runtime.registry)
-        {{:ok, next_runtime}, embedding_attempted?}
+    result =
+      case Embeddings.reembed_after_reload(staged_runtime, path) do
+        {:ok, next_runtime} ->
+          :ok = runtime.registry_module.close(runtime.registry)
+          {{:ok, next_runtime}, embedding_attempted?}
 
-      {:error, _reason} = error ->
-        :ok = runtime.registry_module.close(registry)
-        {error, embedding_attempted?}
-    end
+        {:error, _reason} = error ->
+          :ok = runtime.registry_module.close(registry)
+          {error, embedding_attempted?}
+      end
+
+    {:ok, result}
   end
 
   defp ensure_registry_owner(runtime) do
@@ -242,6 +256,14 @@ defmodule SpectreKinetic.Planner.Runtime do
       owner when owner == self() -> :ok
       owner -> {:error, {:registry_not_owner, owner}}
     end
+  end
+
+  defp safely(fun) do
+    fun.()
+  rescue
+    error -> {:error, {:exception, Exception.message(error)}}
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
 
   defp emit_registry_event(
