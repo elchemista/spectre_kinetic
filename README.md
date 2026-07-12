@@ -168,7 +168,8 @@ Primitive argument types declared by the registry are enforced during slot
 mapping. Integer, float, and boolean AL literals are safely coerced; invalid
 required values are omitted, remain in `missing`, and keep the action
 non-executable. Date and URI values are validated while remaining strings for
-JSON-friendly output. Opaque custom types pass through unchanged.
+JSON-friendly output. Literal unions and typed lists are checked recursively;
+unknown custom types fail closed until an explicit coercer is defined.
 
 ## Compile A Fast Registry
 
