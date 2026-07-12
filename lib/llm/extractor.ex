@@ -73,13 +73,21 @@ defmodule SpectreKinetic.Extractor do
   """
   @spec scan(binary()) :: scan_result()
   def scan(text) when is_binary(text) do
+    if String.valid?(text) do
+      do_scan(text)
+    else
+      %{clean_text: "", entries: [invalid_entry(text, :invalid_al)]}
+    end
+  end
+
+  def scan(_), do: %{clean_text: "", entries: []}
+
+  defp do_scan(text) do
     text
     |> String.split("\n", trim: false)
     |> Enum.reduce(%{mode: :normal, clean_lines: [], entries: []}, &consume_line/2)
     |> finalize_scan()
   end
-
-  def scan(_), do: %{clean_text: "", entries: []}
 
   # We build lists backwards because appending line-by-line is how tiny scripts
   # become tiny regrets. The public result is put back in order at the boundary.

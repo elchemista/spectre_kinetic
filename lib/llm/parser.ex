@@ -38,7 +38,7 @@ defmodule SpectreKinetic.Parser do
   """
   @spec normalize(binary()) :: {:ok, binary()} | {:error, validation_error()}
   def normalize(al_text) when is_binary(al_text) do
-    Wrappers.normalize(al_text)
+    if String.valid?(al_text), do: Wrappers.normalize(al_text), else: {:error, :invalid_al}
   end
 
   def normalize(_), do: {:error, :invalid_al}

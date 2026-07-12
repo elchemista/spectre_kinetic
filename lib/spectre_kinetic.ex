@@ -15,6 +15,10 @@ defmodule SpectreKinetic do
   alias SpectreKinetic.Prompt
   alias SpectreKinetic.RuntimeConfig
 
+  @max_chain_source_bytes 1_024 * 1_024
+  @max_chain_step_bytes 32 * 1_024
+  @max_chain_steps 128
+
   defmacro __using__(_opts) do
     quote do
       Module.register_attribute(__MODULE__, :al, persist: false)
@@ -168,7 +172,8 @@ defmodule SpectreKinetic do
   def plan_chain(target, text_or_lines, opts \\ [])
 
   def plan_chain(target, text, opts) when is_binary(text) do
-    with :ok <- RuntimeConfig.validate_options(opts) do
+    with :ok <- RuntimeConfig.validate_options(opts),
+         :ok <- validate_chain_source(text) do
       opts = normalize_plan_opts(opts)
       scan = Extractor.scan(text)
       {:ok, build_chain_from_scan(target, scan, opts)}
@@ -176,10 +181,14 @@ defmodule SpectreKinetic do
   end
 
   def plan_chain(target, al_lines, opts) when is_list(al_lines) do
-    with :ok <- RuntimeConfig.validate_options(opts) do
+    with :ok <- RuntimeConfig.validate_options(opts),
+         :ok <- validate_chain_lines(al_lines) do
       {:ok, build_chain(target, al_lines, normalize_plan_opts(opts))}
     end
   end
+
+  def plan_chain(_target, _text_or_lines, _opts),
+    do: chain_validation_error(:must_be_binary_or_list)
 
   @doc """
   Adds one tool definition to the active in-memory registry.
@@ -365,6 +374,44 @@ defmodule SpectreKinetic do
 
   defp normalize_plan_opts(opts) when is_map(opts), do: Map.to_list(opts)
   defp normalize_plan_opts(opts), do: opts
+
+  defp validate_chain_source(text) do
+    cond do
+      not String.valid?(text) -> chain_validation_error(:must_be_utf8_binary)
+      byte_size(text) > @max_chain_source_bytes -> chain_validation_error(:exceeds_size_limit)
+      true -> :ok
+    end
+  end
+
+  defp validate_chain_lines(lines), do: validate_chain_lines(lines, 0, 0)
+  defp validate_chain_lines([], _count, _total_bytes), do: :ok
+
+  defp validate_chain_lines([_line | _rest], @max_chain_steps, _total_bytes),
+    do: chain_validation_error(:too_many_steps)
+
+  defp validate_chain_lines([line | rest], count, total_bytes) when is_binary(line) do
+    next_total = total_bytes + byte_size(line)
+
+    cond do
+      not String.valid?(line) ->
+        chain_validation_error(:must_contain_utf8_binaries)
+
+      byte_size(line) > @max_chain_step_bytes or next_total > @max_chain_source_bytes ->
+        chain_validation_error(:exceeds_size_limit)
+
+      true ->
+        validate_chain_lines(rest, count + 1, next_total)
+    end
+  end
+
+  defp validate_chain_lines([_invalid | _rest], _count, _total_bytes),
+    do: chain_validation_error(:must_contain_utf8_binaries)
+
+  defp validate_chain_lines(_improper, _count, _total_bytes),
+    do: chain_validation_error(:must_be_proper_list)
+
+  defp chain_validation_error(reason),
+    do: {:error, {:invalid_request, [%{field: :chain, reason: reason}]}}
 
   defp extract_tool_params(args) do
     args
