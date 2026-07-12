@@ -6,6 +6,13 @@ defmodule SpectreKinetic.Extractor.Tags do
 
   alias SpectreKinetic.Parser.Syntax
 
+  @type segment :: %{
+          kind: :closed | :open,
+          start: non_neg_integer(),
+          stop: non_neg_integer(),
+          raw: binary()
+        }
+
   # XML-ish <al> segments inside one line. The scanner handles multi-line state;
   # this module only cuts a line into clean text plus raw AL candidates.
 
@@ -21,6 +28,11 @@ defmodule SpectreKinetic.Extractor.Tags do
         {:tag_open, IO.iodata_to_binary(Enum.reverse(clean_parts)),
          IO.iodata_to_binary(Enum.reverse(parts))}
     end
+  end
+
+  @spec locate_segments(binary()) :: [segment()]
+  def locate_segments(line) when is_binary(line) do
+    locate_segments(line, 0, [])
   end
 
   @spec split_close(binary(), binary()) :: {:ok, binary(), binary()} | :not_found
@@ -83,6 +95,40 @@ defmodule SpectreKinetic.Extractor.Tags do
 
       :nomatch ->
         :not_found
+    end
+  end
+
+  defp locate_segments(line, minimum_index, segments) do
+    case Syntax.find_unquoted_regex(line, @open_tag_pattern, minimum_index) do
+      {open_index, open_size} ->
+        content_index = open_index + open_size
+
+        case Syntax.find_unquoted_regex(line, @close_tag_pattern, content_index) do
+          {close_index, close_size} ->
+            stop = close_index + close_size
+
+            segment = %{
+              kind: :closed,
+              start: open_index,
+              stop: stop,
+              raw: binary_part(line, content_index, close_index - content_index)
+            }
+
+            locate_segments(line, stop, [segment | segments])
+
+          :nomatch ->
+            segment = %{
+              kind: :open,
+              start: open_index,
+              stop: byte_size(line),
+              raw: binary_part(line, content_index, byte_size(line) - content_index)
+            }
+
+            Enum.reverse([segment | segments])
+        end
+
+      :nomatch ->
+        Enum.reverse(segments)
     end
   end
 end

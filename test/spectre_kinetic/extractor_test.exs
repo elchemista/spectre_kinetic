@@ -105,6 +105,36 @@ defmodule SpectreKinetic.ExtractorTest do
     assert {^response, []} = SpectreKinetic.extract_al(response)
   end
 
+  test "same-line tags and inline fences preserve source order" do
+    fence_before_tag =
+      ~S(Before ```al SEND EMAIL``` then <al>DELETE MESSAGE</al> after.)
+
+    tag_before_fence =
+      ~S(Before <al>DELETE MESSAGE</al> then ```al SEND EMAIL``` after.)
+
+    assert {"Before  then  after.", ["SEND EMAIL", "DELETE MESSAGE"]} =
+             SpectreKinetic.extract_al(fence_before_tag)
+
+    assert {"Before  then  after.", ["DELETE MESSAGE", "SEND EMAIL"]} =
+             SpectreKinetic.extract_al(tag_before_fence)
+
+    assert {"then", ["SEND EMAIL", "DELETE MESSAGE"]} =
+             SpectreKinetic.extract_al(
+               ~S(```al SEND EMAIL``` then <al>DELETE MESSAGE</al>)
+             )
+  end
+
+  test "same-line ordered wrappers ignore quoted wrapper examples" do
+    response =
+      ~S("```al DELETE ACCOUNT```" <al>SEND MESSAGE</al> "<al>DROP DATABASE</al>" ```al LIST DIRECTORY```)
+
+    assert {clean_text, ["SEND MESSAGE", "LIST DIRECTORY"]} =
+             SpectreKinetic.extract_al(response)
+
+    assert clean_text =~ ~S("```al DELETE ACCOUNT```")
+    assert clean_text =~ ~S("<al>DROP DATABASE</al>")
+  end
+
   test "apostrophes in prose do not hide later AL wrappers" do
     response = ~S(Here's the action: <al>SEND MESSAGE</al>)
 

@@ -9,6 +9,13 @@ defmodule SpectreKinetic.Extractor.Fences do
 
   alias SpectreKinetic.Parser.Syntax
 
+  @type segment :: %{
+          kind: :closed,
+          start: non_neg_integer(),
+          stop: non_neg_integer(),
+          raw: binary()
+        }
+
   @spec parse_open(binary()) ::
           {:al_inline, binary()}
           | {:al_open, binary(), binary()}
@@ -49,6 +56,11 @@ defmodule SpectreKinetic.Extractor.Fences do
       {:ok, clean_parts, raws} ->
         {:ok, IO.iodata_to_binary(Enum.reverse(clean_parts)), Enum.reverse(raws)}
     end
+  end
+
+  @spec locate_inline_segments(binary()) :: [segment()]
+  def locate_inline_segments(line) when is_binary(line) do
+    locate_inline_segments(line, 0, [])
   end
 
   # Opening fences can be one-line AL, multi-line AL, or plain Markdown. The
@@ -172,14 +184,50 @@ defmodule SpectreKinetic.Extractor.Fences do
 
   # Pick whichever fence delimiter appears first. Simple, explicit, less clever
   # than a regex pretending to be a parser.
-  defp next_inline_fence(line) do
-    [find_delimiter(line, "```"), find_delimiter(line, "~~~")]
+  defp locate_inline_segments(line, minimum_index, segments) do
+    case next_inline_fence(line, minimum_index) do
+      :not_found ->
+        Enum.reverse(segments)
+
+      {index, delimiter} ->
+        rest = binary_part(line, index, byte_size(line) - index)
+
+        case parse_inline_al_fence(rest, delimiter) do
+          {:ok, raw, after_close} ->
+            stop = byte_size(line) - byte_size(after_close)
+
+            segment = %{kind: :closed, start: index, stop: stop, raw: raw}
+            locate_inline_segments(line, stop, [segment | segments])
+
+          :not_inline ->
+            Enum.reverse(segments)
+
+          :not_al ->
+            locate_inline_segments(line, skip_plain_inline(line, index, delimiter), segments)
+        end
+    end
+  end
+
+  defp skip_plain_inline(line, index, delimiter) do
+    after_open = index + byte_size(delimiter)
+
+    case Syntax.find_unquoted_token(line, delimiter, after_open) do
+      {close_index, close_size} -> close_index + close_size
+      :nomatch -> byte_size(line)
+    end
+  end
+
+  defp next_inline_fence(line, minimum_index \\ 0) do
+    [
+      find_delimiter(line, "```", minimum_index),
+      find_delimiter(line, "~~~", minimum_index)
+    ]
     |> Enum.reject(&(&1 == :not_found))
     |> Enum.min_by(fn {index, _delimiter} -> index end, fn -> :not_found end)
   end
 
-  defp find_delimiter(line, delimiter) do
-    case Syntax.find_unquoted_token(line, delimiter) do
+  defp find_delimiter(line, delimiter, minimum_index) do
+    case Syntax.find_unquoted_token(line, delimiter, minimum_index) do
       {index, _size} -> {index, delimiter}
       :nomatch -> :not_found
     end
