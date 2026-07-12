@@ -22,6 +22,7 @@ defmodule SpectreKinetic.Planner.Runtime do
     :encoder,
     :reranker_module,
     :reranker,
+    :allow_empty_registry,
     :defaults,
     :classifiers,
     :chain_classifiers
@@ -33,6 +34,7 @@ defmodule SpectreKinetic.Planner.Runtime do
           encoder: EmbeddingRuntime.runtime_t() | nil,
           reranker_module: module(),
           reranker: term() | nil,
+          allow_empty_registry: boolean(),
           defaults: keyword(),
           classifiers: [module() | {module(), keyword()}],
           chain_classifiers: [module() | {module(), keyword()}]
@@ -121,15 +123,7 @@ defmodule SpectreKinetic.Planner.Runtime do
   @spec reload_registry(t(), binary()) :: {:ok, t()} | {:error, term()}
   def reload_registry(%__MODULE__{} = runtime, path) do
     start = System.monotonic_time()
-    embedding_attempted? = Embeddings.reembed_after_reload?(runtime, path)
-
-    result =
-      with {:ok, registry} <-
-             Loader.reload_registry(runtime.registry_module, runtime.registry, path) do
-        runtime
-        |> Map.put(:registry, registry)
-        |> Embeddings.reembed_after_reload(path)
-      end
+    {result, embedding_attempted?} = stage_and_swap_registry(runtime, path)
 
     emit_registry_event(@registry_reload_event, start, runtime, result, %{
       path: path,
@@ -185,6 +179,29 @@ defmodule SpectreKinetic.Planner.Runtime do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp stage_and_swap_registry(runtime, path) do
+    opts = [allow_empty_registry: runtime.allow_empty_registry]
+
+    case Loader.stage_registry(runtime.registry_module, path, opts) do
+      {:ok, registry} ->
+        staged_runtime = %{runtime | registry: registry}
+        embedding_attempted? = Embeddings.reembed_after_reload?(staged_runtime, path)
+
+        case Embeddings.reembed_after_reload(staged_runtime, path) do
+          {:ok, next_runtime} ->
+            runtime.registry_module.close(runtime.registry)
+            {{:ok, next_runtime}, embedding_attempted?}
+
+          {:error, _reason} = error ->
+            runtime.registry_module.close(registry)
+            {error, embedding_attempted?}
+        end
+
+      {:error, _reason} = error ->
+        {error, false}
+    end
+  end
 
   defp emit_registry_event(
          event,

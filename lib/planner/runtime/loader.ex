@@ -51,6 +51,7 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
          encoder: encoder,
          reranker_module: reranker_module,
          reranker: reranker,
+         allow_empty_registry: Keyword.get(opts, :allow_empty_registry, false),
          defaults: planner_defaults(opts),
          classifiers: classifiers,
          chain_classifiers: chain_classifiers
@@ -70,15 +71,34 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
     end
   end
 
-  @spec reload_registry(module(), term(), binary()) :: {:ok, term()} | {:error, term()}
-  def reload_registry(registry_module, registry, path) do
+  @spec stage_registry(module(), binary(), keyword()) :: {:ok, term()} | {:error, term()}
+  def stage_registry(registry_module, path, opts \\ []) do
     case registry_loader(registry_module, path) do
       :unknown ->
         {:error, :unknown_registry_format}
 
       {:ok, loader} ->
-        loader.(registry, path)
+        with {:ok, registry} <- registry_module.new([]) do
+          case loader.(registry, path) do
+            {:ok, registry} -> validate_staged_registry(registry_module, registry, opts)
+            {:error, _reason} = error -> close_staged(registry_module, registry, error)
+          end
+        end
     end
+  end
+
+  defp validate_staged_registry(registry_module, registry, opts) do
+    if registry_module.action_count(registry) > 0 or
+         Keyword.get(opts, :allow_empty_registry, false) do
+      {:ok, registry}
+    else
+      close_staged(registry_module, registry, {:error, :empty_registry})
+    end
+  end
+
+  defp close_staged(registry_module, registry, result) do
+    registry_module.close(registry)
+    result
   end
 
   defp planner_defaults(opts) do

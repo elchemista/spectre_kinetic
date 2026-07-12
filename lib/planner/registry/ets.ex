@@ -36,10 +36,10 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   @impl Registry
   def load_json(%__MODULE__{} = registry, path) do
     with {:ok, payload} <- File.read(path),
-         {:ok, decoded} <- Jason.decode(payload) do
-      decoded
-      |> Map.get("actions", Map.get(decoded, "tools", []))
-      |> reload_actions(registry, path)
+         {:ok, decoded} <- Jason.decode(payload),
+         {:ok, actions} <- json_actions(decoded),
+         {:ok, actions} <- normalize_actions(actions) do
+      replace_actions(registry, actions, path)
     else
       {:error, reason} -> {:error, normalize_file_error(reason)}
     end
@@ -50,25 +50,10 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     case File.read(path) do
       {:ok, binary} ->
         try do
-          bundle = :erlang.binary_to_term(binary)
-          clear_tables(registry)
-
-          bundle
-          |> Map.fetch!(:actions)
-          |> Enum.each(&insert_action(registry, &1))
-
-          bundle
-          |> Map.get(:tool_embeddings, [])
-          |> Enum.zip(Map.get(bundle, :action_ids, []))
-          |> Enum.each(fn {embedding, action_id} ->
-            :ets.insert(registry.embeddings, {action_id, embedding})
-          end)
-
-          Logger.info(
-            "Planner ETS registry loaded #{action_count(registry)} actions from #{path}"
-          )
-
-          {:ok, registry}
+          binary
+          |> :erlang.binary_to_term()
+          |> normalize_compiled_bundle()
+          |> install_compiled_bundle(registry, path)
         rescue
           error ->
             {:error, {:bad_etf, Exception.message(error)}}
@@ -204,24 +189,87 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
 
   defp normalize_file_error(reason), do: reason
 
-  defp reload_actions(actions, registry, path) do
-    clear_tables(registry)
+  defp json_actions(decoded) when is_map(decoded) do
+    actions = Map.get(decoded, "actions", Map.get(decoded, "tools", []))
 
-    Enum.each(actions, fn raw ->
-      insert_normalized_action(registry, raw, path)
+    if is_list(actions), do: {:ok, actions}, else: {:error, :invalid_registry_actions}
+  end
+
+  defp json_actions(_decoded), do: {:error, :invalid_registry}
+
+  defp normalize_actions(actions) when is_list(actions) do
+    actions
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {raw, index}, {:ok, normalized} ->
+      case Registry.normalize_action(raw) do
+        {:ok, action} -> {:cont, {:ok, [action | normalized]}}
+        {:error, reason} -> {:halt, {:error, {:invalid_action, index, reason}}}
+      end
+    end)
+    |> then(fn
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      {:error, _reason} = error -> error
+    end)
+  end
+
+  defp normalize_actions(_actions), do: {:error, :invalid_registry_actions}
+
+  defp normalize_compiled_bundle(bundle) when is_map(bundle) do
+    with {:ok, raw_actions} <- Map.fetch(bundle, :actions),
+         {:ok, actions} <- normalize_actions(raw_actions),
+         {:ok, embedding_entries} <- compiled_embedding_entries(bundle, actions) do
+      {:ok, actions, embedding_entries}
+    else
+      :error -> {:error, :missing_actions}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp normalize_compiled_bundle(_bundle), do: {:error, :invalid_bundle}
+
+  defp compiled_embedding_entries(bundle, actions) do
+    embeddings = Map.get(bundle, :tool_embeddings, [])
+    action_ids = Map.get(bundle, :action_ids, [])
+    known_ids = actions |> Enum.map(& &1["id"]) |> MapSet.new()
+
+    cond do
+      not is_list(embeddings) or not is_list(action_ids) ->
+        {:error, :invalid_embedding_entries}
+
+      length(embeddings) != length(action_ids) ->
+        {:error, :embedding_count_mismatch}
+
+      Enum.any?(action_ids, fn action_id -> not MapSet.member?(known_ids, action_id) end) ->
+        {:error, :unknown_embedding_action}
+
+      true ->
+        {:ok, Enum.zip(embeddings, action_ids)}
+    end
+  end
+
+  defp install_compiled_bundle(
+         {:ok, actions, embedding_entries},
+         registry,
+         path
+       ) do
+    clear_tables(registry)
+    Enum.each(actions, &insert_action(registry, &1))
+
+    Enum.each(embedding_entries, fn {embedding, action_id} ->
+      :ets.insert(registry.embeddings, {action_id, embedding})
     end)
 
     Logger.info("Planner ETS registry loaded #{action_count(registry)} actions from #{path}")
     {:ok, registry}
   end
 
-  defp insert_normalized_action(registry, raw, path) do
-    case Registry.normalize_action(raw) do
-      {:ok, action} ->
-        insert_action(registry, action)
+  defp install_compiled_bundle({:error, _reason} = error, _registry, _path), do: error
 
-      {:error, reason} ->
-        Logger.warning("Skipping invalid action from #{path}: #{inspect(reason)}")
-    end
+  defp replace_actions(registry, actions, path) do
+    clear_tables(registry)
+    Enum.each(actions, &insert_action(registry, &1))
+
+    Logger.info("Planner ETS registry loaded #{action_count(registry)} actions from #{path}")
+    {:ok, registry}
   end
 end

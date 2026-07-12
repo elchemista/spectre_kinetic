@@ -35,6 +35,20 @@ defmodule SpectreKinetic.RuntimeTest do
     end
   end
 
+  defmodule FailingEncoder do
+    use GenServer
+
+    def start_link(), do: GenServer.start_link(__MODULE__, nil)
+
+    @impl GenServer
+    def init(state), do: {:ok, state}
+
+    @impl GenServer
+    def handle_call({:embed_batch, _texts}, _from, state) do
+      {:reply, {:error, :embedding_failed}, state}
+    end
+  end
+
   test "load_runtime/1 emits skipped optional ML load telemetry" do
     registry_json = write_registry_json([email_action()])
 
@@ -130,13 +144,49 @@ defmodule SpectreKinetic.RuntimeTest do
     notes_json = write_registry_json([note_delete_action()])
 
     {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: email_json)
+    previous_registry = runtime.registry
     assert SpectreKinetic.action_count(runtime) == 1
 
     assert {:ok, runtime} = SpectreKinetic.reload_registry(runtime, notes_json)
     assert SpectreKinetic.action_count(runtime) == 1
+    assert :ets.info(previous_registry.actions) == :undefined
 
     assert {:ok, action} = SpectreKinetic.plan(runtime, "DELETE NOTE ENTRY WITH: ID=note-1")
     assert action.selected_tool == "Dynamic.Note.delete/1"
+  end
+
+  test "runtime reload preserves the active registry when validation fails" do
+    email_json = write_registry_json([email_action()])
+    invalid_json = write_registry_json([note_delete_action(), %{}])
+
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: email_json)
+    active_registry = runtime.registry
+
+    assert {:error, {:invalid_action, 1, :missing_id}} =
+             SpectreKinetic.reload_registry(runtime, invalid_json)
+
+    assert :ets.info(active_registry.actions) != :undefined
+    assert SpectreKinetic.action_count(runtime) == 1
+    assert ETS.get_action(active_registry, "Dynamic.Email.send/3") != nil
+    assert ETS.get_action(active_registry, "Dynamic.Note.delete/1") == nil
+  end
+
+  test "runtime reload preserves the active registry when embedding fails" do
+    email_json = write_registry_json([email_action()])
+    notes_json = write_registry_json([note_delete_action()])
+
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: email_json)
+    {:ok, encoder} = FailingEncoder.start_link()
+    runtime = %{runtime | encoder: encoder}
+    active_registry = runtime.registry
+
+    assert {:error, :embedding_failed} =
+             SpectreKinetic.reload_registry(runtime, notes_json)
+
+    assert :ets.info(active_registry.actions) != :undefined
+    assert SpectreKinetic.action_count(runtime) == 1
+    assert ETS.get_action(active_registry, "Dynamic.Email.send/3") != nil
+    assert ETS.get_action(active_registry, "Dynamic.Note.delete/1") == nil
   end
 
   test "load_runtime/1 accepts compiled registries without requiring an encoder" do
