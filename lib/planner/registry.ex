@@ -347,32 +347,41 @@ defmodule SpectreKinetic.Planner.Registry do
     end
   end
 
+  @spec normalize_aliases(term(), non_neg_integer()) :: {:ok, [binary()]} | {:error, term()}
   defp normalize_aliases(aliases, index) when is_list(aliases) do
     if list_exceeds_limit?(aliases, @max_aliases) do
       {:error, {:invalid_field, "aliases", :too_many_entries}}
     else
-      aliases
-      |> Enum.reduce_while({:ok, []}, fn alias_name, {:ok, normalized} ->
-        case alias_name do
-          value when is_binary(value) ->
-            case non_blank_string(value, "aliases") do
-              {:ok, value} -> {:cont, {:ok, [value | normalized]}}
-              {:error, _reason} = error -> {:halt, error}
-            end
-
-          _value ->
-            {:halt, {:error, {:invalid_field, "aliases", :must_contain_strings}}}
-        end
-      end)
-      |> then(fn
-        {:ok, normalized} -> validate_alias_duplicates(Enum.reverse(normalized), index)
+      case normalize_non_blank_strings(aliases, "aliases", :must_contain_strings) do
+        {:ok, normalized} -> validate_alias_duplicates(normalized, index)
         {:error, _reason} = error -> error
-      end)
+      end
     end
   end
 
   defp normalize_aliases(_aliases, _index),
     do: {:error, {:invalid_field, "aliases", :must_be_list}}
+
+  @spec normalize_non_blank_strings([term()], binary(), atom()) ::
+          {:ok, [binary()]} | {:error, term()}
+  defp normalize_non_blank_strings(values, field, non_binary_reason) do
+    values
+    |> Enum.reduce_while({:ok, []}, fn value, {:ok, normalized} ->
+      case normalize_non_blank_string(value, field, non_binary_reason) do
+        {:ok, value} -> {:cont, {:ok, [value | normalized]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> reverse_normalized_list()
+  end
+
+  @spec normalize_non_blank_string(term(), binary(), atom()) ::
+          {:ok, binary()} | {:error, term()}
+  defp normalize_non_blank_string(value, field, _non_binary_reason) when is_binary(value),
+    do: non_blank_string(value, field)
+
+  defp normalize_non_blank_string(_value, field, non_binary_reason),
+    do: {:error, {:invalid_field, field, non_binary_reason}}
 
   defp validate_alias_duplicates(aliases, index) do
     normalized = Enum.map(aliases, &String.downcase/1)
