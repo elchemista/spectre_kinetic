@@ -13,6 +13,7 @@ defmodule SpectreKinetic.Planner.RegistryStore do
   alias SpectreKinetic.Planner.Registry.ETS
 
   @type t :: GenServer.server()
+  @typep state :: %{required(:registry_module) => module(), required(:registry) => term()}
 
   @doc """
   Starts the registry store process.
@@ -118,22 +119,26 @@ defmodule SpectreKinetic.Planner.RegistryStore do
 
   @impl GenServer
   def handle_call({:load_json, path}, _from, state) do
-    with :ok <- validate_registry_path(path) do
-      reply_with_registry_update(state, :load_json, fn module, registry ->
-        module.load_json(registry, path)
-      end)
-    else
-      {:error, _reason} = error -> {:reply, error, state}
+    case validate_registry_path(path) do
+      :ok ->
+        reply_with_registry_update(state, :load_json, fn module, registry ->
+          module.load_json(registry, path)
+        end)
+
+      {:error, _reason} = error ->
+        {:reply, error, state}
     end
   end
 
   def handle_call({:load_compiled, path}, _from, state) do
-    with :ok <- validate_registry_path(path) do
-      reply_with_registry_update(state, :load_compiled, fn module, registry ->
-        module.load_compiled(registry, path)
-      end)
-    else
-      {:error, _reason} = error -> {:reply, error, state}
+    case validate_registry_path(path) do
+      :ok ->
+        reply_with_registry_update(state, :load_compiled, fn module, registry ->
+          module.load_compiled(registry, path)
+        end)
+
+      {:error, _reason} = error ->
+        {:reply, error, state}
     end
   end
 
@@ -216,6 +221,8 @@ defmodule SpectreKinetic.Planner.RegistryStore do
     :ok
   end
 
+  @spec reply_with_registry_update(state(), atom(), (module(), term() -> term())) ::
+          {:reply, :ok | {:error, term()}, state()}
   defp reply_with_registry_update(state, operation, callback) do
     case safe_backend_call(fn -> callback.(state.registry_module, state.registry) end) do
       {:ok, {:ok, registry}} ->
@@ -232,6 +239,8 @@ defmodule SpectreKinetic.Planner.RegistryStore do
     end
   end
 
+  @spec reply_with_registry_read(state(), atom(), (module(), term() -> term())) ::
+          {:reply, term(), state()}
   defp reply_with_registry_read(state, operation, callback) do
     case safe_backend_call(fn -> callback.(state.registry_module, state.registry) end) do
       {:ok, value} -> {:reply, value, state}
@@ -239,6 +248,9 @@ defmodule SpectreKinetic.Planner.RegistryStore do
     end
   end
 
+  # Registry backends are extension points. A faulty backend must produce a
+  # structured error instead of terminating this compatibility server.
+  @spec safe_backend_call((-> result)) :: {:ok, result} | {:error, term()} when result: term()
   defp safe_backend_call(callback) do
     {:ok, callback.()}
   rescue
@@ -247,6 +259,7 @@ defmodule SpectreKinetic.Planner.RegistryStore do
     kind, reason -> {:error, {kind, reason}}
   end
 
+  @spec validate_registry_path(term()) :: :ok | {:error, {:invalid_registry_input, :path}}
   defp validate_registry_path(path) when is_binary(path) do
     if String.valid?(path) and byte_size(path) <= 4_096 and String.trim(path) != "" and
          not String.contains?(path, <<0>>),
