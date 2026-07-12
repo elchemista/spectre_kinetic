@@ -740,7 +740,7 @@ defmodule Mix.Tasks.Spectre.DownloadEncoder do
   @spec sha256_file(Path.t()) :: {:ok, binary()} | {:error, term()}
   defp sha256_file(path) do
     path
-    |> File.stream!([], 1_048_576)
+    |> File.stream!(1_048_576, [])
     |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))
     |> :crypto.hash_final()
     |> Base.encode16(case: :lower)
