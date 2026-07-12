@@ -644,9 +644,7 @@ defmodule SpectreKinetic.RuntimeConfig do
           slot_validation()
   defp validate_slot_entry(key, value, depth, budget) do
     with {:ok, budget} <- validate_slot_key(key, budget),
-         {:ok, budget} <- validate_slot_value(value, depth + 1, budget) do
-      {:ok, budget}
-    end
+         do: validate_slot_value(value, depth + 1, budget)
   end
 
   defp validate_slot_key(key, budget) when is_atom(key), do: consume_slot_node(budget)
