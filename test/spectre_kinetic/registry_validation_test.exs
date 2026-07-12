@@ -57,6 +57,44 @@ defmodule SpectreKinetic.RegistryValidationTest do
     assert ETS.action_count(registry) == 1
   end
 
+  test "registry JSON reads and schema collections are bounded" do
+    {:ok, registry} = ETS.new()
+    {:ok, registry} = ETS.add_action(registry, action())
+    on_exit(fn -> ETS.close(registry) end)
+
+    oversized_path = write_raw_registry(String.duplicate(" ", 4 * 1_024 * 1_024 + 1))
+
+    assert {:error, {:artifact_too_large, ^oversized_path, _size, 4_194_304}} =
+             ETS.load_json(registry, oversized_path)
+
+    too_many_actions =
+      Enum.map(1..1_001, fn index ->
+        %{
+          "id" => "Example.run_#{index}/0",
+          "module" => "Example",
+          "name" => "run_#{index}",
+          "arity" => 0,
+          "args" => []
+        }
+      end)
+
+    assert {:error, {:too_many_actions, 1_001, 1_000}} =
+             ETS.load_json(registry, write_registry(too_many_actions))
+
+    assert {:error, {:invalid_field, "args", :too_many_entries}} =
+             Registry.normalize_action(%{
+               action()
+               | "arity" => 129,
+                 "id" => "Example.run/129",
+                 "args" => Enum.map(1..129, &%{"name" => "arg_#{&1}"})
+             })
+
+    assert {:error, {:invalid_field, "doc", :exceeds_size_limit}} =
+             Registry.normalize_action(%{action() | "doc" => String.duplicate("x", 65_537)})
+
+    assert ETS.action_count(registry) == 1
+  end
+
   defp action do
     %{
       "id" => "Example.run/1",
@@ -76,6 +114,18 @@ defmodule SpectreKinetic.RegistryValidationTest do
       )
 
     File.write!(path, Jason.encode!(%{"actions" => actions}))
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
+  defp write_raw_registry(contents) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "spectre-kinetic-raw-registry-#{System.unique_integer([:positive])}.json"
+      )
+
+    File.write!(path, contents)
     on_exit(fn -> File.rm(path) end)
     path
   end

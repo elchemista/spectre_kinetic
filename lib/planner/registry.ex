@@ -38,6 +38,20 @@ defmodule SpectreKinetic.Planner.Registry do
   @type action :: map()
   @type embedding_matrix :: {Nx.Tensor.t(), [binary()]}
 
+  @max_args 128
+  @max_aliases 64
+  @max_examples 64
+  @string_byte_limits %{
+    "module" => 512,
+    "name" => 256,
+    "id" => 1_024,
+    "doc" => 64 * 1_024,
+    "spec" => 64 * 1_024,
+    "type" => 1_024,
+    "aliases" => 256,
+    "examples" => 8 * 1_024
+  }
+
   @callback new(keyword()) :: {:ok, term()} | {:error, term()}
   @callback owner(term()) :: pid() | :shared
   @callback new_staging(term(), keyword()) :: {:ok, term()} | {:error, term()}
@@ -231,10 +245,15 @@ defmodule SpectreKinetic.Planner.Registry do
   end
 
   defp valid_string(value, key) do
-    if String.valid?(value) do
-      {:ok, value}
-    else
-      {:error, {:invalid_field, key, :must_be_utf8}}
+    cond do
+      not String.valid?(value) ->
+        {:error, {:invalid_field, key, :must_be_utf8}}
+
+      byte_size(value) > Map.get(@string_byte_limits, key, 1_024) ->
+        {:error, {:invalid_field, key, :exceeds_size_limit}}
+
+      true ->
+        {:ok, value}
     end
   end
 
@@ -264,18 +283,22 @@ defmodule SpectreKinetic.Planner.Registry do
     do: {:error, {:invalid_field, "id", :must_be_string}}
 
   defp normalize_args(args) when is_list(args) do
-    args
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, []}, fn {arg, index}, {:ok, normalized} ->
-      case normalize_arg(arg, index) do
-        {:ok, next} -> {:cont, {:ok, [next | normalized]}}
-        {:error, _reason} = error -> {:halt, error}
-      end
-    end)
-    |> then(fn
-      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
-      {:error, _reason} = error -> error
-    end)
+    if list_exceeds_limit?(args, @max_args) do
+      {:error, {:invalid_field, "args", :too_many_entries}}
+    else
+      args
+      |> Enum.with_index()
+      |> Enum.reduce_while({:ok, []}, fn {arg, index}, {:ok, normalized} ->
+        case normalize_arg(arg, index) do
+          {:ok, next} -> {:cont, {:ok, [next | normalized]}}
+          {:error, _reason} = error -> {:halt, error}
+        end
+      end)
+      |> then(fn
+        {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+        {:error, _reason} = error -> error
+      end)
+    end
   end
 
   defp normalize_args(_args), do: {:error, {:invalid_field, "args", :must_be_list}}
@@ -317,23 +340,27 @@ defmodule SpectreKinetic.Planner.Registry do
   end
 
   defp normalize_aliases(aliases, index) when is_list(aliases) do
-    aliases
-    |> Enum.reduce_while({:ok, []}, fn alias_name, {:ok, normalized} ->
-      case alias_name do
-        value when is_binary(value) ->
-          case non_blank_string(value, "aliases") do
-            {:ok, value} -> {:cont, {:ok, [value | normalized]}}
-            {:error, _reason} = error -> {:halt, error}
-          end
+    if list_exceeds_limit?(aliases, @max_aliases) do
+      {:error, {:invalid_field, "aliases", :too_many_entries}}
+    else
+      aliases
+      |> Enum.reduce_while({:ok, []}, fn alias_name, {:ok, normalized} ->
+        case alias_name do
+          value when is_binary(value) ->
+            case non_blank_string(value, "aliases") do
+              {:ok, value} -> {:cont, {:ok, [value | normalized]}}
+              {:error, _reason} = error -> {:halt, error}
+            end
 
-        _value ->
-          {:halt, {:error, {:invalid_field, "aliases", :must_contain_strings}}}
-      end
-    end)
-    |> then(fn
-      {:ok, normalized} -> validate_alias_duplicates(Enum.reverse(normalized), index)
-      {:error, _reason} = error -> error
-    end)
+          _value ->
+            {:halt, {:error, {:invalid_field, "aliases", :must_contain_strings}}}
+        end
+      end)
+      |> then(fn
+        {:ok, normalized} -> validate_alias_duplicates(Enum.reverse(normalized), index)
+        {:error, _reason} = error -> error
+      end)
+    end
   end
 
   defp normalize_aliases(_aliases, _index),
@@ -406,15 +433,41 @@ defmodule SpectreKinetic.Planner.Registry do
   end
 
   defp normalize_examples(examples) when is_list(examples) do
-    if Enum.all?(examples, &(is_binary(&1) and String.valid?(&1) and String.trim(&1) != "")) do
-      {:ok, examples}
-    else
-      {:error, {:invalid_field, "examples", :must_contain_non_blank_strings}}
+    cond do
+      list_exceeds_limit?(examples, @max_examples) ->
+        {:error, {:invalid_field, "examples", :too_many_entries}}
+
+      true ->
+        examples
+        |> Enum.reduce_while({:ok, []}, fn example, {:ok, normalized} ->
+          case example do
+            value when is_binary(value) ->
+              case non_blank_string(value, "examples") do
+                {:ok, value} -> {:cont, {:ok, [value | normalized]}}
+                {:error, _reason} = error -> {:halt, error}
+              end
+
+            _value ->
+              {:halt,
+               {:error,
+                {:invalid_field, "examples", :must_contain_non_blank_strings}}}
+          end
+        end)
+        |> then(fn
+          {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+          {:error, _reason} = error -> error
+        end)
     end
   end
 
   defp normalize_examples(_examples),
     do: {:error, {:invalid_field, "examples", :must_be_list}}
+
+  defp list_exceeds_limit?([], _remaining), do: false
+  defp list_exceeds_limit?([_head | _tail], 0), do: true
+
+  defp list_exceeds_limit?([_head | tail], remaining),
+    do: list_exceeds_limit?(tail, remaining - 1)
 
   defp stringify_map(map) when is_map(map) do
     Map.new(map, fn

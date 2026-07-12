@@ -18,6 +18,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   @compiled_bundle_version 2
   @legacy_compiled_bundle_version 1
   @f32_max 3.4028234663852886e38
+  @max_actions 1_000
 
   defstruct [:actions, :aliases, :embeddings, :meta, :owner]
 
@@ -75,8 +76,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     do: not_owner(owner)
 
   def load_json(%__MODULE__{} = registry, path) do
-    with {:ok, payload} <- File.read(path),
-         {:ok, decoded} <- Jason.decode(payload),
+    with {:ok, decoded} <- Artifact.read_json(path),
          {:ok, actions} <- json_actions(decoded),
          {:ok, actions} <- normalize_actions(actions) do
       replace_actions(registry, actions, path)
@@ -146,12 +146,21 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   def upsert_action(%__MODULE__{} = registry, action, embedding) do
     case Registry.normalize_action(action) do
       {:ok, normalized} ->
-        replace_action(registry, normalized, embedding)
-        {:ok, registry}
+        if new_action_over_limit?(registry, normalized["id"]) do
+          {:error, {:too_many_actions, action_count(registry) + 1, @max_actions}}
+        else
+          replace_action(registry, normalized, embedding)
+          {:ok, registry}
+        end
 
       {:error, _reason} = error ->
         error
     end
+  end
+
+  defp new_action_over_limit?(registry, action_id) do
+    action_count(registry) >= @max_actions and
+      not :ets.member(registry.actions, action_id)
   end
 
   @impl Registry
@@ -296,18 +305,22 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   defp json_actions(_decoded), do: {:error, :invalid_registry}
 
   defp normalize_actions(actions) when is_list(actions) do
-    actions
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, []}, fn {raw, index}, {:ok, normalized} ->
-      case Registry.normalize_action(raw) do
-        {:ok, action} -> {:cont, {:ok, [action | normalized]}}
-        {:error, reason} -> {:halt, {:error, {:invalid_action, index, reason}}}
-      end
-    end)
-    |> then(fn
-      {:ok, normalized} -> validate_unique_action_ids(Enum.reverse(normalized))
-      {:error, _reason} = error -> error
-    end)
+    if length(actions) > @max_actions do
+      {:error, {:too_many_actions, length(actions), @max_actions}}
+    else
+      actions
+      |> Enum.with_index()
+      |> Enum.reduce_while({:ok, []}, fn {raw, index}, {:ok, normalized} ->
+        case Registry.normalize_action(raw) do
+          {:ok, action} -> {:cont, {:ok, [action | normalized]}}
+          {:error, reason} -> {:halt, {:error, {:invalid_action, index, reason}}}
+        end
+      end)
+      |> then(fn
+        {:ok, normalized} -> validate_unique_action_ids(Enum.reverse(normalized))
+        {:error, _reason} = error -> error
+      end)
+    end
   end
 
   defp normalize_actions(_actions), do: {:error, :invalid_registry_actions}
