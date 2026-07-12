@@ -77,33 +77,47 @@ defmodule SpectreKinetic.Planner.Registry do
       [%{"name" => "to", "type" => "String.t()", "required" => true, "aliases" => []}]
 
       iex> SpectreKinetic.Planner.Registry.normalize_action(%{})
-      {:error, :missing_id}
+      {:error, {:invalid_field, "module", :must_be_string}}
   """
   @spec normalize_action(map()) :: {:ok, action()} | {:error, term()}
   def normalize_action(raw) when is_map(raw) do
-    raw = stringify_map(raw)
-    id = raw["id"] || build_action_id(raw)
-
-    case id do
-      nil ->
-        {:error, :missing_id}
-
-      _ ->
-        {:ok,
-         %{
-           "id" => id,
-           "module" => raw["module"],
-           "name" => raw["name"],
-           "arity" => raw["arity"],
-           "doc" => raw["doc"] || "",
-           "spec" => raw["spec"] || "",
-           "args" => normalize_args(raw["args"] || []),
-           "examples" => raw["examples"] || []
-         }}
+    try do
+      raw
+      |> stringify_map()
+      |> do_normalize_action()
+    rescue
+      _error -> {:error, :invalid_action}
+    catch
+      _kind, _reason -> {:error, :invalid_action}
     end
   end
 
   def normalize_action(_raw), do: {:error, :invalid_action}
+
+  defp do_normalize_action(raw) do
+    with {:ok, module_name} <- required_string(raw, "module"),
+         {:ok, function_name} <- required_string(raw, "name"),
+         {:ok, arity} <- non_negative_integer(raw, "arity"),
+         {:ok, args} <- normalize_args(Map.get(raw, "args", [])),
+         :ok <- validate_arity(arity, args),
+         :ok <- validate_arg_names(args),
+         {:ok, id} <- action_id(raw["id"], module_name, function_name, arity),
+         {:ok, doc} <- optional_string(raw, "doc"),
+         {:ok, spec} <- optional_string(raw, "spec"),
+         {:ok, examples} <- normalize_examples(Map.get(raw, "examples", [])) do
+      {:ok,
+       %{
+         "id" => id,
+         "module" => module_name,
+         "name" => function_name,
+         "arity" => arity,
+         "doc" => doc,
+         "spec" => spec,
+         "args" => args,
+         "examples" => examples
+       }}
+    end
+  end
 
   @doc """
   Builds a compact retrieval card from one normalized action definition.
@@ -152,27 +166,215 @@ defmodule SpectreKinetic.Planner.Registry do
     |> Enum.join(" - ")
   end
 
-  defp build_action_id(%{"module" => mod, "name" => name, "arity" => arity})
-       when is_binary(mod) and is_binary(name) and is_integer(arity) do
-    "#{mod}.#{name}/#{arity}"
+  defp required_string(map, key) do
+    case Map.get(map, key) do
+      value when is_binary(value) -> non_blank_string(value, key)
+      _value -> {:error, {:invalid_field, key, :must_be_string}}
+    end
   end
 
-  defp build_action_id(_raw), do: nil
+  defp optional_string(map, key) do
+    case Map.get(map, key, "") do
+      value when is_binary(value) -> valid_string(value, key)
+      _value -> {:error, {:invalid_field, key, :must_be_string}}
+    end
+  end
+
+  defp non_blank_string(value, key) do
+    with {:ok, value} <- valid_string(value, key) do
+      if String.trim(value) == "" do
+        {:error, {:invalid_field, key, :must_not_be_blank}}
+      else
+        {:ok, value}
+      end
+    end
+  end
+
+  defp valid_string(value, key) do
+    if String.valid?(value) do
+      {:ok, value}
+    else
+      {:error, {:invalid_field, key, :must_be_utf8}}
+    end
+  end
+
+  defp non_negative_integer(map, key) do
+    case Map.get(map, key) do
+      value when is_integer(value) and value >= 0 -> {:ok, value}
+      _value -> {:error, {:invalid_field, key, :must_be_non_negative_integer}}
+    end
+  end
+
+  defp action_id(nil, module_name, function_name, arity),
+    do: {:ok, "#{module_name}.#{function_name}/#{arity}"}
+
+  defp action_id(id, module_name, function_name, arity) when is_binary(id) do
+    expected = "#{module_name}.#{function_name}/#{arity}"
+
+    with {:ok, id} <- non_blank_string(id, "id") do
+      if id == expected do
+        {:ok, id}
+      else
+        {:error, {:invalid_field, "id", {:mfa_mismatch, expected}}}
+      end
+    end
+  end
+
+  defp action_id(_id, _module_name, _function_name, _arity),
+    do: {:error, {:invalid_field, "id", :must_be_string}}
 
   defp normalize_args(args) when is_list(args) do
-    Enum.map(args, fn arg ->
-      arg = stringify_map(arg)
-
-      %{
-        "name" => arg["name"] || "",
-        "type" => arg["type"] || "String.t()",
-        "required" => Map.get(arg, "required", true),
-        "aliases" => arg["aliases"] || []
-      }
+    args
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {arg, index}, {:ok, normalized} ->
+      case normalize_arg(arg, index) do
+        {:ok, next} -> {:cont, {:ok, [next | normalized]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> then(fn
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      {:error, _reason} = error -> error
     end)
   end
 
-  defp normalize_args(_args), do: []
+  defp normalize_args(_args), do: {:error, {:invalid_field, "args", :must_be_list}}
+
+  defp normalize_arg(arg, index) when is_map(arg) do
+    arg = stringify_map(arg)
+
+    with {:ok, name} <- required_string(arg, "name"),
+         {:ok, type} <- arg_type(arg),
+         {:ok, required} <- required_flag(arg),
+         {:ok, aliases} <- normalize_aliases(Map.get(arg, "aliases", []), index) do
+      {:ok,
+       %{
+         "name" => name,
+         "type" => type,
+         "required" => required,
+         "aliases" => aliases
+       }}
+    else
+      {:error, reason} -> {:error, {:invalid_arg, index, reason}}
+    end
+  end
+
+  defp normalize_arg(_arg, index),
+    do: {:error, {:invalid_arg, index, :must_be_map}}
+
+  defp arg_type(arg) do
+    case Map.get(arg, "type", "String.t()") do
+      type when is_binary(type) -> non_blank_string(type, "type")
+      _type -> {:error, {:invalid_field, "type", :must_be_string}}
+    end
+  end
+
+  defp required_flag(arg) do
+    case Map.get(arg, "required", true) do
+      required when is_boolean(required) -> {:ok, required}
+      _required -> {:error, {:invalid_field, "required", :must_be_boolean}}
+    end
+  end
+
+  defp normalize_aliases(aliases, index) when is_list(aliases) do
+    aliases
+    |> Enum.reduce_while({:ok, []}, fn alias_name, {:ok, normalized} ->
+      case alias_name do
+        value when is_binary(value) ->
+          case non_blank_string(value, "aliases") do
+            {:ok, value} -> {:cont, {:ok, [value | normalized]}}
+            {:error, _reason} = error -> {:halt, error}
+          end
+
+        _value ->
+          {:halt, {:error, {:invalid_field, "aliases", :must_contain_strings}}}
+      end
+    end)
+    |> then(fn
+      {:ok, normalized} -> validate_alias_duplicates(Enum.reverse(normalized), index)
+      {:error, _reason} = error -> error
+    end)
+  end
+
+  defp normalize_aliases(_aliases, _index),
+    do: {:error, {:invalid_field, "aliases", :must_be_list}}
+
+  defp validate_alias_duplicates(aliases, index) do
+    normalized = Enum.map(aliases, &String.downcase/1)
+
+    if length(normalized) == length(Enum.uniq(normalized)) do
+      {:ok, aliases}
+    else
+      {:error, {:duplicate_alias, index}}
+    end
+  end
+
+  defp validate_arity(arity, args) do
+    if arity == length(args) do
+      :ok
+    else
+      {:error, {:arity_mismatch, arity, length(args)}}
+    end
+  end
+
+  defp validate_arg_names(args) do
+    args
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, %{}}, fn {arg, index}, {:ok, seen} ->
+      names = [arg["name"] | arg["aliases"]]
+
+      case {duplicate_name(names), conflicting_name(names, seen)} do
+        {{name, _first_index, _duplicate_index}, _conflict} ->
+          {:halt, {:error, {:ambiguous_arg_name, name, index, index}}}
+
+        {nil, nil} ->
+          next_seen = Enum.reduce(names, seen, &Map.put(&2, String.downcase(&1), index))
+          {:cont, {:ok, next_seen}}
+
+        {nil, {name, previous_index}} ->
+          {:halt, {:error, {:ambiguous_arg_name, name, previous_index, index}}}
+      end
+    end)
+    |> then(fn
+      {:ok, _seen} -> :ok
+      {:error, _reason} = error -> error
+    end)
+  end
+
+  defp duplicate_name(names) do
+    names
+    |> Enum.with_index()
+    |> Enum.reduce_while(%{}, fn {name, index}, seen ->
+      key = String.downcase(name)
+
+      case Map.fetch(seen, key) do
+        {:ok, first_index} -> {:halt, {name, first_index, index}}
+        :error -> {:cont, Map.put(seen, key, index)}
+      end
+    end)
+    |> case do
+      result when is_map(result) -> nil
+      duplicate -> duplicate
+    end
+  end
+
+  defp conflicting_name(names, seen) do
+    Enum.find_value(names, fn name ->
+      key = String.downcase(name)
+      if Map.has_key?(seen, key), do: {name, Map.fetch!(seen, key)}
+    end)
+  end
+
+  defp normalize_examples(examples) when is_list(examples) do
+    if Enum.all?(examples, &(is_binary(&1) and String.valid?(&1) and String.trim(&1) != "")) do
+      {:ok, examples}
+    else
+      {:error, {:invalid_field, "examples", :must_contain_non_blank_strings}}
+    end
+  end
+
+  defp normalize_examples(_examples),
+    do: {:error, {:invalid_field, "examples", :must_be_list}}
 
   defp stringify_map(map) when is_map(map) do
     Map.new(map, fn

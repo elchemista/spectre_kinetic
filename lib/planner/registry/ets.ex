@@ -297,12 +297,28 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
       end
     end)
     |> then(fn
-      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      {:ok, normalized} -> validate_unique_action_ids(Enum.reverse(normalized))
       {:error, _reason} = error -> error
     end)
   end
 
   defp normalize_actions(_actions), do: {:error, :invalid_registry_actions}
+
+  defp validate_unique_action_ids(actions) do
+    duplicate_id =
+      actions
+      |> Enum.frequencies_by(& &1["id"])
+      |> Enum.find_value(fn
+        {id, count} when count > 1 -> id
+        _entry -> nil
+      end)
+
+    if duplicate_id do
+      {:error, {:duplicate_action_id, duplicate_id}}
+    else
+      {:ok, actions}
+    end
+  end
 
   defp normalize_compiled_bundle(bundle) when is_map(bundle) do
     with {:ok, version} <- fetch_bundle_field(bundle, :version),

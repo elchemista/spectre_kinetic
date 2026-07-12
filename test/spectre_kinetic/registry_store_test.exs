@@ -90,7 +90,7 @@ defmodule SpectreKinetic.Planner.RegistryStoreTest do
       "name" => "send",
       "arity" => 2,
       "doc" => "Send SMS",
-      "args" => []
+      "args" => [%{"name" => "to"}, %{"name" => "body"}]
     }
 
     assert :ok = RegistryStore.add_action(store, action)
