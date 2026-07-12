@@ -574,21 +574,34 @@ defmodule Mix.Tasks.Spectre.DownloadEncoder do
 
   @spec install_entries(keyword(), [map()]) :: :ok | {:error, term()}
   defp install_entries(opts, entries) do
-    case Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, installed} ->
-           case invoke_renamer(opts, entry.source, entry.destination) do
-             :ok -> {:cont, {:ok, [entry | installed]}}
-             {:error, reason} -> {:halt, {:error, reason, installed}}
-           end
-         end) do
+    case install_entry_set(opts, entries) do
       {:ok, _installed} ->
         :ok
 
       {:error, install_error, installed} ->
-        case rollback_entries(installed) do
-          :ok -> {:error, install_error}
-          {:error, rollback_errors} ->
-            {:error, {:install_failed_with_rollback_errors, install_error, rollback_errors}}
-        end
+        recover_failed_install(install_error, installed)
+    end
+  end
+
+  @spec install_entry_set(keyword(), [map()]) ::
+          {:ok, [map()]} | {:error, term(), [map()]}
+  defp install_entry_set(opts, entries) do
+    Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, installed} ->
+      case invoke_renamer(opts, entry.source, entry.destination) do
+        :ok -> {:cont, {:ok, [entry | installed]}}
+        {:error, reason} -> {:halt, {:error, reason, installed}}
+      end
+    end)
+  end
+
+  @spec recover_failed_install(term(), [map()]) :: {:error, term()}
+  defp recover_failed_install(install_error, installed) do
+    case rollback_entries(installed) do
+      :ok ->
+        {:error, install_error}
+
+      {:error, rollback_errors} ->
+        {:error, {:install_failed_with_rollback_errors, install_error, rollback_errors}}
     end
   end
 
