@@ -45,7 +45,8 @@ defmodule SpectreKinetic.Planner.Selection do
 
   defp finalize_selection(chosen, mapping, reranker_notes, scored_candidates, selection_opts) do
     if accepted_selection?(chosen, selection_opts) do
-      {:ok, mapped_tool_result(chosen, mapping, reranker_notes, scored_candidates)}
+      {:ok,
+       mapped_tool_result(chosen, mapping, reranker_notes, scored_candidates, selection_opts)}
     else
       no_tool_result(scored_candidates, selection_opts.tool_threshold)
     end
@@ -59,9 +60,9 @@ defmodule SpectreKinetic.Planner.Selection do
   defp reranker_score_accepted?(%{reranker_score: score}, threshold), do: score >= threshold
   defp reranker_score_accepted?(_chosen, _threshold), do: true
 
-  defp mapped_tool_result(chosen, mapping, reranker_notes, scored_candidates) do
+  defp mapped_tool_result(chosen, mapping, reranker_notes, scored_candidates, selection_opts) do
     %{
-      "status" => mapped_status(mapping),
+      "status" => mapped_status(mapping, selection_opts.mapping_threshold),
       "selected_tool" => chosen.action["id"],
       "confidence" => chosen.fused_score,
       "tool_score" => chosen.embedding_score,
@@ -74,8 +75,11 @@ defmodule SpectreKinetic.Planner.Selection do
     }
   end
 
-  defp mapped_status(%{missing: []}), do: "ok"
-  defp mapped_status(_mapping), do: "MISSING_ARGS"
+  defp mapped_status(%{mapping_score: score}, threshold) when score < threshold,
+    do: "AMBIGUOUS_MAPPING"
+
+  defp mapped_status(%{missing: []}, _threshold), do: "ok"
+  defp mapped_status(_mapping, _threshold), do: "MISSING_ARGS"
 
   defp choose_candidate(al_text, [best | rest] = scored_candidates, slots, selection_opts) do
     primary_mapping = SlotMapper.map_slots(slots, best.action)

@@ -113,6 +113,30 @@ defmodule SpectreKinetic.PlannerTest do
       assert "body" in result["missing"]
     end
 
+    test "marks mappings below mapping_threshold as ambiguous", %{store: store} do
+      {:ok, result} =
+        Planner.plan(
+          "SEND OUTBOUND EMAIL WITH: TO=user@test.com",
+          %{registry: store, embedder: nil, mapping_threshold: 0.8}
+        )
+
+      assert result["status"] == "AMBIGUOUS_MAPPING"
+      assert result["selected_tool"] == "Dynamic.Email.send/3"
+      assert_in_delta result["mapping_score"], 1 / 3, 0.001
+      assert Enum.sort(result["missing"]) == ["body", "subject"]
+    end
+
+    test "keeps the missing-args status when mapping reaches mapping_threshold", %{store: store} do
+      {:ok, result} =
+        Planner.plan(
+          "SEND OUTBOUND EMAIL WITH: TO=user@test.com",
+          %{registry: store, embedder: nil, mapping_threshold: 0.3}
+        )
+
+      assert result["status"] == "MISSING_ARGS"
+      assert result["mapping_score"] >= 0.3
+    end
+
     test "returns NO_TOOL for garbage input with high threshold", %{store: store} do
       {:ok, result} =
         Planner.plan(
@@ -324,6 +348,36 @@ defmodule SpectreKinetic.PlannerTest do
 
       assert result["selected_tool"] == "Dynamic.Note.delete/1"
       assert result["args"]["id"] == "note-1"
+    end
+
+    test "propagates all fallback request overrides", %{store: store} do
+      request = %{
+        "al" => "SEND OUTBOUND MESSAGE WITH: TO=+15551234567 BODY=\"Code 123\"",
+        "tool_threshold" => 0.0,
+        "tool_selection_fallback" => "reranker",
+        "fallback_top_k" => 2,
+        "fallback_margin" => 1.0,
+        "reranker_threshold" => 0.0
+      }
+
+      {result, events} =
+        TelemetryHelper.capture([@reranker_fallback_event], fn ->
+          Planner.plan_request(request, %{
+            registry: store,
+            embedder: nil,
+            tool_selection_fallback: :disabled,
+            reranker: :fake,
+            reranker_module: FakeReranker
+          })
+        end)
+
+      assert {:ok, %{"selected_tool" => selected_tool}} = result
+      assert is_binary(selected_tool)
+
+      assert [%{measurements: measurements}] = events
+      assert measurements.candidate_count == 2
+      assert measurements.fallback_top_k == 2
+      assert measurements.reranker_threshold == 0.0
     end
   end
 

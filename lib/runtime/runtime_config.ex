@@ -245,12 +245,20 @@ defmodule SpectreKinetic.RuntimeConfig do
       {"mapping_threshold", :mapping_threshold},
       {"tool_selection_fallback", :tool_selection_fallback},
       {"fallback_top_k", :fallback_top_k},
-      {"fallback_margin", :fallback_margin}
+      {"fallback_margin", :fallback_margin},
+      {"reranker_threshold", :reranker_threshold}
     ]
     |> Enum.reduce(map, fn {target_key, request_key}, acc ->
-      maybe_put(acc, target_key, request_value(request, request_key))
+      value = request |> request_value(request_key) |> normalize_request_option(request_key)
+      maybe_put(acc, target_key, value)
     end)
   end
+
+  defp normalize_request_option(value, :tool_selection_fallback) do
+    parse_fallback_mode(value) || value
+  end
+
+  defp normalize_request_option(value, _request_key), do: value
 
   defp request_slots(request) do
     request

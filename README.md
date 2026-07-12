@@ -253,6 +253,10 @@ export SPECTRE_KINETIC_RERANKER_THRESHOLD=0.5
 
 Explicit options passed to `load_runtime!/1` win over config.
 
+`mapping_threshold` is an execution gate, not just telemetry: a selected tool
+whose slot-mapping score falls below it is returned with
+`status: :ambiguous_mapping` and must not be executed without clarification.
+
 For ONNX rerankers that return more than one class, set
 `reranker_score_index` to the relevance-class index. Kinetic deliberately
 rejects ambiguous multiclass output instead of assuming class `0`. Use

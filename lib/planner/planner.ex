@@ -82,6 +82,10 @@ defmodule SpectreKinetic.Planner do
       |> maybe_put(:top_k, Map.get(request, "top_k"))
       |> maybe_put(:tool_threshold, Map.get(request, "tool_threshold"))
       |> maybe_put(:mapping_threshold, Map.get(request, "mapping_threshold"))
+      |> maybe_put(:tool_selection_fallback, Map.get(request, "tool_selection_fallback"))
+      |> maybe_put(:fallback_top_k, Map.get(request, "fallback_top_k"))
+      |> maybe_put(:fallback_margin, Map.get(request, "fallback_margin"))
+      |> maybe_put(:reranker_threshold, Map.get(request, "reranker_threshold"))
 
     plan(al_text, merged_opts)
   end
