@@ -2,6 +2,7 @@ defmodule SpectreKinetic.Planner.CompilerTest do
   use ExUnit.Case, async: true
 
   alias SpectreKinetic.Planner.Compiler
+  alias SpectreKinetic.Planner.Registry.ETS
 
   defmodule FakeEmbedding do
     def load(encoder_model_dir: "test://compiler"), do: {:ok, :fake}
@@ -64,10 +65,18 @@ defmodule SpectreKinetic.Planner.CompilerTest do
              )
 
     assert {:ok, bundle} = SpectreKinetic.Artifact.read_term(output)
-    assert bundle.version == 1
-    assert bundle.action_ids == ["Example.run/0"]
-    assert bundle.embedding_dim == 2
-    assert [%Nx.Tensor{}] = bundle.tool_embeddings
+    assert bundle["version"] == 2
+    assert bundle["action_ids"] == ["Example.run/0"]
+    assert bundle["embedding_dim"] == 2
+    assert bundle["embedding_dtype"] == "f32"
+    assert bundle["tool_embeddings"] == [[1.0, 0.0]]
+    assert Enum.all?(Map.keys(bundle), &is_binary/1)
+
+    assert {:ok, registry} = ETS.new(compiled_registry: output)
+    assert {matrix, ["Example.run/0"]} = ETS.embedding_matrix(registry)
+    assert Nx.shape(matrix) == {1, 2}
+    assert :ok = ETS.close(registry)
+
     assert Path.wildcard(Path.join(Path.dirname(output), ".registry.etf.tmp-*")) == []
   end
 

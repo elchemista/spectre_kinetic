@@ -7,7 +7,7 @@ defmodule SpectreKinetic.Planner.Compiler do
 
     * normalized action definitions
     * ordered action IDs
-    * precomputed tool-card embeddings as Nx tensors
+    * precomputed tool-card embeddings as data-only f32 rows
 
   This bundle is loaded at runtime by `RegistryStore` so that production
   boots do not need network access or model inference at startup.
@@ -17,6 +17,10 @@ defmodule SpectreKinetic.Planner.Compiler do
   alias SpectreKinetic.Planner.Registry.ETS
 
   require Logger
+
+  @compiled_bundle_version 2
+  @embedding_dtype "f32"
+  @f32_max 3.4028234663852886e38
 
   @doc """
   Compiles a registry bundle from JSON + encoder model.
@@ -177,14 +181,16 @@ defmodule SpectreKinetic.Planner.Compiler do
              batch_size,
              embedding_dim,
              embedding_module
-           ) do
+           ),
+         {:ok, embedding_rows} <- serialize_embedding_rows(tool_embeddings) do
       bundle = %{
-        version: 1,
-        actions: actions,
-        action_ids: action_ids,
-        tool_embeddings: split_embeddings(tool_embeddings),
-        embedding_dim: embedding_dim,
-        compiled_at: DateTime.utc_now() |> DateTime.to_iso8601()
+        "version" => @compiled_bundle_version,
+        "actions" => actions,
+        "action_ids" => action_ids,
+        "tool_embeddings" => embedding_rows,
+        "embedding_dim" => embedding_dim,
+        "embedding_dtype" => @embedding_dtype,
+        "compiled_at" => DateTime.utc_now() |> DateTime.to_iso8601()
       }
 
       binary = :erlang.term_to_binary(bundle, [:compressed])
@@ -252,12 +258,37 @@ defmodule SpectreKinetic.Planner.Compiler do
     Path.join(directory, ".#{file_name}.tmp-#{unique}")
   end
 
-  defp split_embeddings(matrix) do
-    # Split {n, dim} matrix into a list of {dim} tensors for ETF storage
+  defp serialize_embedding_rows(matrix) do
     {n, _dim} = Nx.shape(matrix)
 
-    for i <- 0..(n - 1) do
-      Nx.backend_transfer(matrix[i])
+    rows =
+      matrix
+      |> Nx.as_type(:f32)
+      |> then(fn matrix ->
+        for i <- 0..(n - 1) do
+          matrix[i] |> Nx.backend_transfer() |> Nx.to_flat_list()
+        end
+      end)
+
+    case Enum.find_index(rows, fn row ->
+           Enum.any?(row, &(not finite_f32_number?(&1)))
+         end) do
+      nil -> {:ok, rows}
+      index -> {:error, {:invalid_embedding_values, index}}
     end
+  end
+
+  defp finite_f32_number?(value) when is_number(value) do
+    finite_number?(value) and abs(value) <= @f32_max
+  end
+
+  defp finite_f32_number?(_value), do: false
+  defp finite_number?(value) when is_integer(value), do: true
+
+  defp finite_number?(value) when is_float(value) do
+    representation = value |> :erlang.float_to_binary([:compact]) |> String.downcase()
+    representation not in ["nan", "inf", "-inf"]
+  rescue
+    _error -> false
   end
 end
