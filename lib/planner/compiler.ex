@@ -21,6 +21,8 @@ defmodule SpectreKinetic.Planner.Compiler do
   @compiled_bundle_version 2
   @embedding_dtype "f32"
   @f32_max 3.4028234663852886e38
+  @max_embedding_dim 16_384
+  @max_batch_size 1_024
 
   @doc """
   Compiles a registry bundle from JSON + encoder model.
@@ -96,7 +98,7 @@ defmodule SpectreKinetic.Planner.Compiler do
 
   defp positive_integer_option(opts, key, default) do
     case Keyword.get(opts, key, default) do
-      value when is_integer(value) and value > 0 -> {:ok, value}
+      value when is_integer(value) and value > 0 and value <= @max_batch_size -> {:ok, value}
       value -> {:error, {:invalid_option, key, value}}
     end
   end
@@ -232,7 +234,9 @@ defmodule SpectreKinetic.Planner.Compiler do
 
   defp concatenate_batches({:error, _reason} = error), do: error
 
-  defp validate_embedding_dim(dim) when is_integer(dim) and dim > 0, do: :ok
+  defp validate_embedding_dim(dim)
+       when is_integer(dim) and dim > 0 and dim <= @max_embedding_dim,
+       do: :ok
   defp validate_embedding_dim(dim), do: {:error, {:invalid_embedding_dim, dim}}
 
   defp atomic_write(output_path, binary) do

@@ -7,6 +7,8 @@ defmodule SpectreKinetic.Planner.Runtime.Embeddings do
   alias SpectreKinetic.Telemetry
 
   @embed_event [:spectre_kinetic, :runtime, :registry, :embed]
+  @max_embedding_dim 16_384
+  @max_embedding_cells 4_194_304
 
   @spec embed_loaded_registry(map(), keyword()) :: {:ok, map()} | {:error, term()}
   def embed_loaded_registry(runtime, opts) do
@@ -131,6 +133,7 @@ defmodule SpectreKinetic.Planner.Runtime.Embeddings do
     {action_ids, texts} = Enum.unzip(cards)
 
     with {:ok, matrix} <- EmbeddingRuntime.embed_batch(runtime.encoder, texts),
+         :ok <- validate_embedding_batch(matrix, length(action_ids)),
          {:ok, registry} <-
            put_embedding_rows(runtime.registry_module, runtime.registry, action_ids, matrix) do
       {:ok, %{runtime | registry: registry}}
@@ -146,6 +149,51 @@ defmodule SpectreKinetic.Planner.Runtime.Embeddings do
       end
     end)
   end
+
+  defp validate_embedding_batch(%Nx.Tensor{} = matrix, expected_rows) do
+    case Nx.shape(matrix) do
+      {^expected_rows, dimension}
+      when dimension > 0 and dimension <= @max_embedding_dim and
+             expected_rows * dimension <= @max_embedding_cells ->
+        with :ok <- validate_embedding_batch_type(matrix),
+             :ok <- validate_embedding_batch_values(matrix) do
+          :ok
+        end
+
+      shape ->
+        {:error, {:invalid_embedding_batch_shape, shape, expected_rows}}
+    end
+  end
+
+  defp validate_embedding_batch(_matrix, _expected_rows),
+    do: {:error, :invalid_embedding_batch}
+
+  defp validate_embedding_batch_type(matrix) do
+    case Nx.type(matrix) do
+      {:f, _bits} -> :ok
+      {:bf, _bits} -> :ok
+      type -> {:error, {:invalid_embedding_batch_type, type}}
+    end
+  end
+
+  defp validate_embedding_batch_values(matrix) do
+    if matrix |> Nx.to_flat_list() |> Enum.all?(&finite_number?/1),
+      do: :ok,
+      else: {:error, :non_finite_embedding_batch}
+  rescue
+    _error -> {:error, :invalid_embedding_batch}
+  end
+
+  defp finite_number?(value) when is_integer(value), do: true
+
+  defp finite_number?(value) when is_float(value) do
+    representation = value |> :erlang.float_to_binary([:compact]) |> String.downcase()
+    representation not in ["nan", "inf", "-inf"]
+  rescue
+    _error -> false
+  end
+
+  defp finite_number?(_value), do: false
 
   defp prepare_action_embedding(%{encoder: nil} = runtime, action) do
     emit_embed_skipped(runtime, %{

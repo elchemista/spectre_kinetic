@@ -19,6 +19,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   @legacy_compiled_bundle_version 1
   @f32_max 3.4028234663852886e38
   @max_actions 1_000
+  @max_embedding_dim 16_384
 
   defstruct [:actions, :aliases, :embeddings, :meta, :owner]
 
@@ -146,9 +147,8 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   def upsert_action(%__MODULE__{} = registry, action, embedding) do
     case Registry.normalize_action(action) do
       {:ok, normalized} ->
-        if new_action_over_limit?(registry, normalized["id"]) do
-          {:error, {:too_many_actions, action_count(registry) + 1, @max_actions}}
-        else
+        with :ok <- validate_embedding(registry, normalized["id"], embedding),
+             :ok <- validate_action_capacity(registry, normalized["id"]) do
           replace_action(registry, normalized, embedding)
           {:ok, registry}
         end
@@ -158,9 +158,13 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     end
   end
 
-  defp new_action_over_limit?(registry, action_id) do
-    action_count(registry) >= @max_actions and
-      not :ets.member(registry.actions, action_id)
+  defp validate_action_capacity(registry, action_id) do
+    if action_count(registry) >= @max_actions and
+         not :ets.member(registry.actions, action_id) do
+      {:error, {:too_many_actions, action_count(registry) + 1, @max_actions}}
+    else
+      :ok
+    end
   end
 
   @impl Registry
@@ -193,6 +197,8 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
       _incomplete ->
         nil
     end
+  rescue
+    _error -> nil
   end
 
   @impl Registry
@@ -200,11 +206,19 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     do: not_owner(owner)
 
   def put_embedding(%__MODULE__{} = registry, action_id, tensor) do
-    if :ets.member(registry.actions, action_id) do
-      :ets.insert(registry.embeddings, {action_id, tensor})
-      {:ok, registry}
-    else
-      {:error, :action_not_found}
+    cond do
+      not :ets.member(registry.actions, action_id) ->
+        {:error, :action_not_found}
+
+      true ->
+        case validate_embedding(registry, action_id, tensor) do
+          :ok ->
+            :ets.insert(registry.embeddings, {action_id, tensor})
+            {:ok, registry}
+
+          {:error, _reason} = error ->
+            error
+        end
     end
   end
 
@@ -418,7 +432,8 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
          @legacy_compiled_bundle_version,
          _dtype
        )
-       when is_integer(embedding_dim) and embedding_dim > 0 do
+       when is_integer(embedding_dim) and embedding_dim > 0 and
+              embedding_dim <= @max_embedding_dim do
     case Enum.find_index(embeddings, &(not valid_legacy_embedding?(&1, embedding_dim))) do
       nil -> {:ok, Enum.zip(embeddings, action_ids)}
       index -> {:error, {:invalid_embedding, index, embedding_dim}}
@@ -432,7 +447,8 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
          @compiled_bundle_version,
          "f32"
        )
-       when is_integer(embedding_dim) and embedding_dim > 0 do
+       when is_integer(embedding_dim) and embedding_dim > 0 and
+              embedding_dim <= @max_embedding_dim do
     case Enum.find_index(embeddings, &(not valid_data_embedding?(&1, embedding_dim))) do
       nil ->
         entries =
@@ -462,6 +478,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
 
   defp valid_legacy_embedding?(%Nx.Tensor{} = tensor, embedding_dim) do
     Nx.shape(tensor) == {embedding_dim} and
+      floating_embedding_type?(tensor) and
       tensor |> Nx.to_flat_list() |> Enum.all?(&finite_number?/1)
   rescue
     _error -> false
@@ -485,6 +502,65 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   end
 
   defp finite_number?(_value), do: false
+
+  defp validate_embedding(_registry, _action_id, nil), do: :ok
+
+  defp validate_embedding(registry, action_id, %Nx.Tensor{} = tensor) do
+    case Nx.shape(tensor) do
+      {dimension} when dimension > 0 and dimension <= @max_embedding_dim ->
+        with :ok <- validate_embedding_type(tensor),
+             :ok <- validate_embedding_values(tensor),
+             :ok <- validate_embedding_dimension(registry, action_id, dimension) do
+          :ok
+        end
+
+      shape ->
+        {:error, {:invalid_embedding_shape, shape}}
+    end
+  end
+
+  defp validate_embedding(_registry, _action_id, _tensor),
+    do: {:error, :invalid_embedding_tensor}
+
+  defp validate_embedding_type(tensor) do
+    if floating_embedding_type?(tensor),
+      do: :ok,
+      else: {:error, {:invalid_embedding_type, Nx.type(tensor)}}
+  end
+
+  defp floating_embedding_type?(tensor),
+    do: match?({:f, _bits}, Nx.type(tensor)) or match?({:bf, _bits}, Nx.type(tensor))
+
+  defp validate_embedding_values(tensor) do
+    if tensor |> Nx.to_flat_list() |> Enum.all?(&finite_number?/1),
+      do: :ok,
+      else: {:error, :non_finite_embedding}
+  rescue
+    _error -> {:error, :invalid_embedding_tensor}
+  end
+
+  defp validate_embedding_dimension(registry, action_id, dimension) do
+    case existing_embedding_dimension(registry, action_id) do
+      nil -> :ok
+      ^dimension -> :ok
+      existing -> {:error, {:embedding_dimension_mismatch, dimension, existing}}
+    end
+  end
+
+  defp existing_embedding_dimension(registry, excluded_action_id) do
+    Enum.find_value(:ets.tab2list(registry.embeddings), fn
+      {^excluded_action_id, _tensor} -> nil
+      {_action_id, %Nx.Tensor{} = tensor} -> tensor_dimension(tensor)
+      _invalid -> nil
+    end)
+  end
+
+  defp tensor_dimension(tensor) do
+    case Nx.shape(tensor) do
+      {dimension} -> dimension
+      _shape -> nil
+    end
+  end
 
   defp finite_f32_number?(value) when is_number(value),
     do: finite_number?(value) and abs(value) <= @f32_max
