@@ -17,9 +17,9 @@ defmodule SpectreKinetic.Action do
       {:ok, %SpectreKinetic.Action{status: :no_tool, alternatives: suggestions}} =
         SpectreKinetic.plan(runtime, "DO SOMETHING UNKNOWN", tool_threshold: 0.99)
 
-  The module also performs small boundary repairs. For example, when the planner
-  reports a missing `to` argument but the AL text contains `RECIPIENT=...`, the
-  action can recover the canonical `to` arg and remove the stale diagnostic.
+  The module does not repair planner output. Alias resolution, type coercion,
+  and policy decisions must finish before this boundary so conversion cannot
+  make an action more executable than the validated planner result.
   """
 
   @derive {Jason.Encoder,
@@ -33,6 +33,7 @@ defmodule SpectreKinetic.Action do
              :mapping_score,
              :combined_score,
              :args,
+             :invalid,
              :missing,
              :notes,
              :classifier_results,
@@ -51,6 +52,7 @@ defmodule SpectreKinetic.Action do
             mapping_score: nil,
             combined_score: nil,
             args: %{},
+            invalid: [],
             missing: [],
             notes: [],
             classifier_results: %{},
@@ -100,6 +102,7 @@ defmodule SpectreKinetic.Action do
           mapping_score: float() | nil,
           combined_score: float() | nil,
           args: map(),
+          invalid: [map()],
           missing: [binary()],
           notes: [binary()],
           classifier_results: map(),
@@ -132,24 +135,23 @@ defmodule SpectreKinetic.Action do
   """
   @spec from_plan(binary(), map(), non_neg_integer() | nil) :: t()
   def from_plan(al, plan, index \\ nil) when is_binary(al) and is_map(plan) do
-    repaired = repair_missing_args_from_al(plan, SpectreKinetic.Parser.args(al))
-
     %__MODULE__{
       index: index,
       al: al,
-      status: normalize_status(repaired["status"]),
-      selected_tool: repaired["selected_tool"],
-      confidence: repaired["confidence"] || repaired["combined_score"],
-      tool_score: repaired["tool_score"],
-      mapping_score: repaired["mapping_score"],
-      combined_score: repaired["combined_score"],
-      args: repaired["args"] || %{},
-      missing: repaired["missing"] || [],
-      notes: repaired["notes"] || [],
-      classifier_results: repaired["classifier_results"] || %{},
-      warnings: repaired["warnings"] || [],
-      halted?: Map.get(repaired, "halted?", false),
-      alternatives: build_alternatives(repaired)
+      status: normalize_status(plan["status"]),
+      selected_tool: plan["selected_tool"],
+      confidence: plan["confidence"] || plan["combined_score"],
+      tool_score: plan["tool_score"],
+      mapping_score: plan["mapping_score"],
+      combined_score: plan["combined_score"],
+      args: plan["args"] || %{},
+      invalid: plan["invalid"] || [],
+      missing: plan["missing"] || [],
+      notes: plan["notes"] || [],
+      classifier_results: plan["classifier_results"] || %{},
+      warnings: plan["warnings"] || [],
+      halted?: Map.get(plan, "halted?", false),
+      alternatives: build_alternatives(plan)
     }
   end
 
@@ -191,118 +193,6 @@ defmodule SpectreKinetic.Action do
   end
 
   defp normalize_status(other), do: other
-
-  # Planner maps come from the noisy side of the world. Repair aliases here,
-  # before callers have to care that `RECIPIENT` and `to` were arguing again.
-  defp repair_missing_args_from_al(plan, parsed_args) do
-    missing = plan["missing"] || []
-    invalid_names = plan |> Map.get("invalid", []) |> invalid_arg_names()
-    repairable_missing = Enum.reject(missing, &MapSet.member?(invalid_names, &1))
-    current_args = plan["args"] || %{}
-    normalized_args = Map.new(parsed_args, fn {key, value} -> {String.downcase(key), value} end)
-
-    {recovered, recovered_slots} = recover_args(normalized_args, repairable_missing)
-
-    merge_recovered_args(plan, current_args, missing, recovered, recovered_slots)
-  end
-
-  defp invalid_arg_names(invalid) when is_list(invalid) do
-    invalid
-    |> Enum.flat_map(fn
-      %{name: name} when is_binary(name) -> [name]
-      %{"name" => name} when is_binary(name) -> [name]
-      _invalid -> []
-    end)
-    |> MapSet.new()
-  end
-
-  defp invalid_arg_names(_invalid), do: MapSet.new()
-
-  defp merge_recovered_args(plan, _current_args, _missing, recovered, _recovered_slots)
-       when map_size(recovered) == 0,
-       do: plan
-
-  defp merge_recovered_args(plan, current_args, missing, recovered, recovered_slots) do
-    args = Map.merge(current_args, recovered)
-    remaining_missing = Enum.reject(missing, &Map.has_key?(args, &1))
-
-    plan
-    |> Map.put("args", args)
-    |> Map.put("missing", remaining_missing)
-    |> Map.put("status", repaired_status(plan["status"], remaining_missing))
-    |> Map.put("notes", drop_repaired_unmatched_notes(plan["notes"] || [], recovered_slots))
-  end
-
-  # Boundary repair is allowed to resolve an argument-mapping diagnostic, but
-  # it must never undo a later policy/classifier decision. `Action.from_plan/3`
-  # runs after classifier plugs, so blindly changing every fully repaired plan
-  # to `ok` would turn rejected or confirmation-gated actions executable.
-  defp repaired_status(status, []) when is_binary(status) do
-    if String.downcase(status) == "missing_args", do: "ok", else: status
-  end
-
-  defp repaired_status(:missing_args, []), do: :ok
-  defp repaired_status(status, _remaining_missing), do: status
-
-  defp recover_args(parsed_args, missing) do
-    Enum.reduce(missing, {%{}, MapSet.new()}, fn missing_arg, {recovered, recovered_slots} ->
-      case recover_arg(parsed_args, missing_arg) do
-        nil ->
-          {recovered, recovered_slots}
-
-        {source_key, value} ->
-          {
-            Map.put(recovered, missing_arg, value),
-            MapSet.put(recovered_slots, source_key)
-          }
-      end
-    end)
-  end
-
-  defp recover_arg(parsed_args, missing_arg) do
-    candidates = [missing_arg | repair_aliases(missing_arg)]
-
-    Enum.find_value(candidates, fn candidate ->
-      case Map.fetch(parsed_args, candidate) do
-        {:ok, value} -> {candidate, value}
-        :error -> nil
-      end
-    end)
-  end
-
-  # These aliases are not a second schema. They are the crumbs users and models
-  # leave behind. The public action still exposes canonical registry names.
-  defp repair_aliases("to"),
-    do: ["recipient", "email", "phone", "number", "target", "destination", "dest"]
-
-  defp repair_aliases("body"), do: ["message", "text", "content"]
-  defp repair_aliases("subject"), do: ["title"]
-  defp repair_aliases("path"), do: ["file", "dir", "directory", "location"]
-  defp repair_aliases("url"), do: ["uri", "link", "website"]
-  defp repair_aliases("repo"), do: ["repository"]
-  defp repair_aliases("branch"), do: ["ref"]
-  defp repair_aliases(_missing_arg), do: []
-
-  defp drop_repaired_unmatched_notes(notes, recovered_slots) do
-    recovered_slots = MapSet.new(recovered_slots)
-
-    Enum.flat_map(notes, fn
-      "unmatched slots:" <> _rest = note ->
-        remaining_slots =
-          note
-          |> then(&Regex.scan(~r/"([^"]+)"/, &1, capture: :all_but_first))
-          |> List.flatten()
-          |> Enum.reject(&MapSet.member?(recovered_slots, String.downcase(&1)))
-
-        case remaining_slots do
-          [] -> []
-          slots -> ["unmatched slots: #{inspect(slots)}"]
-        end
-
-      note ->
-        [note]
-    end)
-  end
 
   defp build_alternatives(%{"suggestions" => [_ | _] = suggestions}) do
     Enum.map(suggestions, fn suggestion ->
