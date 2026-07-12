@@ -87,6 +87,64 @@ defmodule SpectreKinetic.Planner.SlotMapperTest do
     end
   end
 
+  describe "schema type enforcement" do
+    test "coerces scalar AL values to declared primitive types" do
+      parsed = %{"COUNT" => "42", "RATIO" => "0.5", "ENABLED" => "off"}
+
+      action = %{
+        "args" => [
+          %{"name" => "count", "type" => "pos_integer()", "required" => true},
+          %{"name" => "ratio", "type" => "float()", "required" => true},
+          %{"name" => "enabled", "type" => "boolean()", "required" => true}
+        ]
+      }
+
+      result = SlotMapper.map_slots(parsed, action)
+
+      assert result.args == %{"count" => 42, "ratio" => 0.5, "enabled" => false}
+      assert result.invalid == []
+      assert result.missing == []
+    end
+
+    test "removes invalid values and keeps required arguments missing" do
+      parsed = %{"COUNT" => "many", "ENABLED" => false}
+
+      action = %{
+        "args" => [
+          %{"name" => "count", "type" => "integer()", "required" => true},
+          %{"name" => "enabled", "type" => "boolean()", "required" => true}
+        ]
+      }
+
+      result = SlotMapper.map_slots(parsed, action)
+
+      assert result.args == %{"enabled" => false}
+      assert result.invalid == [%{name: "count", expected_type: "integer()"}]
+      assert result.missing == ["count"]
+      assert Enum.any?(result.notes, &String.contains?(&1, "invalid type for count"))
+    end
+
+    test "validates dates and URI values without changing their JSON shape" do
+      action = %{
+        "args" => [
+          %{"name" => "due", "type" => "Date.t()", "required" => true},
+          %{"name" => "url", "type" => "URI.t()", "required" => true}
+        ]
+      }
+
+      result =
+        SlotMapper.map_slots(
+          %{"DUE" => "2026-07-12", "URL" => "https://example.com/task"},
+          action
+        )
+
+      assert result.args == %{
+               "due" => "2026-07-12",
+               "url" => "https://example.com/task"
+             }
+    end
+  end
+
   describe "detect_value_type/1" do
     test "detects email" do
       assert SlotMapper.detect_value_type("user@example.com") == :email

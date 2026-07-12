@@ -93,6 +93,23 @@ defmodule SpectreKinetic.ActionTest do
     assert action.halted?
   end
 
+  test "from_plan does not repair arguments rejected by schema validation" do
+    plan = %{
+      "status" => "MISSING_ARGS",
+      "selected_tool" => "Counter.set/1",
+      "args" => %{},
+      "missing" => ["count"],
+      "invalid" => [%{name: "count", expected_type: "integer()"}],
+      "notes" => ["invalid type for count: expected integer()"]
+    }
+
+    action = Action.from_plan("SET COUNT WITH: COUNT=many", plan)
+
+    assert action.status == :missing_args
+    assert action.args == %{}
+    assert action.missing == ["count"]
+  end
+
   test "from_plan argument repair never upgrades classifier or policy safety decisions" do
     for status <- ~w(rejected needs_confirmation needs_clarification) do
       plan = %{

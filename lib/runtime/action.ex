@@ -196,13 +196,27 @@ defmodule SpectreKinetic.Action do
   # before callers have to care that `RECIPIENT` and `to` were arguing again.
   defp repair_missing_args_from_al(plan, parsed_args) do
     missing = plan["missing"] || []
+    invalid_names = plan |> Map.get("invalid", []) |> invalid_arg_names()
+    repairable_missing = Enum.reject(missing, &MapSet.member?(invalid_names, &1))
     current_args = plan["args"] || %{}
     normalized_args = Map.new(parsed_args, fn {key, value} -> {String.downcase(key), value} end)
 
-    {recovered, recovered_slots} = recover_args(normalized_args, missing)
+    {recovered, recovered_slots} = recover_args(normalized_args, repairable_missing)
 
     merge_recovered_args(plan, current_args, missing, recovered, recovered_slots)
   end
+
+  defp invalid_arg_names(invalid) when is_list(invalid) do
+    invalid
+    |> Enum.flat_map(fn
+      %{name: name} when is_binary(name) -> [name]
+      %{"name" => name} when is_binary(name) -> [name]
+      _invalid -> []
+    end)
+    |> MapSet.new()
+  end
+
+  defp invalid_arg_names(_invalid), do: MapSet.new()
 
   defp merge_recovered_args(plan, _current_args, _missing, recovered, _recovered_slots)
        when map_size(recovered) == 0,

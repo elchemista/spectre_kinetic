@@ -15,10 +15,13 @@ defmodule SpectreKinetic.Planner.SlotMapper do
 
   @type mapping_result :: %{
           args: map(),
+          invalid: [map()],
           missing: [binary()],
           notes: [binary()],
           mapping_score: float()
         }
+
+  alias SpectreKinetic.Planner.SlotType
 
   @email_pattern ~r/^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/
   @phone_pattern ~r/^\+?[0-9\s\-().]{7,}$/
@@ -64,22 +67,57 @@ defmodule SpectreKinetic.Planner.SlotMapper do
       resolve_positional(still_unmatched_slots, still_unmatched_params)
 
     all_matched = Map.merge(matched, type_matched) |> Map.merge(positional)
+    {valid_args, invalid} = validate_mapped_args(all_matched, arg_defs)
 
     missing =
-      final_unmatched_params
+      (final_unmatched_params ++ invalid_required_params(invalid, arg_defs))
       |> Enum.filter(& &1["required"])
       |> Enum.map(& &1["name"])
+      |> Enum.uniq()
 
-    notes = build_notes(final_unmatched_slots, missing)
+    notes = build_notes(final_unmatched_slots, missing) ++ invalid_notes(invalid)
 
-    score = compute_mapping_score(arg_defs, all_matched, missing)
+    score = compute_mapping_score(arg_defs, valid_args, missing)
 
     %{
-      args: all_matched,
+      args: valid_args,
+      invalid: invalid,
       missing: missing,
       notes: notes,
       mapping_score: score
     }
+  end
+
+  defp validate_mapped_args(matched, arg_defs) do
+    definitions = Map.new(arg_defs, &{&1["name"], &1})
+
+    matched
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.reduce({%{}, []}, fn {name, value}, {valid, invalid} ->
+      definition = Map.fetch!(definitions, name)
+      expected_type = definition["type"] || "String.t()"
+
+      case SlotType.coerce(value, expected_type) do
+        {:ok, coerced} ->
+          {Map.put(valid, name, coerced), invalid}
+
+        {:error, :type_mismatch} ->
+          issue = %{name: name, expected_type: expected_type}
+          {valid, [issue | invalid]}
+      end
+    end)
+    |> then(fn {valid, invalid} -> {valid, Enum.reverse(invalid)} end)
+  end
+
+  defp invalid_required_params(invalid, arg_defs) do
+    invalid_names = invalid |> Enum.map(& &1.name) |> MapSet.new()
+    Enum.filter(arg_defs, &MapSet.member?(invalid_names, &1["name"]))
+  end
+
+  defp invalid_notes(invalid) do
+    Enum.map(invalid, fn issue ->
+      "invalid type for #{issue.name}: expected #{issue.expected_type}"
+    end)
   end
 
   # Three passes: names first, then value shape, then the one lonely positional

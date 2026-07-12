@@ -69,6 +69,7 @@ defmodule SpectreKinetic.Planner.Selection do
       "mapping_score" => mapping.mapping_score,
       "combined_score" => chosen.fused_score,
       "args" => mapping.args,
+      "invalid" => mapping.invalid,
       "missing" => mapping.missing,
       "notes" => mapping.notes ++ reranker_notes,
       "candidates" => build_candidate_list(scored_candidates)

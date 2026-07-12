@@ -164,6 +164,12 @@ action.status
 The planner returns data. It does not call `MyApp.Emailer.send/2` for you.
 That boundary is the whole point.
 
+Primitive argument types declared by the registry are enforced during slot
+mapping. Integer, float, and boolean AL literals are safely coerced; invalid
+required values are omitted, remain in `missing`, and keep the action
+non-executable. Date and URI values are validated while remaining strings for
+JSON-friendly output. Opaque custom types pass through unchanged.
+
 ## Compile A Fast Registry
 
 For production-ish use, download an encoder and compile the registry with
