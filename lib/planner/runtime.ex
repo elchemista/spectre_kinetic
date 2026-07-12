@@ -46,6 +46,8 @@ defmodule SpectreKinetic.Planner.Runtime do
     * `:registry_module` — registry backend module, defaults to ETS
     * `:registry_json` — registry JSON source path
     * `:compiled_registry` — compiled ETF bundle path
+    * `:allow_empty_registry` — explicitly permit a runtime without actions,
+      defaults to `false`
     * `:encoder_model_dir` — ONNX encoder directory
     * `:top_k`, `:tool_threshold`, `:mapping_threshold` — default planner opts
     * `:tool_selection_fallback` — `:disabled` or `:reranker`

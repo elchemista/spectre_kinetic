@@ -1,5 +1,5 @@
 defmodule SpectreKinetic.RuntimeTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias SpectreKinetic.Planner.Registry.ETS
   alias SpectreKinetic.Planner.Runtime, as: PlannerRuntime
@@ -50,6 +50,38 @@ defmodule SpectreKinetic.RuntimeTest do
 
     assert event_metadata(events, @reranker_load_event).result == :skipped
     assert event_metadata(events, @reranker_load_event).reason == :fallback_disabled
+  end
+
+  test "load_runtime/1 resolves a registry path from application config" do
+    registry_json = write_registry_json([email_action()])
+    previous = Application.get_env(:spectre_kinetic, :registry_json)
+    Application.put_env(:spectre_kinetic, :registry_json, registry_json)
+
+    on_exit(fn ->
+      if is_nil(previous) do
+        Application.delete_env(:spectre_kinetic, :registry_json)
+      else
+        Application.put_env(:spectre_kinetic, :registry_json, previous)
+      end
+    end)
+
+    assert {:ok, %PlannerRuntime{} = runtime} = SpectreKinetic.load_runtime()
+    assert SpectreKinetic.action_count(runtime) == 1
+  end
+
+  test "load_runtime/1 rejects an empty registry unless explicitly allowed" do
+    registry_json = write_registry_json([])
+
+    assert {:error, :empty_registry} =
+             SpectreKinetic.load_runtime(registry_json: registry_json)
+
+    assert {:ok, %PlannerRuntime{} = runtime} =
+             SpectreKinetic.load_runtime(
+               registry_json: registry_json,
+               allow_empty_registry: true
+             )
+
+    assert SpectreKinetic.action_count(runtime) == 0
   end
 
   test "load_runtime/1 builds a persistent runtime that can plan directly" do

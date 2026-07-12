@@ -28,10 +28,18 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
 
   @spec components(keyword()) :: {:ok, map()} | {:error, term()}
   def components(opts) do
+    with {:ok, paths} <- RuntimeConfig.resolve_runtime_paths(opts) do
+      opts
+      |> Keyword.merge(Map.to_list(paths))
+      |> load_components()
+    end
+  end
+
+  defp load_components(opts) do
     registry_module = Keyword.get(opts, :registry_module, ETS)
     reranker_module = Keyword.get(opts, :fallback_runtime_module, RerankerRuntime)
 
-    with {:ok, registry} <- registry_module.new(opts),
+    with {:ok, registry} <- load_registry(registry_module, opts),
          {:ok, encoder} <- load_encoder(opts),
          {:ok, reranker} <- load_reranker(opts, reranker_module),
          {:ok, classifiers} <- configured_classifiers(opts, :classifiers),
@@ -47,6 +55,18 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
          classifiers: classifiers,
          chain_classifiers: chain_classifiers
        }}
+    end
+  end
+
+  defp load_registry(registry_module, opts) do
+    with {:ok, registry} <- registry_module.new(opts) do
+      if registry_module.action_count(registry) > 0 or
+           Keyword.get(opts, :allow_empty_registry, false) do
+        {:ok, registry}
+      else
+        registry_module.close(registry)
+        {:error, :empty_registry}
+      end
     end
   end
 
