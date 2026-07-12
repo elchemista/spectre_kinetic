@@ -18,7 +18,8 @@ defmodule SpectreKinetic.Planner.SlotMapper do
           invalid: [map()],
           missing: [binary()],
           notes: [binary()],
-          mapping_score: float()
+          mapping_score: float(),
+          positional: [binary()]
         }
 
   alias SpectreKinetic.Planner.SlotType
@@ -90,7 +91,8 @@ defmodule SpectreKinetic.Planner.SlotMapper do
       invalid: invalid,
       missing: missing,
       notes: notes,
-      mapping_score: score
+      mapping_score: score,
+      positional: positional |> Map.keys() |> Enum.sort()
     }
   end
 

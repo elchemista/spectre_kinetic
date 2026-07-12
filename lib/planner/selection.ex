@@ -81,6 +81,8 @@ defmodule SpectreKinetic.Planner.Selection do
 
   defp mapped_status(%{invalid: [_ | _]}, _threshold), do: "AMBIGUOUS_MAPPING"
 
+  defp mapped_status(%{positional: [_ | _]}, _threshold), do: "AMBIGUOUS_MAPPING"
+
   defp mapped_status(%{missing: []}, _threshold), do: "ok"
   defp mapped_status(_mapping, _threshold), do: "MISSING_ARGS"
 

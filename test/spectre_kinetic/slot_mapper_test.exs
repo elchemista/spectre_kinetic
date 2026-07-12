@@ -99,6 +99,7 @@ defmodule SpectreKinetic.Planner.SlotMapperTest do
 
       assert result.args == %{"body" => "plain text"}
       assert result.mapping_score == 0.5
+      assert result.positional == ["body"]
       assert "low-confidence positional slot mapping" in result.notes
     end
   end

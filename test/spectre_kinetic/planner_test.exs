@@ -153,6 +153,20 @@ defmodule SpectreKinetic.PlannerTest do
       assert result["mapping_score"] >= 0.3
     end
 
+    test "positional fallback remains ambiguous at the default threshold", %{store: store} do
+      {:ok, result} =
+        Planner.plan(
+          "DELETE NOTE ENTRY WITH: UNKNOWN=note-42",
+          %{registry: store, embedder: nil}
+        )
+
+      assert result["selected_tool"] == "Dynamic.Note.delete/1"
+      assert result["args"] == %{"id" => "note-42"}
+      assert result["status"] == "AMBIGUOUS_MAPPING"
+      assert result["mapping_score"] == 0.5
+      assert "low-confidence positional slot mapping" in result["notes"]
+    end
+
     test "an invalid optional argument keeps the action non-executable", %{store: store} do
       :ok =
         RegistryStore.add_action(store, %{
