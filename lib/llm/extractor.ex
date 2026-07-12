@@ -105,7 +105,9 @@ defmodule SpectreKinetic.Extractor do
   end
 
   defp consume_line(line, %{mode: {:al_fence, delimiter, parts}} = state) do
-    case Fences.parse_close(line, delimiter) do
+    quote_prefix = raw_parts(parts) <> "\n"
+
+    case Fences.parse_close(line, delimiter, quote_prefix) do
       {:close, before_close, after_close} ->
         %{state | mode: :normal}
         |> add_entry(multiline_raw(parts, before_close))
@@ -117,7 +119,9 @@ defmodule SpectreKinetic.Extractor do
   end
 
   defp consume_line(line, %{mode: {:al_tag, parts}} = state) do
-    case Tags.split_close(line) do
+    quote_prefix = raw_parts(parts) <> "\n"
+
+    case Tags.split_close(line, quote_prefix) do
       {:ok, before_close, after_close} ->
         %{state | mode: :normal}
         |> add_entry(multiline_raw(parts, before_close))
@@ -221,6 +225,8 @@ defmodule SpectreKinetic.Extractor do
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n")
   end
+
+  defp raw_parts(parts), do: parts |> Enum.reverse() |> Enum.join("\n")
 
   defp build_entry(raw) do
     case SpectreKinetic.Parser.validate(raw) do

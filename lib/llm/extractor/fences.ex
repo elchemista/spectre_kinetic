@@ -7,6 +7,8 @@ defmodule SpectreKinetic.Extractor.Fences do
 
   @al_fence_languages ["al", "action", "action-language"]
 
+  alias SpectreKinetic.Parser.Syntax
+
   @spec parse_open(binary()) ::
           {:al_inline, binary()}
           | {:al_open, binary(), binary()}
@@ -22,11 +24,18 @@ defmodule SpectreKinetic.Extractor.Fences do
     end
   end
 
-  @spec parse_close(binary(), binary()) :: {:close, binary(), binary()} | :continue
-  def parse_close(line, delimiter) do
-    line
-    |> String.trim_leading()
-    |> fence_close(delimiter)
+  @spec parse_close(binary(), binary(), binary()) :: {:close, binary(), binary()} | :continue
+  def parse_close(line, delimiter, quote_prefix \\ "") do
+    trimmed = String.trim_leading(line)
+    leading_size = byte_size(line) - byte_size(trimmed)
+    source = quote_prefix <> line
+    delimiter_index = byte_size(quote_prefix) + leading_size
+
+    if Syntax.outside_at?(source, delimiter_index) do
+      fence_close(trimmed, delimiter)
+    else
+      :continue
+    end
   end
 
   @spec plain_close?(binary(), binary()) :: boolean()
@@ -130,7 +139,7 @@ defmodule SpectreKinetic.Extractor.Fences do
   defp al_fence_language?(language), do: String.downcase(language) in @al_fence_languages
 
   defp split_inline_fence_close(content, delimiter) do
-    case :binary.match(content, delimiter) do
+    case Syntax.find_unquoted_token(content, delimiter) do
       {index, size} ->
         {:ok, binary_part(content, 0, index),
          binary_part(content, index + size, byte_size(content) - index - size)}
@@ -170,7 +179,7 @@ defmodule SpectreKinetic.Extractor.Fences do
   end
 
   defp find_delimiter(line, delimiter) do
-    case :binary.match(line, delimiter) do
+    case Syntax.find_unquoted_token(line, delimiter) do
       {index, _size} -> {index, delimiter}
       :nomatch -> :not_found
     end

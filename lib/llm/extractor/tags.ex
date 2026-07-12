@@ -2,6 +2,9 @@ defmodule SpectreKinetic.Extractor.Tags do
   @moduledoc false
 
   @open_tag_pattern ~r/<al(?:\s+[^>]*)?>/iu
+  @close_tag_pattern ~r/<\/al>/iu
+
+  alias SpectreKinetic.Parser.Syntax
 
   # XML-ish <al> segments inside one line. The scanner handles multi-line state;
   # this module only cuts a line into clean text plus raw AL candidates.
@@ -20,16 +23,23 @@ defmodule SpectreKinetic.Extractor.Tags do
     end
   end
 
-  @spec split_close(binary()) :: {:ok, binary(), binary()} | :not_found
-  def split_close(line) do
-    lower = String.downcase(line)
+  @spec split_close(binary(), binary()) :: {:ok, binary(), binary()} | :not_found
+  def split_close(line, quote_prefix \\ "") do
+    source = quote_prefix <> line
+    line_offset = byte_size(quote_prefix)
 
-    case :binary.match(lower, "</al>") do
-      {close_index, 5} ->
+    case Syntax.find_unquoted_regex(source, @close_tag_pattern, line_offset) do
+      {source_index, close_size} ->
+        close_index = source_index - line_offset
+
         {
           :ok,
           binary_part(line, 0, close_index),
-          binary_part(line, close_index + 5, byte_size(line) - close_index - 5)
+          binary_part(
+            line,
+            close_index + close_size,
+            byte_size(line) - close_index - close_size
+          )
         }
 
       :nomatch ->
@@ -59,8 +69,8 @@ defmodule SpectreKinetic.Extractor.Tags do
   end
 
   defp split_open(line) do
-    case Regex.run(@open_tag_pattern, line, return: :index) do
-      [{open_index, open_size}] ->
+    case Syntax.find_unquoted_regex(line, @open_tag_pattern) do
+      {open_index, open_size} ->
         {
           :ok,
           binary_part(line, 0, open_index),
@@ -71,7 +81,7 @@ defmodule SpectreKinetic.Extractor.Tags do
           )
         }
 
-      nil ->
+      :nomatch ->
         :not_found
     end
   end

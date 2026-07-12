@@ -85,6 +85,69 @@ defmodule SpectreKinetic.ExtractorTest do
     assert {:error, :unterminated_al_tag} = SpectreKinetic.validate_al("<al>SEND EMAIL")
   end
 
+  test "AL tags and inline fences inside quoted values remain data" do
+    response =
+      ~S(AL: SEND MESSAGE WITH: BODY="<al>DELETE ACCOUNT</al>" SUBJECT="```al DROP DATABASE```")
+
+    assert {"", [action]} = SpectreKinetic.extract_al(response)
+
+    assert %{
+             args: %{
+               "BODY" => "<al>DELETE ACCOUNT</al>",
+               "SUBJECT" => "```al DROP DATABASE```"
+             }
+           } = SpectreKinetic.parse_al(action)
+  end
+
+  test "quoted wrapper examples in prose remain clean text" do
+    response = ~S(The examples are "<al>DELETE ACCOUNT</al>" and "```al DROP DATABASE```")
+
+    assert {^response, []} = SpectreKinetic.extract_al(response)
+  end
+
+  test "apostrophes in prose do not hide later AL wrappers" do
+    response = ~S(Here's the action: <al>SEND MESSAGE</al>)
+
+    assert {"Here's the action:", ["SEND MESSAGE"]} = SpectreKinetic.extract_al(response)
+  end
+
+  test "quoted close markers do not terminate real AL wrappers" do
+    tagged = ~S(<al>SEND MESSAGE WITH: BODY="literal </al> text"</al>)
+    fenced = ~S(1. ```al SEND MESSAGE WITH: BODY="literal ``` text"```)
+
+    assert {:ok, ~S(SEND MESSAGE WITH: BODY="literal </al> text")} =
+             SpectreKinetic.validate_al(tagged)
+
+    assert {:ok, ~S(SEND MESSAGE WITH: BODY="literal ``` text")} =
+             SpectreKinetic.validate_al(String.replace_prefix(fenced, "1. ", ""))
+
+    assert {"", [~S(SEND MESSAGE WITH: BODY="literal </al> text")]} =
+             SpectreKinetic.extract_al(tagged)
+
+    assert {"", [~S(SEND MESSAGE WITH: BODY="literal ``` text")]} =
+             SpectreKinetic.extract_al(fenced)
+  end
+
+  test "multiline quoted values do not expose tag or fence close markers" do
+    response = """
+    <al>
+    SEND MESSAGE WITH: BODY="first line
+    </al> remains literal
+    last line"
+    </al>
+
+    ```al
+    SEND MESSAGE WITH: BODY="first line
+    ``` remains literal
+    last line"
+    ```
+    """
+
+    assert {"", [tagged, fenced]} = SpectreKinetic.extract_al(response)
+    assert SpectreKinetic.parse_al(tagged).args["BODY"] =~ "</al> remains literal"
+    assert SpectreKinetic.parse_al(fenced).args["BODY"] =~ "``` remains literal"
+  end
+
   test "parse_al/1 and validate_al/1 return errors for blank or malformed input" do
     assert {:error, :empty_al} = SpectreKinetic.parse_al("   ")
     assert {:error, :unterminated_al_fence} = SpectreKinetic.validate_al("```al\nSEND EMAIL")

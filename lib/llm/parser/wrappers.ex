@@ -13,6 +13,9 @@ defmodule SpectreKinetic.Parser.Wrappers do
   @fence_delimiters ["```", "~~~"]
   @al_fence_languages ["al", "action", "action-language"]
   @opening_al_tag_pattern ~r/^<al(?:\s+[^>]*)?>/iu
+  @closing_al_tag_pattern ~r/<\/al>/iu
+
+  alias SpectreKinetic.Parser.Syntax
 
   @spec normalize(binary()) :: {:ok, binary()} | {:error, validation_error()}
   def normalize(text) do
@@ -69,15 +72,14 @@ defmodule SpectreKinetic.Parser.Wrappers do
   defp strip_prefix_marker(rest), do: rest
 
   defp unwrap_tag(text, open_size) do
-    lower = String.downcase(text)
-    close_start = :binary.match(lower, "</al>")
+    close_start = Syntax.find_unquoted_regex(text, @closing_al_tag_pattern, open_size)
 
     unwrap_tag_result(text, open_size, close_start)
   end
 
   # Tags are only valid wrappers when we can see both ends. A missing close tag
   # is a diagnostic, not something we silently swallow and regret later.
-  defp unwrap_tag_result(text, open_size, {close_index, 5})
+  defp unwrap_tag_result(text, open_size, {close_index, _close_size})
        when close_index >= open_size do
     inner_start = open_size
     inner_size = close_index - inner_start
@@ -114,7 +116,7 @@ defmodule SpectreKinetic.Parser.Wrappers do
   defp unwrap_known_al_fence(rest, delimiter) do
     close_token = "\n" <> delimiter
 
-    case :binary.match(rest, close_token) do
+    case Syntax.find_unquoted_token(rest, close_token) do
       {close_index, _size} ->
         {:ok, binary_part(rest, 0, close_index)}
 
