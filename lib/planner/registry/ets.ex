@@ -410,11 +410,27 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   defp validate_bundle_version(version),
     do: {:error, {:unsupported_bundle_version, version, @compiled_bundle_version}}
 
+  @spec compiled_embedding_entries(map(), [map()], integer()) ::
+          {:ok, [{Nx.Tensor.t(), binary()}]} | {:error, atom() | tuple()}
   defp compiled_embedding_entries(bundle, actions, version) do
     embeddings = bundle_value(bundle, :tool_embeddings, [])
     action_ids = bundle_value(bundle, :action_ids, [])
     known_ids = actions |> Enum.map(& &1["id"]) |> MapSet.new()
 
+    with :ok <- validate_embedding_entry_lists(embeddings, action_ids),
+         :ok <- validate_embedding_action_ids(action_ids, known_ids) do
+      validate_compiled_embeddings(
+        embeddings,
+        action_ids,
+        bundle_value(bundle, :embedding_dim),
+        version,
+        bundle_value(bundle, :embedding_dtype)
+      )
+    end
+  end
+
+  @spec validate_embedding_entry_lists(term(), term()) :: :ok | {:error, atom()}
+  defp validate_embedding_entry_lists(embeddings, action_ids) do
     cond do
       not is_list(embeddings) or not is_list(action_ids) ->
         {:error, :invalid_embedding_entries}
@@ -422,6 +438,14 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
       length(embeddings) != length(action_ids) ->
         {:error, :embedding_count_mismatch}
 
+      true ->
+        :ok
+    end
+  end
+
+  @spec validate_embedding_action_ids([term()], MapSet.t()) :: :ok | {:error, atom()}
+  defp validate_embedding_action_ids(action_ids, known_ids) do
+    cond do
       Enum.any?(action_ids, &(not is_binary(&1))) ->
         {:error, :invalid_embedding_action_id}
 
@@ -435,13 +459,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
         {:error, :incomplete_embedding_coverage}
 
       true ->
-        validate_compiled_embeddings(
-          embeddings,
-          action_ids,
-          bundle_value(bundle, :embedding_dim),
-          version,
-          bundle_value(bundle, :embedding_dtype)
-        )
+        :ok
     end
   end
 
