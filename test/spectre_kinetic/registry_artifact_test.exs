@@ -36,9 +36,9 @@ defmodule SpectreKinetic.RegistryArtifactTest do
     {:ok, registry} = ETS.new()
     path = temp_path("wrong-version.etf")
 
-    write_bundle(path, %{version: 2, actions: [action()]})
+    write_bundle(path, %{version: 3, actions: [action()]})
 
-    assert {:error, {:unsupported_bundle_version, 2, 1}} =
+    assert {:error, {:unsupported_bundle_version, 3, 2}} =
              ETS.load_compiled(registry, path)
 
     write_bundle(path, %{actions: [action()]})
@@ -77,6 +77,62 @@ defmodule SpectreKinetic.RegistryArtifactTest do
     assert :ok = ETS.close(registry)
   end
 
+  test "data-only bundles load finite f32 embedding rows" do
+    {:ok, registry} = ETS.new()
+    path = temp_path("data-only.etf")
+
+    bundle = %{
+      "version" => 2,
+      "actions" => [string_action()],
+      "action_ids" => ["Example.run/0"],
+      "tool_embeddings" => [[1.0, 0.0]],
+      "embedding_dim" => 2,
+      "embedding_dtype" => "f32",
+      "compiled_at" => "2026-07-12T00:00:00Z"
+    }
+
+    binary = :erlang.term_to_binary(bundle)
+    assert {:ok, ^bundle} = SpectreKinetic.Artifact.decode_term(binary)
+    File.write!(path, binary)
+
+    assert {:ok, registry} = ETS.load_compiled(registry, path)
+    assert {matrix, ["Example.run/0"]} = ETS.embedding_matrix(registry)
+    assert Nx.shape(matrix) == {1, 2}
+    assert :ok = ETS.close(registry)
+  end
+
+  test "data-only bundles require complete numeric embedding coverage" do
+    {:ok, registry} = ETS.new()
+    path = temp_path("incomplete-data.etf")
+
+    second_action =
+      string_action()
+      |> Map.merge(%{"id" => "Example.stop/0", "name" => "stop"})
+
+    bundle = %{
+      "version" => 2,
+      "actions" => [string_action(), second_action],
+      "action_ids" => ["Example.run/0"],
+      "tool_embeddings" => [[1.0, 0.0]],
+      "embedding_dim" => 2,
+      "embedding_dtype" => "f32"
+    }
+
+    File.write!(path, :erlang.term_to_binary(bundle))
+    assert {:error, :incomplete_embedding_coverage} = ETS.load_compiled(registry, path)
+
+    invalid = %{
+      bundle
+      | "actions" => [string_action()],
+        "tool_embeddings" => [["not-a-number", 0.0]]
+    }
+
+    File.write!(path, :erlang.term_to_binary(invalid))
+    assert {:error, {:invalid_embedding, 0, 2}} = ETS.load_compiled(registry, path)
+    assert ETS.action_count(registry) == 0
+    assert :ok = ETS.close(registry)
+  end
+
   defp action do
     %{
       id: "Example.run/0",
@@ -85,6 +141,17 @@ defmodule SpectreKinetic.RegistryArtifactTest do
       arity: 0,
       args: [],
       examples: ["RUN EXAMPLE"]
+    }
+  end
+
+  defp string_action do
+    %{
+      "id" => "Example.run/0",
+      "module" => "Example",
+      "name" => "run",
+      "arity" => 0,
+      "args" => [],
+      "examples" => ["RUN EXAMPLE"]
     }
   end
 

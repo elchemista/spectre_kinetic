@@ -15,7 +15,9 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
 
   require Logger
 
-  @compiled_bundle_version 1
+  @compiled_bundle_version 2
+  @legacy_compiled_bundle_version 1
+  @f32_max 3.4028234663852886e38
 
   defstruct [:actions, :aliases, :embeddings, :meta, :owner]
 
@@ -328,7 +330,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
          :ok <- validate_bundle_version(version),
          {:ok, raw_actions} <- fetch_bundle_field(bundle, :actions),
          {:ok, actions} <- normalize_actions(raw_actions),
-         {:ok, embedding_entries} <- compiled_embedding_entries(bundle, actions) do
+         {:ok, embedding_entries} <- compiled_embedding_entries(bundle, actions, version) do
       {:ok, actions, embedding_entries}
     end
   end
@@ -338,18 +340,24 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   defp fetch_bundle_field(bundle, key) do
     case Map.fetch(bundle, key) do
       {:ok, value} -> {:ok, value}
-      :error -> {:error, {:missing_bundle_field, key}}
+      :error ->
+        case Map.fetch(bundle, Atom.to_string(key)) do
+          {:ok, value} -> {:ok, value}
+          :error -> {:error, {:missing_bundle_field, key}}
+        end
     end
   end
 
-  defp validate_bundle_version(@compiled_bundle_version), do: :ok
+  defp validate_bundle_version(version)
+       when version in [@legacy_compiled_bundle_version, @compiled_bundle_version],
+       do: :ok
 
   defp validate_bundle_version(version),
     do: {:error, {:unsupported_bundle_version, version, @compiled_bundle_version}}
 
-  defp compiled_embedding_entries(bundle, actions) do
-    embeddings = Map.get(bundle, :tool_embeddings, [])
-    action_ids = Map.get(bundle, :action_ids, [])
+  defp compiled_embedding_entries(bundle, actions, version) do
+    embeddings = bundle_value(bundle, :tool_embeddings, [])
+    action_ids = bundle_value(bundle, :action_ids, [])
     known_ids = actions |> Enum.map(& &1["id"]) |> MapSet.new()
 
     cond do
@@ -368,31 +376,114 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
       Enum.any?(action_ids, fn action_id -> not MapSet.member?(known_ids, action_id) end) ->
         {:error, :unknown_embedding_action}
 
+      action_ids != [] and not complete_embedding_coverage?(known_ids, action_ids) ->
+        {:error, :incomplete_embedding_coverage}
+
       true ->
-        validate_compiled_embeddings(embeddings, action_ids, Map.get(bundle, :embedding_dim))
+        validate_compiled_embeddings(
+          embeddings,
+          action_ids,
+          bundle_value(bundle, :embedding_dim),
+          version,
+          bundle_value(bundle, :embedding_dtype)
+        )
     end
   end
 
-  defp validate_compiled_embeddings([], [], embedding_dim)
+  defp validate_compiled_embeddings([], [], embedding_dim, _version, _dtype)
        when is_nil(embedding_dim) or
               (is_integer(embedding_dim) and embedding_dim > 0),
        do: {:ok, []}
 
-  defp validate_compiled_embeddings(embeddings, action_ids, embedding_dim)
+  defp validate_compiled_embeddings(
+         embeddings,
+         action_ids,
+         embedding_dim,
+         @legacy_compiled_bundle_version,
+         _dtype
+       )
        when is_integer(embedding_dim) and embedding_dim > 0 do
-    case Enum.find_index(embeddings, &(not valid_embedding?(&1, embedding_dim))) do
+    case Enum.find_index(embeddings, &(not valid_legacy_embedding?(&1, embedding_dim))) do
       nil -> {:ok, Enum.zip(embeddings, action_ids)}
       index -> {:error, {:invalid_embedding, index, embedding_dim}}
     end
   end
 
-  defp validate_compiled_embeddings(_embeddings, _action_ids, embedding_dim),
+  defp validate_compiled_embeddings(
+         embeddings,
+         action_ids,
+         embedding_dim,
+         @compiled_bundle_version,
+         "f32"
+       )
+       when is_integer(embedding_dim) and embedding_dim > 0 do
+    case Enum.find_index(embeddings, &(not valid_data_embedding?(&1, embedding_dim))) do
+      nil ->
+        entries =
+          embeddings
+          |> Enum.map(&Nx.tensor(&1, type: :f32))
+          |> Enum.zip(action_ids)
+
+        {:ok, entries}
+
+      index ->
+        {:error, {:invalid_embedding, index, embedding_dim}}
+    end
+  end
+
+  defp validate_compiled_embeddings(
+         _embeddings,
+         _action_ids,
+         _embedding_dim,
+         @compiled_bundle_version,
+         dtype
+       )
+       when dtype != "f32",
+       do: {:error, {:unsupported_embedding_dtype, dtype}}
+
+  defp validate_compiled_embeddings(_embeddings, _action_ids, embedding_dim, _version, _dtype),
     do: {:error, {:invalid_embedding_dim, embedding_dim}}
 
-  defp valid_embedding?(%Nx.Tensor{} = tensor, embedding_dim),
-    do: Nx.shape(tensor) == {embedding_dim}
+  defp valid_legacy_embedding?(%Nx.Tensor{} = tensor, embedding_dim) do
+    Nx.shape(tensor) == {embedding_dim} and
+      tensor |> Nx.to_flat_list() |> Enum.all?(&finite_number?/1)
+  rescue
+    _error -> false
+  end
 
-  defp valid_embedding?(_embedding, _embedding_dim), do: false
+  defp valid_legacy_embedding?(_embedding, _embedding_dim), do: false
+
+  defp valid_data_embedding?(embedding, embedding_dim) when is_list(embedding) do
+    length(embedding) == embedding_dim and Enum.all?(embedding, &finite_f32_number?/1)
+  end
+
+  defp valid_data_embedding?(_embedding, _embedding_dim), do: false
+
+  defp finite_number?(value) when is_integer(value), do: true
+
+  defp finite_number?(value) when is_float(value) do
+    representation = value |> :erlang.float_to_binary([:compact]) |> String.downcase()
+    representation not in ["nan", "inf", "-inf"]
+  rescue
+    _error -> false
+  end
+
+  defp finite_number?(_value), do: false
+
+  defp finite_f32_number?(value) when is_number(value),
+    do: finite_number?(value) and abs(value) <= @f32_max
+
+  defp finite_f32_number?(_value), do: false
+
+  defp complete_embedding_coverage?(known_ids, action_ids),
+    do: MapSet.equal?(known_ids, MapSet.new(action_ids))
+
+  defp bundle_value(bundle, key, default \\ nil) do
+    case Map.fetch(bundle, key) do
+      {:ok, value} -> value
+      :error -> Map.get(bundle, Atom.to_string(key), default)
+    end
+  end
 
   defp install_compiled_bundle(
          {:ok, actions, embedding_entries},
