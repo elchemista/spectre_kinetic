@@ -37,8 +37,35 @@ defmodule SpectreKinetic.RegistryBackendContractTest do
       assert ids == ["Dynamic.Task.update/3"]
       assert Nx.shape(matrix) == {1, 2}
 
+      replacement = %{
+        id: "Dynamic.Task.update/3",
+        module: "Dynamic.Task",
+        name: "update",
+        arity: 3,
+        args: [
+          %{name: "id", aliases: ["work_id"]},
+          %{name: "status", aliases: ["phase"]},
+          %{name: "assignee", aliases: ["responsible"]}
+        ]
+      }
+
+      assert {:ok, registry} = ETS.add_action(registry, replacement)
+      assert ETS.action_count(registry) == 1
+      assert ETS.resolve_alias(registry, "owner") == []
+
+      assert ETS.resolve_alias(registry, "responsible") == [
+               {"Dynamic.Task.update/3", "assignee"}
+             ]
+
+      assert ETS.embedding_matrix(registry) == nil
+
+      assert {:error, :action_not_found} =
+               ETS.put_embedding(registry, "Dynamic.Missing.run/0", Nx.tensor([1.0, 0.0]))
+
       assert {{:ok, true}, registry} = ETS.delete_action(registry, "Dynamic.Task.update/3")
       assert ETS.action_count(registry) == 0
+      assert ETS.resolve_alias(registry, "responsible") == []
+      assert ETS.embedding_matrix(registry) == nil
     after
       ETS.close(registry)
     end

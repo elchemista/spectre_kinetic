@@ -301,7 +301,11 @@ defmodule SpectreKinetic.RuntimeTest do
     registry_json = write_registry_json([email_action()])
     {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)
     {:ok, encoder} = FakeEncoder.start_link([1.0, 0.0])
-    runtime = %{runtime | encoder: encoder}
+
+    {:ok, registry} =
+      ETS.put_embedding(runtime.registry, "Dynamic.Email.send/3", Nx.tensor([1.0, 0.0]))
+
+    runtime = %{runtime | registry: registry, encoder: encoder}
 
     {result, events} =
       TelemetryHelper.capture([@registry_add_event, @registry_embed_event], fn ->
@@ -314,6 +318,27 @@ defmodule SpectreKinetic.RuntimeTest do
     assert event_metadata(events, @registry_add_event).embedding_attempted == true
     assert event_metadata(events, @registry_embed_event).result == :ok
     assert event_metadata(events, @registry_embed_event).scope == :action
+  end
+
+  test "add_action/2 leaves an existing action unchanged when embedding fails" do
+    registry_json = write_registry_json([email_action()])
+    {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_json)
+    {:ok, encoder} = FailingEncoder.start_link()
+    runtime = %{runtime | encoder: encoder}
+
+    replacement =
+      email_action()
+      |> Map.put("doc", "Replacement that must not be committed")
+      |> Map.update!("args", fn [to | rest] ->
+        [Map.put(to, "aliases", ["destination"]) | rest]
+      end)
+
+    assert {:error, :embedding_failed} = SpectreKinetic.add_action(runtime, replacement)
+
+    stored = ETS.get_action(runtime.registry, "Dynamic.Email.send/3")
+    assert stored["doc"] == "Send an outbound email message"
+    assert ETS.resolve_alias(runtime.registry, "recipient") == [{"Dynamic.Email.send/3", "to"}]
+    assert ETS.resolve_alias(runtime.registry, "destination") == []
   end
 
   test "ETS registry backend can be used directly without the compatibility server" do

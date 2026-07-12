@@ -85,9 +85,14 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
 
   @impl Registry
   def add_action(%__MODULE__{} = registry, action) do
+    upsert_action(registry, action, nil)
+  end
+
+  @impl Registry
+  def upsert_action(%__MODULE__{} = registry, action, embedding) do
     case Registry.normalize_action(action) do
       {:ok, normalized} ->
-        insert_action(registry, normalized)
+        replace_action(registry, normalized, embedding)
         {:ok, registry}
 
       {:error, _reason} = error ->
@@ -98,9 +103,9 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   @impl Registry
   def delete_action(%__MODULE__{} = registry, action_id) do
     existed = :ets.member(registry.actions, action_id)
-    :ets.delete(registry.actions, action_id)
-    :ets.delete(registry.embeddings, action_id)
     :ets.match_delete(registry.aliases, {:_, action_id, :_})
+    :ets.delete(registry.embeddings, action_id)
+    :ets.delete(registry.actions, action_id)
     {{:ok, existed}, registry}
   end
 
@@ -115,16 +120,23 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
       [] ->
         nil
 
-      _ ->
+      _ when length(entries) == action_count(registry) ->
         {ids, tensors} = Enum.unzip(entries)
         {Nx.stack(tensors), ids}
+
+      _incomplete ->
+        nil
     end
   end
 
   @impl Registry
   def put_embedding(%__MODULE__{} = registry, action_id, tensor) do
-    :ets.insert(registry.embeddings, {action_id, tensor})
-    {:ok, registry}
+    if :ets.member(registry.actions, action_id) do
+      :ets.insert(registry.embeddings, {action_id, tensor})
+      {:ok, registry}
+    else
+      {:error, :action_not_found}
+    end
   end
 
   @impl Registry
@@ -170,8 +182,20 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
   end
 
   defp insert_action(%__MODULE__{} = registry, action) do
-    :ets.insert(registry.actions, {action["id"], action})
+    replace_action(registry, action, nil)
+  end
+
+  defp replace_action(%__MODULE__{} = registry, action, embedding) do
+    action_id = action["id"]
+
+    :ets.match_delete(registry.aliases, {:_, action_id, :_})
+    :ets.delete(registry.embeddings, action_id)
+    :ets.insert(registry.actions, {action_id, action})
     index_aliases(registry.aliases, action)
+
+    if not is_nil(embedding) do
+      :ets.insert(registry.embeddings, {action_id, embedding})
+    end
   end
 
   defp index_aliases(aliases_tab, action) do

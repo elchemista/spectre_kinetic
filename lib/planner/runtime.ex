@@ -142,9 +142,9 @@ defmodule SpectreKinetic.Planner.Runtime do
     start = System.monotonic_time()
 
     result =
-      with {:ok, registry} <- runtime.registry_module.add_action(runtime.registry, action),
-           runtime <- %{runtime | registry: registry},
-           {:ok, registry} <- Embeddings.maybe_embed_action(runtime, action) do
+      with {:ok, action, embedding} <- Embeddings.prepare_action(runtime, action),
+           {:ok, registry} <-
+             runtime.registry_module.upsert_action(runtime.registry, action, embedding) do
         {:ok, %{runtime | registry: registry}}
       end
 
@@ -271,5 +271,6 @@ defmodule SpectreKinetic.Planner.Runtime do
   end
 
   defp action_id(%{"id" => id}) when is_binary(id), do: id
+  defp action_id(%{id: id}) when is_binary(id), do: id
   defp action_id(_action), do: nil
 end

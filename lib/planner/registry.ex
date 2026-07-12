@@ -40,6 +40,8 @@ defmodule SpectreKinetic.Planner.Registry do
   @callback get_action(term(), binary()) :: action() | nil
   @callback action_count(term()) :: non_neg_integer()
   @callback add_action(term(), map()) :: {:ok, term()} | {:error, term()}
+  @callback upsert_action(term(), map(), Nx.Tensor.t() | nil) ::
+              {:ok, term()} | {:error, term()}
   @callback delete_action(term(), binary()) :: {{:ok, boolean()}, term()} | {:error, term()}
   @callback embedding_matrix(term()) :: embedding_matrix() | nil
   @callback put_embedding(term(), binary(), Nx.Tensor.t()) :: {:ok, term()} | {:error, term()}
