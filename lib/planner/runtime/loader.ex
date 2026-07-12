@@ -92,20 +92,45 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
         ok
 
       {:error, _reason} = error ->
-        registry_module.close(registry)
+        safe_close(registry_module, registry)
         error
+
+      other ->
+        safe_close(registry_module, registry)
+        {:error, {:invalid_runtime_component_return, other}}
     end
   end
 
   defp load_registry(registry_module, opts) do
-    with {:ok, registry} <- registry_module.new(opts) do
-      if registry_module.action_count(registry) > 0 or
-           Keyword.get(opts, :allow_empty_registry, false) do
-        {:ok, registry}
-      else
-        registry_module.close(registry)
-        {:error, :empty_registry}
-      end
+    case safely(fn -> registry_module.new(opts) end) do
+      {:ok, registry} ->
+        validate_loaded_registry(registry_module, registry, opts)
+
+      {:error, _reason} = error ->
+        error
+
+      other ->
+        {:error, {:invalid_registry_return, :new, other}}
+    end
+  end
+
+  defp validate_loaded_registry(registry_module, registry, opts) do
+    case safely(fn -> registry_module.action_count(registry) end) do
+      count when is_integer(count) and count >= 0 ->
+        if count > 0 or Keyword.get(opts, :allow_empty_registry, false) do
+          {:ok, registry}
+        else
+          safe_close(registry_module, registry)
+          {:error, :empty_registry}
+        end
+
+      {:error, _reason} = error ->
+        safe_close(registry_module, registry)
+        error
+
+      other ->
+        safe_close(registry_module, registry)
+        {:error, {:invalid_registry_return, :action_count, other}}
     end
   end
 
@@ -130,14 +155,41 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
         {:error, :unknown_registry_format}
 
       {:ok, loader} ->
-        with {:ok, registry} <- Registry.stage(registry_module, active_registry, opts) do
-          case safely(fn -> loader.(registry, path) end) do
-            {:ok, registry} -> validate_staged_registry(registry_module, registry, opts)
-            {:error, _reason} = error -> close_staged(registry_module, registry, error)
-          end
+        case safely(fn -> Registry.stage(registry_module, active_registry, opts) end) do
+          {:ok, registry} ->
+            load_staged_registry(registry_module, registry, loader, path, opts)
+
+          {:error, _reason} = error ->
+            error
+
+          other ->
+            {:error, {:invalid_registry_return, :new_staging, other}}
         end
     end
   end
+
+  defp load_staged_registry(registry_module, registry, loader, path, opts) do
+    case safely(fn -> loader.(registry, path) end) do
+      {:ok, loaded_registry} ->
+        close_replaced_stage(registry_module, registry, loaded_registry)
+        validate_staged_registry(registry_module, loaded_registry, opts)
+
+      {:error, _reason} = error ->
+        close_staged(registry_module, registry, error)
+
+      other ->
+        close_staged(
+          registry_module,
+          registry,
+          {:error, {:invalid_registry_return, :load, other}}
+        )
+    end
+  end
+
+  defp close_replaced_stage(_registry_module, registry, registry), do: :ok
+
+  defp close_replaced_stage(registry_module, original, _replacement),
+    do: safe_close(registry_module, original)
 
   defp validate_registry_module(module) do
     with :ok <- RuntimeConfig.validate_module(module, :registry_module) do
@@ -177,17 +229,34 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
     do: {:error, {:invalid_options, [%{field: field, reason: reason}]}}
 
   defp validate_staged_registry(registry_module, registry, opts) do
-    if registry_module.action_count(registry) > 0 or
-         Keyword.get(opts, :allow_empty_registry, false) do
-      {:ok, registry}
-    else
-      close_staged(registry_module, registry, {:error, :empty_registry})
+    case safely(fn -> registry_module.action_count(registry) end) do
+      count when is_integer(count) and count >= 0 ->
+        if count > 0 or Keyword.get(opts, :allow_empty_registry, false) do
+          {:ok, registry}
+        else
+          close_staged(registry_module, registry, {:error, :empty_registry})
+        end
+
+      {:error, _reason} = error ->
+        close_staged(registry_module, registry, error)
+
+      other ->
+        close_staged(
+          registry_module,
+          registry,
+          {:error, {:invalid_registry_return, :action_count, other}}
+        )
     end
   end
 
   defp close_staged(registry_module, registry, result) do
-    registry_module.close(registry)
+    safe_close(registry_module, registry)
     result
+  end
+
+  defp safe_close(registry_module, registry) do
+    safely(fn -> registry_module.close(registry) end)
+    :ok
   end
 
   defp safely(fun) do
@@ -306,10 +375,17 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
 
   defp timed_result(event, metadata, fun) do
     start = System.monotonic_time()
-    result = fun.()
+    result = safely(fun)
     duration = System.monotonic_time() - start
 
-    case result do
+    normalized_result =
+      case result do
+        {:ok, _value} = ok -> ok
+        {:error, _reason} = error -> error
+        other -> {:error, {:invalid_runtime_component_return, other}}
+      end
+
+    case normalized_result do
       {:ok, _value} ->
         Telemetry.execute(event, %{duration: duration}, Map.put(metadata, :result, :ok))
 
@@ -320,12 +396,9 @@ defmodule SpectreKinetic.Planner.Runtime.Loader do
           |> Map.put(:reason, reason)
 
         Telemetry.execute(event, %{duration: duration}, metadata)
-
-      _other ->
-        Telemetry.execute(event, %{duration: duration}, Map.put(metadata, :result, :ok))
     end
 
-    result
+    normalized_result
   end
 
   defp registry_loader(registry_module, path) when is_binary(path) do
