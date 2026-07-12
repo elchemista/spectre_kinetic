@@ -16,6 +16,8 @@ defmodule SpectreKinetic.RuntimeConfig do
   the planner pipeline.
   """
 
+  alias SpectreKinetic.ClassifierPipeline.Spec, as: ClassifierSpec
+
   @app :spectre_kinetic
   @built_in_plan_defaults [
     top_k: 5,
@@ -391,6 +393,7 @@ defmodule SpectreKinetic.RuntimeConfig do
       probability_issues(options, :reranker_threshold) ++
       runtime_path_issues(options) ++
       runtime_module_issues(options) ++
+      classifier_issues(options) ++
       boolean_option_issues(options, :allow_empty_registry)
   end
 
@@ -476,6 +479,43 @@ defmodule SpectreKinetic.RuntimeConfig do
   end
 
   defp module_value_issues(_module, key), do: [%{field: key, reason: :must_be_module}]
+
+  defp classifier_issues(options) do
+    case Map.fetch(options, :classifiers) do
+      :error ->
+        []
+
+      {:ok, classifiers} when is_list(classifiers) ->
+        if Enum.all?(classifiers, &valid_classifier_spec?/1) do
+          []
+        else
+          [%{field: :classifiers, reason: :invalid_classifier_spec}]
+        end
+
+      {:ok, _classifiers} ->
+        [%{field: :classifiers, reason: :must_be_list}]
+    end
+  end
+
+  defp valid_classifier_spec?(%ClassifierSpec{module: module}),
+    do: valid_classifier_module?(module, :initialized)
+
+  defp valid_classifier_spec?(module) when is_atom(module),
+    do: valid_classifier_module?(module, :declaration)
+
+  defp valid_classifier_spec?({module, opts}) when is_atom(module) and is_list(opts) do
+    Keyword.keyword?(opts) and valid_classifier_module?(module, :declaration)
+  end
+
+  defp valid_classifier_spec?(_spec), do: false
+
+  defp valid_classifier_module?(module, mode) when is_atom(module) do
+    Code.ensure_loaded?(module) and
+      function_exported?(module, :call, 2) and
+      (mode == :initialized or function_exported?(module, :init, 1))
+  end
+
+  defp valid_classifier_module?(_module, _mode), do: false
 
   defp boolean_option_issues(options, key) do
     case Map.fetch(options, key) do

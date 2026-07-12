@@ -32,19 +32,32 @@ defmodule SpectreKinetic.ClassifierPipeline do
   @doc """
   Initializes classifier specs once for runtime/configured pipelines.
   """
-  @spec init_specs([module() | {module(), keyword()}]) ::
+  @spec init_specs([classifier_spec()]) ::
           {:ok, [Spec.t()]} | {:error, {module(), term()} | term()}
   def init_specs(classifier_specs) when is_list(classifier_specs) do
     classifier_specs
     |> Enum.reduce_while({:ok, []}, fn spec, {:ok, acc} ->
-      with {:ok, {module, opts}} <- normalize_declaration(spec),
-           {:ok, state} <- init_classifier(module, opts) do
-        {:cont, {:ok, [%Spec{module: module, state: state} | acc]}}
-      else
+      case initialize_spec(spec) do
+        {:ok, initialized} -> {:cont, {:ok, [initialized | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
     |> initialized_specs()
+  end
+
+  defp initialize_spec(%Spec{module: module} = spec) when is_atom(module) do
+    if Code.ensure_loaded?(module) and function_exported?(module, :call, 2) do
+      {:ok, spec}
+    else
+      {:error, {:invalid_classifier_spec, spec}}
+    end
+  end
+
+  defp initialize_spec(spec) do
+    with {:ok, {module, opts}} <- normalize_declaration(spec),
+         {:ok, state} <- init_classifier(module, opts) do
+      {:ok, %Spec{module: module, state: state}}
+    end
   end
 
   defp initialized_specs({:ok, specs}), do: {:ok, Enum.reverse(specs)}
