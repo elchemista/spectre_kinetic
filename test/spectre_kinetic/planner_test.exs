@@ -409,6 +409,32 @@ defmodule SpectreKinetic.PlannerTest do
       assert measurements.fallback_top_k == 2
       assert measurements.reranker_threshold == 0.0
     end
+
+    test "preserves configured top_k when the request omits it", %{store: store} do
+      request = %{
+        "al" => "DELETE NOTE ENTRY WITH: ID=note-1",
+        "slots" => %{"id" => "note-1"}
+      }
+
+      {result, events} =
+        TelemetryHelper.capture([@retrieval_fallback_event], fn ->
+          Planner.plan_request(request, %{registry: store, embedder: nil, top_k: 1})
+        end)
+
+      assert {:ok, %{"selected_tool" => "Dynamic.Note.delete/1"}} = result
+      assert [%{measurements: %{candidate_count: 1, fallback_top_k: 1}}] = events
+
+      {_result, events} =
+        TelemetryHelper.capture([@retrieval_fallback_event], fn ->
+          Planner.plan_request(Map.put(request, "top_k", 2), %{
+            registry: store,
+            embedder: nil,
+            top_k: 1
+          })
+        end)
+
+      assert [%{measurements: %{candidate_count: 2, fallback_top_k: 2}}] = events
+    end
   end
 
   test "direct planner returns structured validation errors" do

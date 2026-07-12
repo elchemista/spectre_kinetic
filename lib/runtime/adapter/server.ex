@@ -152,7 +152,7 @@ defmodule SpectreKinetic.Adapter.Server do
       planner_reply(
         runtime,
         normalized["al"],
-        Planner.plan_request(normalized, PlannerRuntime.plan_opts(runtime)),
+        Planner.plan_request(request, PlannerRuntime.plan_opts(runtime)),
         [],
         :plan
       )

@@ -64,6 +64,42 @@ defmodule SpectreKinetic.IntegrationTest do
     assert action.args["package"] == "nginx"
   end
 
+  test "plan_request/2 preserves runtime top_k unless explicitly overridden", %{
+    registry_json: registry_json
+  } do
+    runtime = SpectreKinetic.load_runtime!(registry_json: registry_json, top_k: 1)
+
+    request = %{
+      al: "INSTALL PACKAGE {package} VIA APT",
+      slots: %{package: "nginx"},
+      tool_threshold: 0.0,
+      mapping_threshold: 0.0
+    }
+
+    assert {:ok, %Action{} = action} = SpectreKinetic.plan_request(runtime, request)
+    assert length(action.alternatives) == 1
+
+    assert {:ok, %Action{} = action} =
+             SpectreKinetic.plan_request(runtime, Map.put(request, :top_k, 2))
+
+    assert length(action.alternatives) == 2
+  end
+
+  test "adapter plan_request/2 preserves runtime top_k", %{registry_json: registry_json} do
+    {:ok, pid} =
+      start_supervised({SpectreKinetic, registry_json: registry_json, top_k: 1, name: nil})
+
+    assert {:ok, %Action{} = action} =
+             SpectreKinetic.plan_request(pid, %{
+               al: "INSTALL PACKAGE {package} VIA APT",
+               slots: %{package: "nginx"},
+               tool_threshold: 0.0,
+               mapping_threshold: 0.0
+             })
+
+    assert length(action.alternatives) == 1
+  end
+
   test "adapter returns structured validation errors and stays alive", %{pid: pid} do
     assert {:error, {:invalid_request, [%{field: :al, reason: :must_be_binary}]}} =
              SpectreKinetic.plan(pid, 123)

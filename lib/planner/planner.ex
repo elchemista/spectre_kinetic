@@ -86,6 +86,7 @@ defmodule SpectreKinetic.Planner do
   def plan_request(request, opts \\ %{}) do
     with :ok <- RuntimeConfig.validate_request(request),
          :ok <- RuntimeConfig.validate_options(opts) do
+      top_k_override = request_value(request, :top_k)
       request = RuntimeConfig.normalize_request(request)
       al_text = Map.get(request, "al", "")
       slots = Map.get(request, "slots", %{})
@@ -94,7 +95,7 @@ defmodule SpectreKinetic.Planner do
         opts
         |> normalize_plan_opts()
         |> Map.put(:slots, slots)
-        |> maybe_put(:top_k, Map.get(request, "top_k"))
+        |> maybe_put(:top_k, top_k_override)
         |> maybe_put(:tool_threshold, Map.get(request, "tool_threshold"))
         |> maybe_put(:mapping_threshold, Map.get(request, "mapping_threshold"))
         |> maybe_put(:tool_selection_fallback, Map.get(request, "tool_selection_fallback"))
@@ -143,6 +144,11 @@ defmodule SpectreKinetic.Planner do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp request_value(request, key) do
+    [key, Atom.to_string(key)]
+    |> Enum.find_value(&Map.get(request, &1))
+  end
 
   defp normalize_plan_opts(opts) when is_list(opts), do: Map.new(opts)
   defp normalize_plan_opts(opts) when is_map(opts), do: opts

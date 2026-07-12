@@ -134,7 +134,7 @@ defmodule SpectreKinetic do
       planner_reply(
         runtime,
         normalized["al"],
-        Planner.plan_request(runtime, normalized, []),
+        Planner.plan_request(runtime, request, []),
         [],
         :plan
       )
