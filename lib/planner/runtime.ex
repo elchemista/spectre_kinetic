@@ -128,6 +128,14 @@ defmodule SpectreKinetic.Planner.Runtime do
   end
 
   @doc """
+  Returns the normalized action definitions in the active registry.
+  """
+  @spec action_definitions(t()) :: [map()]
+  def action_definitions(%__MODULE__{} = runtime) do
+    runtime.registry_module.all_actions(runtime.registry)
+  end
+
+  @doc """
   Closes registry resources owned by the calling process.
 
   ETS-backed runtimes are process-owned: they may be shared for planning, but

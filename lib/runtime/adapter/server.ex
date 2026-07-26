@@ -65,6 +65,12 @@ defmodule SpectreKinetic.Adapter.Server do
   @spec action_count(GenServer.server()) :: non_neg_integer()
   def action_count(server), do: GenServer.call(server, :action_count)
 
+  @doc """
+  Returns the normalized action definitions in the active registry.
+  """
+  @spec action_definitions(GenServer.server()) :: [map()]
+  def action_definitions(server), do: GenServer.call(server, :action_definitions)
+
   @impl GenServer
   def init(opts) do
     case PlannerRuntime.load(opts) do
@@ -122,6 +128,10 @@ defmodule SpectreKinetic.Adapter.Server do
 
   def handle_call(:action_count, _from, state) do
     {:reply, PlannerRuntime.action_count(state.runtime), state}
+  end
+
+  def handle_call(:action_definitions, _from, state) do
+    {:reply, PlannerRuntime.action_definitions(state.runtime), state}
   end
 
   @impl GenServer

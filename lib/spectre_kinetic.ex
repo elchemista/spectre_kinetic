@@ -236,6 +236,15 @@ defmodule SpectreKinetic do
   def action_count(server), do: AdapterServer.action_count(server)
 
   @doc """
+  Returns the normalized action definitions in the active registry.
+  """
+  @spec action_definitions(GenServer.server() | PlannerRuntime.t()) :: [map()]
+  def action_definitions(%PlannerRuntime{} = runtime),
+    do: PlannerRuntime.action_definitions(runtime)
+
+  def action_definitions(server), do: AdapterServer.action_definitions(server)
+
+  @doc """
   Loads a library-first planner runtime without starting the adapter.
   """
   @spec load_runtime(keyword()) :: {:ok, PlannerRuntime.t()} | {:error, term()}

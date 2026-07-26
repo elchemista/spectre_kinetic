@@ -108,7 +108,7 @@ motivational quote.
 
 ## What It Does Not Do
 
-- execute your tools
+- execute tools outside Spectre's action lifecycle
 - orchestrate workflows
 - retry side effects
 - invent missing arguments
@@ -126,6 +126,75 @@ def deps do
   ]
 end
 ```
+
+## Spectre Agent Integration
+
+Define application actions with the existing Kinetic DSL:
+
+```elixir
+defmodule MyApp.ProjectActions do
+  use SpectreKinetic
+
+  @al ~s(CREATE PROJECT WITH: TITLE="Marketplace MVP")
+  @doc "Creates a project"
+  @spec create_project(String.t()) :: {:ok, term()} | {:error, term()}
+  def create_project(title), do: MyApp.Projects.create(%{title: title})
+end
+```
+
+Then mount Kinetic on the Agent:
+
+```elixir
+defmodule MyApp.ProjectAgent do
+  use Spectre.Agent
+  use Spectre.Kinetic,
+    actions: MyApp.ProjectActions,
+    modes: [create_project: :write],
+    top_k: 5
+
+  protect({:kinetic, :create_project}, with: :confirm_project)
+
+  policy :confirm_project do
+    request(:confirm_project)
+    accept(:confirmed, regex: ~r/^yes$/i)
+    reject(:cancelled, regex: ~r/^no$/i)
+  end
+
+  flow :projects do
+    on :CREATE_PROJECT, regex: ~r/\bcreate.*\bproject\b/i do
+      ask(:create_project)
+    end
+  end
+end
+```
+
+The order and boundary are intentional:
+
+```elixir
+use Spectre.Agent
+use Spectre.Kinetic, actions: MyApp.ProjectActions
+```
+
+`use Spectre.Agent` remains the Agent entry point. `use Spectre.Kinetic`
+registers the planner and, when `:actions` is present, its built-in
+`Spectre.Kinetic.Actions` provider. The application does not implement an
+adapter and should not mount that internal provider with the core `actions`
+macro.
+
+At planning time Spectre passes the registered action providers to Kinetic.
+Kinetic builds or uses its registry, selects an operation, maps arguments, and
+returns a provider-neutral `%Spectre.Action{}`. Spectre then owns policy,
+staging, persistence, idempotency, provider dispatch, journal events, and the
+terminal outcome.
+
+If MCP, Lens, or another extension already registers providers, use
+`use Spectre.Kinetic` without `:actions`. With neither an `:actions` module nor
+another provider, Kinetic has no operations to select.
+
+Borrowed and precompiled runtimes are checked against that Agent's provider
+catalog before planning. Missing, changed, or unmounted actions fail closed.
+
+Standalone `SpectreKinetic` APIs remain available and do not require Spectre.
 
 ## Quick Start
 
@@ -161,8 +230,10 @@ action.status
 # :ok
 ```
 
-The planner returns data. It does not call `MyApp.Emailer.send/2` for you.
-That boundary is the whole point.
+The standalone planner returns data and does not call
+`MyApp.Emailer.send/2`. When mounted through `use Spectre.Kinetic`, its
+built-in provider invokes the selected function only after Spectre has staged,
+authorized, persisted, and dispatched the action.
 
 Primitive argument types declared by the registry are enforced during slot
 mapping. Integer, float, and boolean AL literals are safely coerced; invalid
