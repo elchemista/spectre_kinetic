@@ -153,7 +153,7 @@ defmodule SpectreKinetic.Reranker.Trainer do
   defp validate_binary_classes(examples) do
     classes = examples |> Enum.map(&normalize_label(&1.label)) |> MapSet.new()
 
-    if classes == MapSet.new([0.0, 1.0]) do
+    if MapSet.equal?(classes, MapSet.new([0.0, 1.0])) do
       :ok
     else
       {:error, {:invalid_dataset, :requires_positive_and_negative_examples}}

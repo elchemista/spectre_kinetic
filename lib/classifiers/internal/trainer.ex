@@ -290,7 +290,7 @@ defmodule SpectreKinetic.Classifiers.Internal.Trainer do
     with :ok <- validate_example_labels(examples, [0, 1, false, true]) do
       classes = examples |> Enum.map(&normalize_binary_label(&1.label)) |> MapSet.new()
 
-      if classes == MapSet.new([0.0, 1.0]) do
+      if MapSet.equal?(classes, MapSet.new([0.0, 1.0])) do
         :ok
       else
         {:error, {:invalid_dataset, :requires_positive_and_negative_examples}}
