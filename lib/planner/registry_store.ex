@@ -263,8 +263,8 @@ defmodule SpectreKinetic.Planner.RegistryStore do
   defp validate_registry_path(path) when is_binary(path) do
     if String.valid?(path) and byte_size(path) <= 4_096 and String.trim(path) != "" and
          not String.contains?(path, <<0>>),
-      do: :ok,
-      else: {:error, {:invalid_registry_input, :path}}
+       do: :ok,
+       else: {:error, {:invalid_registry_input, :path}}
   end
 
   defp validate_registry_path(_path), do: {:error, {:invalid_registry_input, :path}}

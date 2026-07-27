@@ -410,7 +410,9 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
 
   defp fetch_bundle_field(bundle, key) do
     case Map.fetch(bundle, key) do
-      {:ok, value} -> {:ok, value}
+      {:ok, value} ->
+        {:ok, value}
+
       :error ->
         case Map.fetch(bundle, Atom.to_string(key)) do
           {:ok, value} -> {:ok, value}

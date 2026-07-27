@@ -8,6 +8,7 @@ defmodule Spectre.Kinetic.Planner do
 
   alias Spectre.Kinetic.Catalog
   alias SpectreKinetic.Action, as: KineticAction
+  alias SpectreKinetic.ActionChain
 
   @runtime_option_keys [
     :encoder_model_dir,
@@ -53,24 +54,41 @@ defmodule Spectre.Kinetic.Planner do
       {:ok, %{reply_text: scan.clean_text, actions: []}}
     else
       with {:ok, catalog} <- Catalog.build(opts) do
-        with_runtime(catalog, opts, fn runtime ->
-          with {:ok, chain} <- SpectreKinetic.plan_chain(runtime, text, plan_opts(opts)),
-               {:ok, actions} <- convert_chain(chain, catalog) do
-            {:ok, %{reply_text: scan.clean_text, actions: actions}}
-          end
-        end)
+        with_runtime(
+          catalog,
+          opts,
+          &plan_response_with_runtime(&1, text, scan.clean_text, catalog, opts)
+        )
       end
+    end
+  end
+
+  @spec plan_response_with_runtime(
+          term(),
+          String.t(),
+          String.t(),
+          Catalog.t(),
+          keyword()
+        ) :: {:ok, map()} | {:error, term()}
+  defp plan_response_with_runtime(runtime, text, clean_text, catalog, opts) do
+    with {:ok, chain} <- SpectreKinetic.plan_chain(runtime, text, plan_opts(opts)),
+         {:ok, actions} <- convert_chain(chain, catalog) do
+      {:ok, %{reply_text: clean_text, actions: actions}}
     end
   end
 
   @spec plan(String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def plan(al, _ctx, opts) when is_binary(al) and is_list(opts) do
     with {:ok, catalog} <- Catalog.build(opts) do
-      with_runtime(catalog, opts, fn runtime ->
-        with {:ok, action} <- SpectreKinetic.plan(runtime, al, plan_opts(opts)) do
-          convert_action(action, catalog, 0)
-        end
-      end)
+      with_runtime(catalog, opts, &plan_with_runtime(&1, al, catalog, opts))
+    end
+  end
+
+  @spec plan_with_runtime(term(), String.t(), Catalog.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  defp plan_with_runtime(runtime, al, catalog, opts) do
+    with {:ok, action} <- SpectreKinetic.plan(runtime, al, plan_opts(opts)) do
+      convert_action(action, catalog, 0)
     end
   end
 
@@ -81,8 +99,8 @@ defmodule Spectre.Kinetic.Planner do
     |> Map.fetch!(:clean_text)
   end
 
-  @spec convert_chain(term(), Catalog.t()) :: {:ok, [map()]} | {:error, term()}
-  defp convert_chain(%{actions: actions}, catalog) when is_list(actions) do
+  @spec convert_chain(ActionChain.t(), Catalog.t()) :: {:ok, [map()]} | {:error, term()}
+  defp convert_chain(%ActionChain{actions: actions}, catalog) do
     actions
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, []}, fn {action, index}, {:ok, converted} ->
@@ -96,8 +114,6 @@ defmodule Spectre.Kinetic.Planner do
       {:error, _reason} = error -> error
     end
   end
-
-  defp convert_chain(other, _catalog), do: {:error, {:invalid_action_chain, other}}
 
   @spec convert_action(term(), Catalog.t(), non_neg_integer()) ::
           {:ok, map()} | {:error, term()}
@@ -218,12 +234,10 @@ defmodule Spectre.Kinetic.Planner do
 
   @spec with_verified_runtime(term(), Catalog.t(), (term() -> term())) :: term()
   defp with_verified_runtime(runtime, %Catalog{} = catalog, function) do
-    with actions when is_list(actions) <- SpectreKinetic.action_definitions(runtime),
-         :ok <- Catalog.verify_runtime(catalog, actions) do
+    actions = SpectreKinetic.action_definitions(runtime)
+
+    with :ok <- Catalog.verify_runtime(catalog, actions) do
       function.(runtime)
-    else
-      {:error, _reason} = error -> error
-      other -> {:error, {:invalid_kinetic_runtime_actions, other}}
     end
   end
 

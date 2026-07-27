@@ -195,8 +195,7 @@ defmodule SpectreKinetic.RuntimeTest do
     end)
 
     assert {:error,
-            {:invalid_options,
-             [%{field: :registry_json, reason: :must_be_non_blank_binary}]}} =
+            {:invalid_options, [%{field: :registry_json, reason: :must_be_non_blank_binary}]}} =
              SpectreKinetic.load_runtime()
   end
 
@@ -240,8 +239,7 @@ defmodule SpectreKinetic.RuntimeTest do
     {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: email_json)
     active_registry = runtime.registry
 
-    assert {:error,
-            {:invalid_action, 1, {:invalid_field, "module", :must_be_string}}} =
+    assert {:error, {:invalid_action, 1, {:invalid_field, "module", :must_be_string}}} =
              SpectreKinetic.reload_registry(runtime, invalid_json)
 
     assert :ets.info(active_registry.actions) != :undefined
@@ -361,8 +359,7 @@ defmodule SpectreKinetic.RuntimeTest do
 
     for path <- [42, " "] do
       assert {:error,
-              {:invalid_options,
-               [%{field: :registry_path, reason: :must_be_non_blank_binary}]}} =
+              {:invalid_options, [%{field: :registry_path, reason: :must_be_non_blank_binary}]}} =
                SpectreKinetic.reload_registry(runtime, path)
     end
 

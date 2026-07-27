@@ -14,7 +14,10 @@ defmodule SpectreKinetic.RegistryValidationTest do
              Registry.normalize_action(%{base | "id" => "Other.run/1"})
 
     assert {:error, {:invalid_arg, 0, {:invalid_field, "aliases", :must_be_list}}} =
-             Registry.normalize_action(%{base | "args" => [%{"name" => "input", "aliases" => 123}]})
+             Registry.normalize_action(%{
+               base
+               | "args" => [%{"name" => "input", "aliases" => 123}]
+             })
 
     assert {:error, {:ambiguous_arg_name, "INPUT", 0, 0}} =
              Registry.normalize_action(%{
@@ -35,8 +38,7 @@ defmodule SpectreKinetic.RegistryValidationTest do
       ])
 
     assert {:error,
-            {:invalid_action, 0,
-             {:invalid_arg, 0, {:invalid_field, "aliases", :must_be_list}}}} =
+            {:invalid_action, 0, {:invalid_arg, 0, {:invalid_field, "aliases", :must_be_list}}}} =
              ETS.load_json(registry, malformed_path)
 
     assert ETS.action_count(registry) == 1

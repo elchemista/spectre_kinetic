@@ -105,8 +105,7 @@ defmodule SpectreKinetic.Artifact do
     if decoded_size <= max_decoded_bytes do
       :ok
     else
-      {:error,
-       {:artifact_expands_too_large, source, decoded_size, max_decoded_bytes}}
+      {:error, {:artifact_expands_too_large, source, decoded_size, max_decoded_bytes}}
     end
   end
 

@@ -66,36 +66,28 @@ defmodule SpectreKinetic.RuntimeConfigTest do
 
     test "rejects invalid option containers and slot values" do
       assert {:error,
-              {:invalid_options,
-               [%{field: :options, reason: :must_be_keyword_or_atom_keyed_map}]}} =
+              {:invalid_options, [%{field: :options, reason: :must_be_keyword_or_atom_keyed_map}]}} =
                RuntimeConfig.validate_options([:not_a_keyword])
 
-      assert {:error,
-              {:invalid_options, [%{field: :options, reason: :must_have_unique_keys}]}} =
+      assert {:error, {:invalid_options, [%{field: :options, reason: :must_have_unique_keys}]}} =
                RuntimeConfig.validate_options(top_k: 5, top_k: 0)
 
       assert {:error,
-              {:invalid_options,
-               [%{field: :slots, reason: :must_be_json_compatible_map}]}} =
+              {:invalid_options, [%{field: :slots, reason: :must_be_json_compatible_map}]}} =
                RuntimeConfig.validate_options(slots: %{callback: fn -> :ok end})
 
       assert {:error,
-              {:invalid_options,
-               [%{field: :slots, reason: :must_be_json_compatible_map}]}} =
+              {:invalid_options, [%{field: :slots, reason: :must_be_json_compatible_map}]}} =
                RuntimeConfig.validate_options(slots: %{items: [1 | :improper]})
     end
 
     test "does not let callers use the former missing-value sentinel" do
       sentinel = :__spectre_kinetic_missing__
 
-      assert {:error,
-              {:invalid_options,
-               [%{field: :top_k, reason: :must_be_positive_integer}]}} =
+      assert {:error, {:invalid_options, [%{field: :top_k, reason: :must_be_positive_integer}]}} =
                RuntimeConfig.validate_options(top_k: sentinel)
 
-      assert {:error,
-              {:invalid_request,
-               [%{field: :top_k, reason: :must_be_positive_integer}]}} =
+      assert {:error, {:invalid_request, [%{field: :top_k, reason: :must_be_positive_integer}]}} =
                RuntimeConfig.validate_request(%{"al" => "SEND MESSAGE", "top_k" => sentinel})
     end
 
@@ -148,23 +140,18 @@ defmodule SpectreKinetic.RuntimeConfigTest do
     end
 
     test "rejects oversized AL and pathological slot containers" do
-      assert {:error,
-              {:invalid_request, [%{field: :al, reason: :exceeds_size_limit}]}} =
+      assert {:error, {:invalid_request, [%{field: :al, reason: :exceeds_size_limit}]}} =
                RuntimeConfig.validate_plan_input(String.duplicate("A", 32 * 1_024 + 1), [])
 
       too_many_slots = Map.new(1..257, &{"slot_#{&1}", &1})
 
-      assert {:error,
-              {:invalid_request,
-               [%{field: :slots, reason: :exceeds_complexity_limit}]}} =
+      assert {:error, {:invalid_request, [%{field: :slots, reason: :exceeds_complexity_limit}]}} =
                RuntimeConfig.validate_request(%{"al" => "RUN TEST", "slots" => too_many_slots})
 
       deeply_nested =
         Enum.reduce(1..17, "value", fn index, value -> %{"level_#{index}" => value} end)
 
-      assert {:error,
-              {:invalid_options,
-               [%{field: :slots, reason: :exceeds_complexity_limit}]}} =
+      assert {:error, {:invalid_options, [%{field: :slots, reason: :exceeds_complexity_limit}]}} =
                RuntimeConfig.validate_options(slots: deeply_nested)
     end
   end

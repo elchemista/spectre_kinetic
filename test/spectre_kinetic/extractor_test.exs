@@ -119,9 +119,7 @@ defmodule SpectreKinetic.ExtractorTest do
              SpectreKinetic.extract_al(tag_before_fence)
 
     assert {"then", ["SEND EMAIL", "DELETE MESSAGE"]} =
-             SpectreKinetic.extract_al(
-               ~S(```al SEND EMAIL``` then <al>DELETE MESSAGE</al>)
-             )
+             SpectreKinetic.extract_al(~S(```al SEND EMAIL``` then <al>DELETE MESSAGE</al>))
   end
 
   test "same-line ordered wrappers ignore quoted wrapper examples" do

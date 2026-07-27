@@ -51,7 +51,7 @@ defmodule SpectreKinetic.Parser.Syntax do
 
   defp scan_to(_rest, position, target, quote, _escaped?, _previous)
        when position >= target,
-    do: is_nil(quote)
+       do: is_nil(quote)
 
   defp scan_to(<<char, rest::binary>>, position, target, nil, _escaped?, previous)
        when char in [?", ?'] do

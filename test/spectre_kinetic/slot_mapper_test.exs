@@ -136,9 +136,11 @@ defmodule SpectreKinetic.Planner.SlotMapperTest do
       result = SlotMapper.map_slots(parsed, action)
 
       assert result.args == %{"enabled" => false}
+
       assert result.invalid == [
                %{name: "count", expected_type: "integer()", reason: :type_mismatch}
              ]
+
       assert result.missing == ["count"]
       assert Enum.any?(result.notes, &String.contains?(&1, "invalid type for count"))
     end

@@ -126,8 +126,12 @@ defmodule SpectreKinetic.Reranker.Runtime do
     values = tensor |> Nx.to_flat_list() |> Enum.map(&ONNX.normalize_number/1)
 
     case Nx.shape(tensor) do
-      {batch} when batch == length(values) -> {:ok, Enum.map(values, &[&1])}
-      {batch, 1} when batch == length(values) -> {:ok, Enum.map(values, &[&1])}
+      {batch} when batch == length(values) ->
+        {:ok, Enum.map(values, &[&1])}
+
+      {batch, 1} when batch == length(values) ->
+        {:ok, Enum.map(values, &[&1])}
+
       {batch, classes} when batch * classes == length(values) ->
         {:ok, Enum.chunk_every(values, classes)}
 

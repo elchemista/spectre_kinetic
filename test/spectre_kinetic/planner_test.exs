@@ -412,8 +412,8 @@ defmodule SpectreKinetic.PlannerTest do
       assert [%{metadata: metadata}] = events
       assert metadata.result == :error
 
-      assert {:invalid_reranker_scores,
-              {:score_count_mismatch, %{expected: expected, actual: 1}}} = metadata.reason
+      assert {:invalid_reranker_scores, {:score_count_mismatch, %{expected: expected, actual: 1}}} =
+               metadata.reason
 
       assert expected > 1
     end
@@ -438,8 +438,8 @@ defmodule SpectreKinetic.PlannerTest do
       assert [%{metadata: metadata}] = events
       assert metadata.result == :error
 
-      assert {:invalid_reranker_scores,
-              {:invalid_score, %{index: 0, value: 1.1}}} = metadata.reason
+      assert {:invalid_reranker_scores, {:invalid_score, %{index: 0, value: 1.1}}} =
+               metadata.reason
     end
   end
 

@@ -43,9 +43,8 @@ defmodule Spectre.Kinetic.Catalog do
   def verify_runtime(%__MODULE__{actions: expected}, runtime_actions)
       when is_list(runtime_actions) do
     with {:ok, actual} <- runtime_action_map(runtime_actions),
-         :ok <- verify_expected_actions(expected, actual),
-         :ok <- verify_no_extra_actions(expected, actual) do
-      :ok
+         :ok <- verify_expected_actions(expected, actual) do
+      verify_no_extra_actions(expected, actual)
     end
   end
 
@@ -87,7 +86,7 @@ defmodule Spectre.Kinetic.Catalog do
            List.wrap(action["examples"]),
            &(is_binary(&1) and normalize_al(&1) == normalized)
          ),
-        do: action["id"]
+         do: action["id"]
     end)
   end
 
@@ -206,19 +205,26 @@ defmodule Spectre.Kinetic.Catalog do
 
   @spec runtime_action_map([map()]) :: {:ok, %{String.t() => map()}} | {:error, term()}
   defp runtime_action_map(actions) do
-    Enum.reduce_while(actions, {:ok, %{}}, fn action, {:ok, normalized} ->
-      case SpectreKinetic.Planner.Registry.normalize_action(action) do
-        {:ok, action} ->
-          id = action["id"]
+    Enum.reduce_while(actions, {:ok, %{}}, &add_runtime_action/2)
+  end
 
-          if Map.has_key?(normalized, id),
-            do: {:halt, {:error, {:duplicate_kinetic_runtime_action, id}}},
-            else: {:cont, {:ok, Map.put(normalized, id, action)}}
+  @spec add_runtime_action(map(), {:ok, %{String.t() => map()}}) ::
+          {:cont, {:ok, %{String.t() => map()}}} | {:halt, {:error, term()}}
+  defp add_runtime_action(action, {:ok, normalized}) do
+    case SpectreKinetic.Planner.Registry.normalize_action(action) do
+      {:ok, action} -> add_normalized_runtime_action(action, normalized)
+      {:error, reason} -> {:halt, {:error, {:invalid_kinetic_runtime_action, reason}}}
+    end
+  end
 
-        {:error, reason} ->
-          {:halt, {:error, {:invalid_kinetic_runtime_action, reason}}}
-      end
-    end)
+  @spec add_normalized_runtime_action(map(), %{String.t() => map()}) ::
+          {:cont, {:ok, %{String.t() => map()}}} | {:halt, {:error, term()}}
+  defp add_normalized_runtime_action(action, normalized) do
+    id = action["id"]
+
+    if Map.has_key?(normalized, id),
+      do: {:halt, {:error, {:duplicate_kinetic_runtime_action, id}}},
+      else: {:cont, {:ok, Map.put(normalized, id, action)}}
   end
 
   @spec schema_args(term()) :: [map()]
@@ -239,26 +245,33 @@ defmodule Spectre.Kinetic.Catalog do
     required = Map.get(schema, :required) || Map.get(schema, "required") || []
     required = MapSet.new(Enum.map(List.wrap(required), &to_string/1))
 
-    if is_map(properties) do
-      properties
-      |> Enum.sort_by(fn {name, _definition} -> to_string(name) end)
-      |> Enum.map(fn {name, definition} ->
-        definition = if is_map(definition), do: definition, else: %{}
+    json_schema_args(properties, required)
+  end
 
-        %{
-          "name" => to_string(name),
-          "type" => json_schema_type(definition),
-          "required" => MapSet.member?(required, to_string(name)),
-          "aliases" =>
-            definition
-            |> then(&(Map.get(&1, :aliases) || Map.get(&1, "aliases") || []))
-            |> List.wrap()
-            |> Enum.map(&to_string/1)
-        }
-      end)
-    else
-      []
-    end
+  @spec json_schema_args(term(), MapSet.t(String.t())) :: [map()]
+  defp json_schema_args(properties, required) when is_map(properties) do
+    properties
+    |> Enum.sort_by(fn {name, _definition} -> to_string(name) end)
+    |> Enum.map(&json_schema_arg(&1, required))
+  end
+
+  defp json_schema_args(_properties, _required), do: []
+
+  @spec json_schema_arg({term(), term()}, MapSet.t(String.t())) :: map()
+  defp json_schema_arg({name, definition}, required) do
+    name = to_string(name)
+    definition = if is_map(definition), do: definition, else: %{}
+
+    %{
+      "name" => name,
+      "type" => json_schema_type(definition),
+      "required" => MapSet.member?(required, name),
+      "aliases" =>
+        definition
+        |> then(&(Map.get(&1, :aliases) || Map.get(&1, "aliases") || []))
+        |> List.wrap()
+        |> Enum.map(&to_string/1)
+    }
   end
 
   @spec json_schema_type(map()) :: String.t()

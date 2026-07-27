@@ -210,7 +210,9 @@ defmodule SpectreKinetic.Planner.Compiler do
     |> Enum.chunk_every(batch_size)
     |> Enum.reduce_while({:ok, []}, fn batch, {:ok, tensors} ->
       case embed_batch(embedding_module, embedder, batch, embedding_dim) do
-        {:ok, tensor} -> {:cont, {:ok, [tensor | tensors]}}
+        {:ok, tensor} ->
+          {:cont, {:ok, [tensor | tensors]}}
+
         {:error, _reason} = error ->
           {:halt, error}
       end
@@ -248,6 +250,7 @@ defmodule SpectreKinetic.Planner.Compiler do
   defp validate_embedding_dim(dim)
        when is_integer(dim) and dim > 0 and dim <= @max_embedding_dim,
        do: :ok
+
   defp validate_embedding_dim(dim), do: {:error, {:invalid_embedding_dim, dim}}
 
   @spec atomic_write(Path.t(), binary()) :: :ok | {:error, term()}

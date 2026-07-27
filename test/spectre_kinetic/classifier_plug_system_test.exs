@@ -163,14 +163,12 @@ defmodule SpectreKinetic.ClassifierPlugSystemTest do
 
     al = ~s(INSTALL PACKAGE WITH: PACKAGE="nginx")
 
-    assert {:error,
-            {:invalid_options, [%{field: :classifiers, reason: :must_be_list}]}} =
+    assert {:error, {:invalid_options, [%{field: :classifiers, reason: :must_be_list}]}} =
              SpectreKinetic.plan(runtime, al, classifiers: StatusPlug)
 
     for classifiers <- [[123], [{StatusPlug, %{status: :rejected}}], [:not_a_classifier_module]] do
       assert {:error,
-              {:invalid_options,
-               [%{field: :classifiers, reason: :invalid_classifier_spec}]}} =
+              {:invalid_options, [%{field: :classifiers, reason: :invalid_classifier_spec}]}} =
                SpectreKinetic.plan(runtime, al, classifiers: classifiers)
     end
   end

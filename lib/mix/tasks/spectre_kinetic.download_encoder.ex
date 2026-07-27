@@ -788,9 +788,7 @@ defmodule Mix.Tasks.SpectreKinetic.DownloadEncoder do
 
       wget = System.find_executable("wget") ->
         {output, status} =
-          System.cmd(wget, ["-q", "--https-only", "-O", destination, url],
-            stderr_to_stdout: true
-          )
+          System.cmd(wget, ["-q", "--https-only", "-O", destination, url], stderr_to_stdout: true)
 
         if status == 0, do: :ok, else: {:error, {:wget, status, output}}
 
