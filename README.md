@@ -131,26 +131,48 @@ end
 
 ### Stack installation
 
-With Spectre 0.1.2, Kinetic can publish an immutable classifier configuration
+With Spectre 0.1.2, Kinetic publishes its planner and classifier configuration
 through the package-local Stack DSL:
 
 ```elixir
 defmodule MyApp.AI do
   use Spectre.Stack
 
-  install Spectre.Kinetic, mode: :closed_moves do
+  install Spectre.Kinetic,
+    mode: :closed_moves,
+    actions: MyApp.ProjectActions,
+    modes: [create_project: :write] do
     classifier MyApp.IntentClassifier
     classifier MyApp.SafetyClassifier, threshold: 0.85
   end
 end
+
+defmodule MyApp.ProjectAgent do
+  use Spectre.Agent, stack: MyApp.AI
+
+  protect({:kinetic, :create_project}, with: :confirm_project)
+
+  policy :confirm_project do
+    request(:confirm_project)
+    accept(:confirmed, regex: ~r/^yes$/i)
+    reject(:cancelled, regex: ~r/^no$/i)
+  end
+end
 ```
 
-This installation declares Kinetic as the Stack's decision interpreter. It
-does not register actions, start a global planner, authorize a decision, or
-execute the selected move. Classifier modules and options remain immutable
-configuration owned by Kinetic; the core only installs that configuration.
+Selecting the Stack automatically binds Kinetic as the Agent's Action planner.
+When `actions:` is configured it also mounts the built-in Kinetic provider; if
+Lens or another installed extension already contributes providers, omit
+`actions:` and Kinetic plans over that catalog instead. No second
+`use Spectre.Kinetic` is required.
 
-### Legacy Agent extension
+Installation activates planning but does not authorize or execute a selected
+move. Spectre still owns policy, staged effects, persistence, idempotency,
+provider dispatch, Journal records, and terminal outcomes. Classifier modules
+and options remain immutable package-owned configuration; no global planner or
+runtime handle is embedded in the Stack.
+
+### Agent-local extension
 
 Define application actions with the existing Kinetic DSL:
 
@@ -191,7 +213,8 @@ defmodule MyApp.ProjectAgent do
 end
 ```
 
-The order and boundary are intentional:
+The Agent-local form remains useful when no Stack is selected. Its order and
+boundary are intentional:
 
 ```elixir
 use Spectre.Agent

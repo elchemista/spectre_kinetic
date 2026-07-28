@@ -10,9 +10,11 @@ defmodule Spectre.Kinetic do
         classifier MyApp.SafetyClassifier, threshold: 0.85
       end
 
-  The Stack configuration is immutable data. It does not start a planner,
-  register action providers, or execute the selected decision. Kinetic owns
-  interpretation; the Spectre core owns authorization and execution.
+  The Stack configuration is immutable data. Selecting it activates the
+  Kinetic planner and, when `:actions` is configured, its built-in Action
+  provider. It does not start a global planner or execute the selected
+  decision. Kinetic owns interpretation; the Spectre core owns authorization
+  and execution.
 
   The legacy Agent extension remains available:
 
@@ -37,6 +39,7 @@ defmodule Spectre.Kinetic do
     contract: 1,
     spectre: "~> 0.1.2",
     provides: [{:service, :kinetic}],
+    agent_extensions: [Spectre.Kinetic.Extension],
     dsl: __MODULE__,
     metadata: %{role: :decision_interpreter}
 
@@ -69,6 +72,20 @@ defmodule Spectre.Kinetic do
         Spectre.Kinetic.Extension,
         unquote(opts)
       )
+    end
+  end
+
+  @doc """
+  Returns the immutable Kinetic configuration bound to an Agent.
+  """
+  @spec config(module()) :: {:ok, keyword()} | {:error, term()}
+  def config(agent) when is_atom(agent) do
+    with {:ok, mount} <- Spectre.Extension.fetch(agent, :kinetic),
+         config when is_list(config) <- mount.compiled do
+      {:ok, config}
+    else
+      {:error, _reason} = error -> error
+      _other -> {:error, :invalid_kinetic_configuration}
     end
   end
 
