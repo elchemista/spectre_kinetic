@@ -1,13 +1,13 @@
 defmodule SpectreKinetic.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.1.2"
 
   def project do
     [
       app: :spectre_kinetic,
       version: @version,
-      elixir: "~> 1.17",
+      elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -58,6 +58,7 @@ defmodule SpectreKinetic.MixProject do
 
   defp deps do
     [
+      spectre_dep(),
       {:jason, "~> 1.2"},
       {:nx, "~> 0.11"},
       {:axon, "~> 0.7"},
@@ -68,6 +69,13 @@ defmodule SpectreKinetic.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
+  end
+
+  defp spectre_dep do
+    case System.get_env("SPECTRE_PATH") do
+      path when is_binary(path) and path != "" -> {:spectre, path: Path.expand(path)}
+      _other -> {:spectre, github: "elchemista/spectre", branch: "feature/v0.1.2-stack"}
+    end
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
