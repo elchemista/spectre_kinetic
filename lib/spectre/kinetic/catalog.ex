@@ -1,6 +1,8 @@
 defmodule Spectre.Kinetic.Catalog do
   @moduledoc false
 
+  alias Spectre.Action.Provider
+
   defstruct actions: [], targets: %{}
 
   @type target :: %{
@@ -106,15 +108,9 @@ defmodule Spectre.Kinetic.Catalog do
 
   @spec provider_specs(map()) :: {:ok, [map()]} | {:error, term()}
   defp provider_specs(mount) do
-    provider = Module.concat(["Spectre", "Action", "Provider"])
-
-    if Code.ensure_loaded?(provider) and function_exported?(provider, :actions, 1) do
-      case apply(provider, :actions, [mount]) do
-        {:ok, specs} -> {:ok, Enum.map(specs, &plain_map/1)}
-        {:error, _reason} = error -> error
-      end
-    else
-      {:error, :spectre_action_provider_not_loaded}
+    case Provider.actions(mount) do
+      {:ok, specs} -> {:ok, Enum.map(specs, &plain_map/1)}
+      {:error, _reason} = error -> error
     end
   end
 

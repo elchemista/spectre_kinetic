@@ -164,13 +164,7 @@ defmodule Spectre.Kinetic.Planner do
     do: {:error, {:invalid_planned_action, index, action}}
 
   @spec spectre_action(map()) :: map()
-  defp spectre_action(attrs) do
-    action_module = Module.concat(["Spectre", "Action"])
-
-    if Code.ensure_loaded?(action_module) and function_exported?(action_module, :new, 1),
-      do: apply(action_module, :new, [attrs]),
-      else: attrs
-  end
+  defp spectre_action(attrs), do: Spectre.Action.new(attrs)
 
   @spec kinetic_metadata(map()) :: map()
   defp kinetic_metadata(action) do

@@ -1,13 +1,13 @@
 defmodule SpectreKinetic.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.1.2"
 
   def project do
     [
       app: :spectre_kinetic,
       version: @version,
-      elixir: "~> 1.17",
+      elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -58,6 +58,7 @@ defmodule SpectreKinetic.MixProject do
 
   defp deps do
     [
+      {:spectre, github: "elchemista/spectre", ref: "b39b0b1e77d685c0e497cd64d7f16f20d3c1c846"},
       {:jason, "~> 1.2"},
       {:nx, "~> 0.11"},
       {:axon, "~> 0.7"},

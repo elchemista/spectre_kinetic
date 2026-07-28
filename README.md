@@ -129,6 +129,29 @@ end
 
 ## Spectre Agent Integration
 
+### Stack installation
+
+With Spectre 0.1.2, Kinetic can publish an immutable classifier configuration
+through the package-local Stack DSL:
+
+```elixir
+defmodule MyApp.AI do
+  use Spectre.Stack
+
+  install Spectre.Kinetic, mode: :closed_moves do
+    classifier MyApp.IntentClassifier
+    classifier MyApp.SafetyClassifier, threshold: 0.85
+  end
+end
+```
+
+This installation declares Kinetic as the Stack's decision interpreter. It
+does not register actions, start a global planner, authorize a decision, or
+execute the selected move. Classifier modules and options remain immutable
+configuration owned by Kinetic; the core only installs that configuration.
+
+### Legacy Agent extension
+
 Define application actions with the existing Kinetic DSL:
 
 ```elixir
