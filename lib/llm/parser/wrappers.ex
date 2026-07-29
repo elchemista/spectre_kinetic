@@ -67,8 +67,9 @@ defmodule SpectreKinetic.Parser.Wrappers do
 
   defp prefixed_al?(text), do: upcase_prefix(text, 3) == "AL:"
 
-  defp strip_prefix_marker(<<"A", "L", ":", rest::binary>>), do: rest
-  defp strip_prefix_marker(<<"a", "l", ":", rest::binary>>), do: rest
+  # `prefixed_al?/1` already established a case-insensitive `AL:` prefix.
+  # Remove the exact three source bytes so mixed-case model output works too.
+  defp strip_prefix_marker(<<_prefix::binary-size(3), rest::binary>>), do: rest
   defp strip_prefix_marker(rest), do: rest
 
   defp unwrap_tag(text, open_size) do

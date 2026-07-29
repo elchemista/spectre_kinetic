@@ -61,7 +61,7 @@ defmodule Mix.Tasks.SpectreKinetic.Show do
           |> maybe_put(:top_k, opts[:top_k])
           |> maybe_put(:tool_threshold, opts[:tool_threshold])
           |> maybe_put(:mapping_threshold, opts[:mapping_threshold])
-          |> maybe_put(:slots, parse_slots(opts[:slot] || []))
+          |> maybe_put(:slots, parse_slots(Keyword.get_values(opts, :slot)))
 
         payload = build_payload(runtime, input_text, plan_opts, summary, opts)
         render(payload, opts[:format] || "pretty")

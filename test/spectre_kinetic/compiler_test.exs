@@ -23,6 +23,41 @@ defmodule SpectreKinetic.Planner.CompilerTest do
     def load(encoder_model_dir: "test://compiler"), do: :loaded_without_tuple
   end
 
+  defmodule LoadErrorEmbedding do
+    def load(encoder_model_dir: "test://compiler"), do: {:error, :model_unavailable}
+  end
+
+  defmodule RaisingEmbedding do
+    def load(encoder_model_dir: "test://compiler"), do: raise("load exploded")
+  end
+
+  defmodule ThrowingEmbedding do
+    def load(encoder_model_dir: "test://compiler"), do: throw(:load_exploded)
+  end
+
+  defmodule InvalidDimensionEmbedding do
+    def load(encoder_model_dir: "test://compiler"), do: {:ok, :fake}
+    def dim(:fake), do: 0
+  end
+
+  defmodule InvalidBatchEmbedding do
+    def load(encoder_model_dir: "test://compiler"), do: {:ok, :fake}
+    def dim(:fake), do: 2
+    def embed_batch(:fake, _texts), do: {:ok, :not_a_tensor}
+  end
+
+  defmodule WrongShapeEmbedding do
+    def load(encoder_model_dir: "test://compiler"), do: {:ok, :fake}
+    def dim(:fake), do: 2
+    def embed_batch(:fake, _texts), do: {:ok, Nx.tensor([[1.0]])}
+  end
+
+  defmodule OverflowEmbedding do
+    def load(encoder_model_dir: "test://compiler"), do: {:ok, :fake}
+    def dim(:fake), do: 1
+    def embed_batch(:fake, _texts), do: {:ok, Nx.tensor([[1.0e40]], type: :f64)}
+  end
+
   test "compile/1 rejects non-list inline actions before loading artifacts" do
     assert {:error, {:invalid_option, :actions}} =
              Compiler.compile(actions: :nope, encoder_model_dir: "unused", output: "unused.etf")
@@ -126,6 +161,85 @@ defmodule SpectreKinetic.Planner.CompilerTest do
 
     assert owned_table_count() == table_count
     refute File.exists?(output)
+  end
+
+  test "compile/1 validates every path and injected runtime boundary" do
+    base = [actions: [action()], encoder_model_dir: "test://compiler", output: temp_path("x.etf")]
+
+    for {key, value} <- [
+          {:encoder_model_dir, nil},
+          {:encoder_model_dir, "  "},
+          {:output, nil},
+          {:output, ""}
+        ] do
+      assert {:error, {:invalid_option, ^key}} =
+               base
+               |> Keyword.put(key, value)
+               |> Compiler.compile()
+    end
+
+    assert {:error, {:invalid_option, :embedding_module, "not-a-module"}} =
+             base
+             |> Keyword.put(:embedding_module, "not-a-module")
+             |> Compiler.compile()
+
+    assert {:error, {:missing_option, :encoder_model_dir}} =
+             Compiler.compile(actions: [action()], output: temp_path("missing-encoder.etf"))
+
+    assert {:error, {:missing_option, :output}} =
+             Compiler.compile(actions: [action()], encoder_model_dir: "test://compiler")
+
+    assert {:error, {:invalid_option, :batch_size, 1_025}} =
+             Compiler.compile(base ++ [batch_size: 1_025])
+  end
+
+  test "compile/1 can load source actions from registry JSON and closes the source registry" do
+    registry_json =
+      SpectreKinetic.TestRegistryHelper.registry_json([
+        action()
+        |> Map.new(fn {key, value} -> {to_string(key), value} end)
+      ])
+
+    output = temp_path("from-json.etf")
+    table_count = owned_table_count()
+
+    assert :ok =
+             Compiler.compile(
+               registry_json: registry_json,
+               encoder_model_dir: "test://compiler",
+               output: output,
+               embedding_module: FakeEmbedding
+             )
+
+    assert owned_table_count() == table_count
+
+    assert {:ok, %{"action_ids" => ["Example.run/0"]}} =
+             SpectreKinetic.Artifact.read_term(output)
+  end
+
+  test "compile/1 contains model failures and rejects invalid dimensions and batches" do
+    cases = [
+      {LoadErrorEmbedding, {:error, :model_unavailable}},
+      {RaisingEmbedding, {:error, {:registry_compile_failed, "load exploded"}}},
+      {ThrowingEmbedding, {:error, {:registry_compile_failed, {:throw, :load_exploded}}}},
+      {InvalidDimensionEmbedding, {:error, {:invalid_embedding_dim, 0}}},
+      {InvalidBatchEmbedding, {:error, {:invalid_embedding_batch, :not_a_tensor}}},
+      {WrongShapeEmbedding, {:error, {:invalid_embedding_batch_shape, {1, 1}, {1, 2}}}},
+      {OverflowEmbedding, {:error, {:invalid_embedding_values, 0}}}
+    ]
+
+    Enum.each(cases, fn {embedding_module, expected} ->
+      output = temp_path("#{inspect(embedding_module)}.etf")
+
+      assert Compiler.compile(
+               actions: [action()],
+               encoder_model_dir: "test://compiler",
+               output: output,
+               embedding_module: embedding_module
+             ) == expected
+
+      refute File.exists?(output)
+    end)
   end
 
   defp action do

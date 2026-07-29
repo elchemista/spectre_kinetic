@@ -133,5 +133,5 @@ defmodule SpectreKinetic.Parser do
     |> List.first()
   end
 
-  defp trim_terminal_punctuation(text), do: String.trim(text, " ;,.")
+  defp trim_terminal_punctuation(text), do: Regex.replace(~r/[ ;,.]+\z/u, text, "")
 end
