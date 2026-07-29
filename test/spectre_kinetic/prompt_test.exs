@@ -91,4 +91,36 @@ defmodule SpectreKinetic.PromptTest do
     assert prompt =~ "Output only `AL: ...` lines and nothing else."
     assert prompt =~ ~s(AL: LIST DIRECTORY WITH: PATH="/tmp")
   end
+
+  test "build/1 accepts a prebuilt dictionary without touching runtime artifacts" do
+    dictionary = %Dictionary{
+      action_ids: ["Example.run/0"],
+      keywords: [],
+      slots: [],
+      examples: []
+    }
+
+    assert {:ok, prompt} =
+             SpectreKinetic.al_prompt(dictionary: dictionary, request: "", output: :lines)
+
+    assert prompt =~ "Example.run/0"
+    assert prompt =~ "Keywords:\n- none"
+    assert prompt =~ "Allowed slots:\n- none"
+    assert prompt =~ "Examples:\n- none"
+    refute prompt =~ "User request:"
+  end
+
+  test "invalid dictionaries and missing registries fail before prompt generation" do
+    assert {:error, {:invalid_dictionary, :not_a_dictionary}} =
+             SpectreKinetic.Prompt.build(dictionary: :not_a_dictionary)
+
+    assert_raise ArgumentError, ~r/failed to build AL prompt/, fn ->
+      SpectreKinetic.Prompt.build!(dictionary: :not_a_dictionary)
+    end
+
+    missing = Path.join(System.tmp_dir!(), "missing-registry-#{System.unique_integer()}.json")
+
+    assert {:error, _reason} =
+             SpectreKinetic.Prompt.build(registry_json: missing)
+  end
 end

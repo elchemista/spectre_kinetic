@@ -131,7 +131,7 @@ end
 
 ### Stack installation
 
-With Spectre 0.1.2, Kinetic publishes its planner and classifier configuration
+With Spectre 0.1.3, Kinetic publishes its planner and classifier configuration
 through the package-local Stack DSL:
 
 ```elixir
@@ -171,6 +171,14 @@ move. Spectre still owns policy, staged effects, persistence, idempotency,
 provider dispatch, Journal records, and terminal outcomes. Classifier modules
 and options remain immutable package-owned configuration; no global planner or
 runtime handle is embedded in the Stack.
+
+The planner is re-resolved on every `Spectre.Runtime.advance/2`. It may
+interpret Action Language and stage a provider-neutral `Spectre.Effect`, but
+it never executes that effect. The host receives a revision-fenced
+`Spectre.Invocation` and execution remains exclusively behind
+`Spectre.Runtime.resume/3`. Any ETS tables, processes, borrowed runtimes, or
+model clients used while planning stay outside serializable `Spectre.Run`
+checkpoints.
 
 ### Agent-local extension
 

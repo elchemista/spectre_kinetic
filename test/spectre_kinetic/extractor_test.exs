@@ -69,6 +69,35 @@ defmodule SpectreKinetic.ExtractorTest do
     assert {:ok, "SEND EMAIL"} = SpectreKinetic.normalize_al("```al SEND EMAIL```")
     assert {:ok, "SEND EMAIL"} = SpectreKinetic.normalize_al("<AL>SEND EMAIL</AL>")
     assert {:ok, "SEND EMAIL"} = SpectreKinetic.normalize_al("AL: <al>```al SEND EMAIL```</al>")
+    assert {:ok, "SEND EMAIL"} = SpectreKinetic.normalize_al("aL: SEND EMAIL")
+  end
+
+  test "single-candidate normalization distinguishes AL fences from ordinary Markdown" do
+    assert {:ok, "SEND MESSAGE WITH: BODY=\"hello \\\\ there\""} =
+             SpectreKinetic.normalize_al("""
+             ```action
+             SEND   MESSAGE
+             WITH: BODY="hello \\\\ there"
+             ```
+             """)
+
+    ordinary = "```json\n{\"action\":\"SEND EMAIL\"}\n```"
+
+    assert {:ok, "```json {\"action\":\"SEND EMAIL\"} ```"} =
+             SpectreKinetic.normalize_al(ordinary)
+
+    assert {:ok, "```"} = SpectreKinetic.normalize_al("```")
+    assert {:ok, "A"} = SpectreKinetic.normalize_al("A")
+  end
+
+  test "parser helper APIs are total and normalize slot keys" do
+    assert SpectreKinetic.Parser.normalize(:not_binary) == {:error, :invalid_al}
+    assert SpectreKinetic.Parser.args("1234") == %{}
+
+    assert SpectreKinetic.Parser.slot_map(~s(SEND EMAIL WITH: TO="dev@example.com")) ==
+             %{"to" => "dev@example.com"}
+
+    assert %{verb: "RUN", object: nil} = SpectreKinetic.Parser.parse("RUN ;")
   end
 
   test "AL tags require an exact tag name" do

@@ -99,7 +99,9 @@ defmodule SpectreKinetic.Planner.EmbeddingRuntime do
   end
 
   def embed_batch(runtime, texts) when is_list(texts) do
-    GenServer.call(runtime, {:embed_batch, texts}, :infinity)
+    runtime
+    |> GenServer.call({:embed_batch, texts}, :infinity)
+    |> normalize_embed_batch_response()
   end
 
   @doc """
@@ -135,6 +137,12 @@ defmodule SpectreKinetic.Planner.EmbeddingRuntime do
   end
 
   # --- Internal helpers ---
+
+  @spec normalize_embed_batch_response(term()) ::
+          {:ok, Nx.Tensor.t()} | {:error, term()}
+  defp normalize_embed_batch_response({:ok, %Nx.Tensor{}} = result), do: result
+  defp normalize_embed_batch_response({:error, _reason} = error), do: error
+  defp normalize_embed_batch_response(_response), do: {:error, :invalid_embedding_batch}
 
   defp detect_dim(model, tokenizer) do
     # Run a dummy forward pass to detect output dimension

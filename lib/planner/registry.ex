@@ -135,15 +135,13 @@ defmodule SpectreKinetic.Planner.Registry do
   """
   @spec normalize_action(map()) :: {:ok, action()} | {:error, term()}
   def normalize_action(raw) when is_map(raw) do
-    try do
-      raw
-      |> stringify_map()
-      |> do_normalize_action()
-    rescue
-      _error -> {:error, :invalid_action}
-    catch
-      _kind, _reason -> {:error, :invalid_action}
-    end
+    raw
+    |> stringify_map()
+    |> do_normalize_action()
+  rescue
+    _error -> {:error, :invalid_action}
+  catch
+    _kind, _reason -> {:error, :invalid_action}
   end
 
   def normalize_action(_raw), do: {:error, :invalid_action}

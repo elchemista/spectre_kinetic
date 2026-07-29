@@ -304,6 +304,13 @@ defmodule SpectreKinetic.RuntimeConfig do
   defp stringify_value(nil), do: nil
   defp stringify_value(value) when is_boolean(value), do: value
   defp stringify_value(value) when is_binary(value), do: value
+
+  defp stringify_value(%{__struct__: _module} = value) do
+    to_string(value)
+  rescue
+    Protocol.UndefinedError -> inspect(value)
+  end
+
   defp stringify_value(value) when is_map(value), do: stringify_map(value)
   defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
   defp stringify_value(value) when is_atom(value), do: Atom.to_string(value)
