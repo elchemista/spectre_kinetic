@@ -40,7 +40,7 @@ defmodule SpectreKinetic.RuntimeTest do
   defmodule FailingEncoder do
     use GenServer
 
-    def start_link(), do: GenServer.start_link(__MODULE__, nil)
+    def start_link, do: GenServer.start_link(__MODULE__, nil)
 
     @impl GenServer
     def init(state), do: {:ok, state}
