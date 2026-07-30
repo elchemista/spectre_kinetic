@@ -18,13 +18,16 @@ defmodule SpectreKinetic.StackContractTest do
   use ExUnit.Case, async: true
 
   alias Spectre.Action.Provider
+  alias Spectre.Instance
   alias Spectre.Invocation
   alias Spectre.Run
   alias Spectre.Run.Boundary
+  alias Spectre.Run.Ref
   alias Spectre.Runtime, as: SpectreRuntime
   alias Spectre.Stack.Contract.V1
   alias Spectre.Stack.Definition
   alias Spectre.Stack.Runtime
+  alias Spectre.Turn
   alias SpectreKinetic.Classifiers.PlanConfidence
   alias SpectreKinetic.Classifiers.SafetyRisk
   alias SpectreKinetic.StackContractActions
@@ -32,11 +35,11 @@ defmodule SpectreKinetic.StackContractTest do
   alias SpectreKinetic.StackContractStack
 
   test "publishes the versioned decision-interpreter manifest" do
-    assert SpectreKinetic.version() == "0.1.3"
+    assert SpectreKinetic.version() == "0.1.4"
     assert {:ok, package} = V1.verify_installable(Spectre.Kinetic)
     assert package.id == :kinetic
-    assert package.version == "0.1.3"
-    assert package.spectre == "~> 0.1.3"
+    assert package.version == "0.1.4"
+    assert package.spectre == "~> 0.1.4"
     assert package.provides == [{:service, :kinetic}]
     assert package.operations == []
     assert package.actions == []
@@ -136,5 +139,72 @@ defmodule SpectreKinetic.StackContractTest do
 
   test "does not invent a global Stack runtime" do
     assert {:ok, []} = Runtime.child_specs(StackContractStack)
+  end
+
+  test "the core Instance owns Kinetic Runs and resumes their Invocations" do
+    Process.register(self(), SpectreKinetic.StackContractProbe)
+
+    supervisor =
+      start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+    subject = "kinetic-instance-#{System.unique_integer([:positive])}"
+
+    assert {:ok, instance} =
+             Spectre.instance(supervisor, StackContractAgent, subject, idle: false)
+
+    run_ids =
+      for _index <- 1..2 do
+        assert {:ok, %Turn{observable: {:awaiting, %Ref{} = invocation_ref}}} =
+                 Spectre.turn(instance, "ping", test_pid: self())
+
+        assert_receive :kinetic_model_called
+        refute_received {:kinetic_action_executed, _target}
+        assert Instance.info(instance).invocations == %{}
+
+        assert {:ok,
+                %Turn{
+                  observable: {:reply, "pong stack", %Ref{run_id: run_id} = reply_ref}
+                }} =
+                 Spectre.resume(
+                   instance,
+                   invocation_ref,
+                   {:execute, invocation_ref},
+                   test_pid: self()
+                 )
+
+        assert reply_ref.revision > invocation_ref.revision
+        assert_receive {:kinetic_action_executed, "stack"}
+
+        assert_eventually(fn ->
+          match?({:ok, %{status: :complete}}, Instance.run(instance, run_id))
+        end)
+
+        run_id
+      end
+
+    assert length(Enum.uniq(run_ids)) == 2
+
+    info = Instance.info(instance)
+    assert map_size(info.runs) == 2
+    assert info.ready == []
+    assert is_nil(info.active_run)
+    assert info.invocations == %{}
+    assert Enum.all?(info.runs, fn {_id, run} -> run.status == :complete end)
+
+    assert [{_id, ^instance, :worker, [Instance]}] =
+             DynamicSupervisor.which_children(supervisor)
+  end
+
+  defp assert_eventually(fun, attempts \\ 100)
+
+  defp assert_eventually(fun, 0), do: assert(fun.())
+
+  defp assert_eventually(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(10)
+      assert_eventually(fun, attempts - 1)
+    end
   end
 end

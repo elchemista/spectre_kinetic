@@ -131,7 +131,7 @@ end
 
 ### Stack installation
 
-With Spectre 0.1.3, Kinetic publishes its planner and classifier configuration
+With Spectre 0.1.4, Kinetic publishes its planner and classifier configuration
 through the package-local Stack DSL:
 
 ```elixir
@@ -179,6 +179,25 @@ it never executes that effect. The host receives a revision-fenced
 `Spectre.Runtime.resume/3`. Any ETS tables, processes, borrowed runtimes, or
 model clients used while planning stay outside serializable `Spectre.Run`
 checkpoints.
+
+### Agent Instance boundary
+
+For subject continuity, create or look up the core-owned
+`Spectre.Instance` and submit ordinary turns:
+
+```elixir
+{:ok, instance} =
+  Spectre.instance(MyApp.SpectreSupervisor, MyApp.ProjectAgent, project_id)
+
+{:ok, turn} = Spectre.turn(instance, "create the project")
+```
+
+Kinetic is re-resolved while the Instance advances each Run. It contributes a
+planner and classifiers only: it does not create Instances, schedule Runs,
+retain Agent State, own the ready queue or Invocation registry, authorize a
+Move, or execute its staged Effect. Multi-Run fairness and effect resumption
+remain core responsibilities. The 0.1.4 integration does not add the later
+Frame/closed-Move IR or continuity-plane lifecycle.
 
 ### Agent-local extension
 
