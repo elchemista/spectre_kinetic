@@ -35,9 +35,9 @@ defmodule Spectre.Kinetic do
 
   use Spectre.Stack.Installable,
     id: :kinetic,
-    version: "0.1.3",
+    version: "0.1.4",
     contract: 1,
-    spectre: "~> 0.1.3",
+    spectre: "~> 0.1.4",
     provides: [{:service, :kinetic}],
     agent_extensions: [Spectre.Kinetic.Extension],
     dsl: __MODULE__,

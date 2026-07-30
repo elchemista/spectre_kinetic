@@ -245,7 +245,7 @@ defmodule SpectreKinetic.MixTaskContractTest do
     end
   end
 
-  test "deprecated task names remain explicit aliases of the 0.1.3 commands" do
+  test "deprecated task names remain explicit aliases of the 0.1.4 commands" do
     aliases = [
       {Mix.Tasks.CompileKinetic, "spectre_kinetic.compile", [], "compile_kinetic is deprecated"},
       {Mix.Tasks.ExtractKinetic, "spectre_kinetic.extract", ["--unknown"],
