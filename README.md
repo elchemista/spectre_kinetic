@@ -131,7 +131,7 @@ end
 
 ### Stack installation
 
-With Spectre 0.1.4, Kinetic publishes its planner and classifier configuration
+With Spectre 0.1.5, Kinetic publishes its planner and classifier configuration
 through the package-local Stack DSL:
 
 ```elixir
@@ -196,7 +196,7 @@ Kinetic is re-resolved while the Instance advances each Run. It contributes a
 planner and classifiers only: it does not create Instances, schedule Runs,
 retain Agent State, own the ready queue or Invocation registry, authorize a
 Move, or execute its staged Effect. Multi-Run fairness and effect resumption
-remain core responsibilities. The 0.1.4 integration does not add the later
+remain core responsibilities. The 0.1.5 integration does not add the later
 Frame/closed-Move IR or continuity-plane lifecycle.
 
 ### Agent-local extension
