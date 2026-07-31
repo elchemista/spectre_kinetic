@@ -1,11 +1,13 @@
 defmodule SpectreKinetic.MixProject do
   use Mix.Project
 
-  @version "0.1.5"
+  @version "0.1.6"
+  @source_url "https://github.com/elchemista/spectre_kinetic"
 
   def project do
     [
       app: :spectre_kinetic,
+      name: "Spectre Kinetic",
       version: @version,
       elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -18,13 +20,15 @@ defmodule SpectreKinetic.MixProject do
         main: "readme",
         extras: [
           "README.md",
+          "docs/PUBLIC_API.md",
           "CHANGELOG.md",
           "TRAIN.md",
           "LICENSE"
-        ]
+        ],
+        source_ref: "v#{@version}"
       ],
-      source_url: "https://github.com/elchemista/spectre_kinetic",
-      homepage_url: "https://github.com/elchemista/spectre_kinetic"
+      source_url: @source_url,
+      homepage_url: @source_url
     ]
   end
 
@@ -44,6 +48,7 @@ defmodule SpectreKinetic.MixProject do
       maintainers: ["Yuriy Zhar"],
       files: ~w(
              lib
+             docs
              priv/dataset
              mix.exs
              README.md
@@ -53,7 +58,7 @@ defmodule SpectreKinetic.MixProject do
       ),
       licenses: ["Apache-2.0"],
       links: %{
-        "GitHub" => "https://github.com/elchemista/spectre_kinetic"
+        "GitHub" => @source_url
       }
     ]
   end
@@ -68,14 +73,18 @@ defmodule SpectreKinetic.MixProject do
       {:ortex, "~> 0.1"},
       {:tokenizers, "~> 0.5"},
       {:telemetry, "~> 1.0"},
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
 
   defp spectre_dep do
-    case System.get_env("SPECTRE_PATH") do
-      path when is_binary(path) and path != "" ->
+    case {System.get_env("SPECTRE_HEX_BUILD"), System.get_env("SPECTRE_PATH")} do
+      {hex_build, _path} when hex_build in ["1", "true"] ->
+        {:spectre, "~> 0.1.5"}
+
+      {_hex_build, path} when is_binary(path) and path != "" ->
         {:spectre, "~> 0.1.5", path: Path.expand(path)}
 
       _other ->

@@ -2,6 +2,19 @@
 
 Elixir-first planning from Action Language to validated function-call candidates.
 
+The exact `0.1.6` compatibility surface is published in the
+[public API manifest](docs/PUBLIC_API.md).
+
+## 0.1.6 Recoverable Baseline
+
+Version `0.1.6` is a consolidation-only release with no new runtime feature and
+no intentional breaking change. Elixir 1.19 on Erlang/OTP 28 is the initially
+guaranteed pair. Uniform CI runs format, warnings-as-errors compilation, tests,
+non-strict Credo, Dialyzer, ExDoc, and local package validation with no
+publication. Kinetic now lives
+on `main`, owns its core-integration contracts, and remains a one-way consumer
+of Spectre rather than a test dependency of core.
+
 ## Why Use This?
 
 If you are building an agent, the usual question is:
@@ -131,7 +144,7 @@ end
 
 ### Stack installation
 
-With Spectre 0.1.5, Kinetic publishes its planner and classifier configuration
+With Spectre 0.1.6, Kinetic publishes its planner and classifier configuration
 through the package-local Stack DSL:
 
 ```elixir
@@ -196,7 +209,7 @@ Kinetic is re-resolved while the Instance advances each Run. It contributes a
 planner and classifiers only: it does not create Instances, schedule Runs,
 retain Agent State, own the ready queue or Invocation registry, authorize a
 Move, or execute its staged Effect. Multi-Run fairness and effect resumption
-remain core responsibilities. The 0.1.5 integration does not add the later
+remain core responsibilities. The 0.1.6 integration does not add the later
 Frame/closed-Move IR or continuity-plane lifecycle.
 
 ### Agent-local extension
