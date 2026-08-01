@@ -4,6 +4,20 @@ All notable changes to Spectre Kinetic are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-01
+
+### Changed
+
+- Raised the package, planner, and Stack compatibility contracts to Spectre
+  0.2.0.
+- Verified standalone planning, classifier pipelines, provider catalogs, and
+  staged Action integration against the Spectre 0.2.0 operational runtime.
+
+### Compatibility
+
+- Kinetic remains a planner boundary; core retains policy, execution, Run,
+  Work, Vigil, and Instance ownership.
+
 ## [0.1.6] - 2026-07-31
 
 ### Changed
@@ -39,7 +53,8 @@ All notable changes to Spectre Kinetic are documented in this file.
 - Frame compilation, the final closed-Move IR, and continuity-plane lifecycle
   remain later migration phases.
 
-[Unreleased]: https://github.com/elchemista/spectre_kinetic/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/elchemista/spectre_kinetic/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/elchemista/spectre_kinetic/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/elchemista/spectre_kinetic/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/elchemista/spectre_kinetic/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/elchemista/spectre_kinetic/compare/v0.1.3...v0.1.4

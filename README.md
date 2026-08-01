@@ -2,8 +2,15 @@
 
 Elixir-first planning from Action Language to validated function-call candidates.
 
-The exact `0.1.6` compatibility surface is published in the
+The exact `0.2.0` compatibility surface is published in the
 [public API manifest](docs/PUBLIC_API.md).
+
+## 0.2.0 Spectre Compatibility
+
+Version `0.2.0` aligns Kinetic's package, planner, and Stack contracts with
+Spectre `~> 0.2.0`. Kinetic still selects and validates a provider-neutral
+Action; Spectre remains responsible for authorization, staging, persistence,
+idempotency, execution, and operational-loop ownership.
 
 ## 0.1.6 Recoverable Baseline
 
@@ -144,7 +151,7 @@ end
 
 ### Stack installation
 
-With Spectre 0.1.6, Kinetic publishes its planner and classifier configuration
+With Spectre 0.2.0, Kinetic publishes its planner and classifier configuration
 through the package-local Stack DSL:
 
 ```elixir
@@ -209,8 +216,8 @@ Kinetic is re-resolved while the Instance advances each Run. It contributes a
 planner and classifiers only: it does not create Instances, schedule Runs,
 retain Agent State, own the ready queue or Invocation registry, authorize a
 Move, or execute its staged Effect. Multi-Run fairness and effect resumption
-remain core responsibilities. The 0.1.6 integration does not add the later
-Frame/closed-Move IR or continuity-plane lifecycle.
+remain core responsibilities. The 0.2.0 integration does not create a second
+operational scheduler or continuity lifecycle.
 
 ### Agent-local extension
 
