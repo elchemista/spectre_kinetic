@@ -254,7 +254,7 @@ defmodule MyApp.ProjectAgent do
 
   flow :projects do
     on :CREATE_PROJECT, regex: ~r/\bcreate.*\bproject\b/i do
-      ask(:create_project)
+      act(:create_project)
     end
   end
 end
