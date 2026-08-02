@@ -31,17 +31,23 @@ defmodule Spectre.Kinetic do
   Spectre keeps ownership of policy, persistence, and execution lifecycle.
   """
 
-  alias Spectre.Stack.DSL
+  @version "0.2.0"
+  @spectre_stack_dsl Module.concat(["Spectre", "Stack", "DSL"])
+  @spectre_extension Module.concat(["Spectre", "Extension"])
 
-  use Spectre.Stack.Installable,
-    id: :kinetic,
-    version: "0.2.0",
-    contract: 1,
-    spectre: "~> 0.2.0",
-    provides: [{:service, :kinetic}],
-    agent_extensions: [Spectre.Kinetic.Extension],
-    dsl: __MODULE__,
-    metadata: %{role: :decision_interpreter}
+  @doc false
+  def manifest do
+    [
+      id: :kinetic,
+      module: __MODULE__,
+      version: @version,
+      contract: 1,
+      provides: [{:service, :kinetic}],
+      agent_extensions: [Spectre.Kinetic.Extension],
+      dsl: __MODULE__,
+      metadata: %{role: :decision_interpreter}
+    ]
+  end
 
   @type classifier_config :: %{
           required(:module) => module(),
@@ -54,12 +60,10 @@ defmodule Spectre.Kinetic do
         }
 
   @doc false
-  @impl Spectre.Stack.Installable
   @spec compile(keyword(), Macro.t() | nil, Macro.Env.t()) :: {:ok, stack_config()}
   def compile(opts, block, caller) do
     classifiers =
-      block
-      |> DSL.compile!(caller, classifier: [1, 2])
+      apply(@spectre_stack_dsl, :compile!, [block, caller, [classifier: [1, 2]]])
       |> Enum.map(&classifier_config!/1)
 
     {:ok, %{options: opts, classifiers: classifiers}}
@@ -80,13 +84,22 @@ defmodule Spectre.Kinetic do
   """
   @spec config(module()) :: {:ok, keyword()} | {:error, term()}
   def config(agent) when is_atom(agent) do
-    with {:ok, mount} <- Spectre.Extension.fetch(agent, :kinetic),
+    with :ok <- ensure_spectre_extension(),
+         {:ok, mount} <- apply(@spectre_extension, :fetch, [agent, :kinetic]),
          config when is_list(config) <- mount.compiled do
       {:ok, config}
     else
       {:error, _reason} = error -> error
       _other -> {:error, :invalid_kinetic_configuration}
     end
+  end
+
+  @spec ensure_spectre_extension() :: :ok | {:error, :spectre_not_loaded}
+  defp ensure_spectre_extension do
+    if Code.ensure_loaded?(@spectre_extension) and
+         function_exported?(@spectre_extension, :fetch, 2),
+       do: :ok,
+       else: {:error, :spectre_not_loaded}
   end
 
   @spec classifier_config!({:classifier, [term()]}) :: classifier_config()

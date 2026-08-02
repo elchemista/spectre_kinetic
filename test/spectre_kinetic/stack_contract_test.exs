@@ -39,7 +39,7 @@ defmodule SpectreKinetic.StackContractTest do
     assert {:ok, package} = V1.verify_installable(Spectre.Kinetic)
     assert package.id == :kinetic
     assert package.version == "0.2.0"
-    assert package.spectre == "~> 0.2.0"
+    assert package.spectre == ">= 0.0.0"
     assert package.provides == [{:service, :kinetic}]
     assert package.operations == []
     assert package.actions == []

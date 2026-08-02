@@ -5,12 +5,17 @@ Elixir-first planning from Action Language to validated function-call candidates
 The exact `0.2.0` compatibility surface is published in the
 [public API manifest](docs/PUBLIC_API.md).
 
-## 0.2.0 Spectre Compatibility
+## Optional Spectre integration
 
-Version `0.2.0` aligns Kinetic's package, planner, and Stack contracts with
-Spectre `~> 0.2.0`. Kinetic still selects and validates a provider-neutral
-Action; Spectre remains responsible for authorization, staging, persistence,
-idempotency, execution, and operational-loop ownership.
+Kinetic is a standalone planning toolkit. Spectre is not a runtime or package
+dependency: the adapter under `Spectre.Kinetic` is loaded on demand when both
+libraries are present. Its manifest targets Stack contract version 1 without
+pinning Kinetic to a Spectre release line. Integration tests fetch Spectre's
+`main` branch directly from GitHub; Hex is not used for that test dependency.
+
+Kinetic still selects and validates a provider-neutral Action; Spectre remains
+responsible for authorization, staging, persistence, idempotency, execution,
+and operational-loop ownership.
 
 ## 0.1.6 Recoverable Baseline
 
@@ -151,8 +156,8 @@ end
 
 ### Stack installation
 
-With Spectre 0.2.0, Kinetic publishes its planner and classifier configuration
-through the package-local Stack DSL:
+When Spectre is present, Kinetic publishes its planner and classifier
+configuration through the package-local Stack DSL:
 
 ```elixir
 defmodule MyApp.AI do
@@ -216,8 +221,8 @@ Kinetic is re-resolved while the Instance advances each Run. It contributes a
 planner and classifiers only: it does not create Instances, schedule Runs,
 retain Agent State, own the ready queue or Invocation registry, authorize a
 Move, or execute its staged Effect. Multi-Run fairness and effect resumption
-remain core responsibilities. The 0.2.0 integration does not create a second
-operational scheduler or continuity lifecycle.
+remain core responsibilities. The optional integration does not create a
+second operational scheduler or continuity lifecycle.
 
 ### Agent-local extension
 

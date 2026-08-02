@@ -1,16 +1,13 @@
 defmodule Spectre.Kinetic.Extension do
   @moduledoc false
 
-  @behaviour Spectre.Extension
-
-  @impl true
   @spec id() :: :kinetic
   def id, do: :kinetic
 
-  @impl true
+  @spec api_version() :: 1
   def api_version, do: 1
 
-  @impl true
+  @spec compile(module(), keyword()) :: {:ok, keyword()} | {:error, term()}
   def compile(_owner, opts) do
     case Keyword.fetch(opts, :stack_config) do
       {:ok, %{options: options, classifiers: classifiers}} ->
@@ -30,10 +27,9 @@ defmodule Spectre.Kinetic.Extension do
     end
   end
 
-  @impl true
+  @spec agent_config(keyword()) :: keyword()
   def agent_config(config) when is_list(config), do: [kinetic: config]
 
-  @impl true
   @spec action_providers(keyword()) :: [tuple()]
   def action_providers(opts) do
     case Keyword.get(opts, :actions) do
@@ -60,7 +56,6 @@ defmodule Spectre.Kinetic.Extension do
     end
   end
 
-  @impl true
   @spec action_planner(keyword()) :: {module(), keyword()}
   def action_planner(opts) do
     planner_opts = Keyword.drop(opts, [:actions, :provider, :mode, :modes])
