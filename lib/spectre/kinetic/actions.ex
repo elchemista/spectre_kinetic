@@ -11,7 +11,6 @@ defmodule Spectre.Kinetic.Actions do
   Spectre still owns staging, policy, persistence, and provider dispatch.
   """
 
-  alias Spectre.Action.Spec
   alias SpectreKinetic.Tool.Extractor
 
   @doc false
@@ -87,12 +86,15 @@ defmodule Spectre.Kinetic.Actions do
 
   @spec spec_hash(map(), keyword()) :: String.t() | nil
   defp spec_hash(spec, opts) do
+    spec_module = Module.concat(["Spectre", "Action", "Spec"])
     provider_id = Keyword.get(opts, :provider_id, :kinetic)
 
-    spec
-    |> Map.put(:via, provider_id)
-    |> Spec.new()
-    |> Map.get(:schema_hash)
+    if Code.ensure_loaded?(spec_module) and function_exported?(spec_module, :new, 1) do
+      spec
+      |> Map.put(:via, provider_id)
+      |> then(&apply(spec_module, :new, [&1]))
+      |> Map.get(:schema_hash)
+    end
   end
 
   @spec ordered_args([map()], map()) :: {:ok, [term()]} | {:error, term()}
