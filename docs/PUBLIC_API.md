@@ -39,6 +39,8 @@ type, and struct contract.
   - callbacks: `call/2`, `init/1`
 - `SpectreKinetic.ClassifierPipeline`
   - functions: `init_specs/1`, `run/2`
+- `SpectreKinetic.ClassifierPipeline.Spec`
+  - struct fields: `module`, `state`
 - `SpectreKinetic.Classifiers.BuiltIn`
   - functions: `all/0`, `fetch/1`, `fetch!/1`, `ids/0`
 - `SpectreKinetic.Classifiers.PlanConfidence`
