@@ -67,6 +67,9 @@ defmodule SpectreKinetic.RegistryBackendContractTest do
       assert ids == ["Dynamic.Task.update/3"]
       assert Nx.shape(matrix) == {1, 2}
 
+      assert [{:embedding_matrix, {^matrix, ^ids}}] =
+               :ets.lookup(registry.meta, :embedding_matrix)
+
       replacement = %{
         id: "Dynamic.Task.update/3",
         module: "Dynamic.Task",
@@ -88,6 +91,7 @@ defmodule SpectreKinetic.RegistryBackendContractTest do
              ]
 
       assert ETS.embedding_matrix(registry) == nil
+      assert :ets.lookup(registry.meta, :embedding_matrix) == []
 
       assert {:error, :action_not_found} =
                ETS.put_embedding(registry, "Dynamic.Missing.run/0", Nx.tensor([1.0, 0.0]))

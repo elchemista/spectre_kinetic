@@ -178,12 +178,15 @@ defmodule SpectreKinetic.Planner.Runtime do
     start = System.monotonic_time()
 
     result =
-      with :ok <- ensure_registry_owner(runtime),
-           {:ok, action, embedding} <- Embeddings.prepare_action(runtime, action),
-           {:ok, registry} <-
-             Registry.upsert(runtime.registry_module, runtime.registry, action, embedding) do
-        {:ok, %{runtime | registry: registry}}
-      end
+      safely(fn ->
+        with :ok <- ensure_registry_owner(runtime),
+             {:ok, action, embedding} <- Embeddings.prepare_action(runtime, action),
+             {:ok, registry} <-
+               Registry.upsert(runtime.registry_module, runtime.registry, action, embedding) do
+          {:ok, %{runtime | registry: registry}}
+        end
+      end)
+      |> normalize_registry_update(:upsert_action)
 
     emit_registry_event(@registry_add_event, start, runtime, result, %{
       action_id: action_id(action),
@@ -200,16 +203,7 @@ defmodule SpectreKinetic.Planner.Runtime do
   def delete_action(%__MODULE__{} = runtime, action_id) do
     start = System.monotonic_time()
 
-    result =
-      with :ok <- ensure_registry_owner(runtime) do
-        case runtime.registry_module.delete_action(runtime.registry, action_id) do
-          {{:ok, deleted}, registry} ->
-            {:ok, deleted, %{runtime | registry: registry}}
-
-          {:error, _reason} = error ->
-            error
-        end
-      end
+    result = safely(fn -> delete_registry_action(runtime, action_id) end)
 
     emit_delete_event(start, runtime, result, action_id)
 
@@ -218,6 +212,28 @@ defmodule SpectreKinetic.Planner.Runtime do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp normalize_registry_update({:ok, %__MODULE__{}} = result, _operation), do: result
+  defp normalize_registry_update({:error, _reason} = error, _operation), do: error
+
+  defp normalize_registry_update(other, operation),
+    do: {:error, {:invalid_registry_return, operation, other}}
+
+  defp delete_registry_action(runtime, action_id) do
+    with :ok <- ensure_registry_owner(runtime) do
+      runtime.registry_module.delete_action(runtime.registry, action_id)
+      |> normalize_registry_delete(runtime)
+    end
+  end
+
+  defp normalize_registry_delete({{:ok, deleted}, registry}, runtime)
+       when is_boolean(deleted),
+       do: {:ok, deleted, %{runtime | registry: registry}}
+
+  defp normalize_registry_delete({:error, _reason} = error, _runtime), do: error
+
+  defp normalize_registry_delete(other, _runtime),
+    do: {:error, {:invalid_registry_return, :delete_action, other}}
 
   defp stage_and_swap_registry(runtime, path) do
     case ensure_registry_owner(runtime) do

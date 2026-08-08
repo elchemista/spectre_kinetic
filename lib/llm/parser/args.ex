@@ -35,6 +35,23 @@ defmodule SpectreKinetic.Parser.Args do
     parse_loose_space_args(text, explicit_args)
   end
 
+  @spec duplicate_explicit_key(binary()) :: binary() | nil
+  def duplicate_explicit_key(text) when is_binary(text) do
+    text
+    |> then(&Regex.scan(@explicit_arg_pattern, &1, capture: ["key"]))
+    |> Enum.reduce_while(MapSet.new(), fn [key], seen ->
+      key = String.downcase(key)
+
+      if MapSet.member?(seen, key),
+        do: {:halt, key},
+        else: {:cont, MapSet.put(seen, key)}
+    end)
+    |> case do
+      %MapSet{} -> nil
+      key -> key
+    end
+  end
+
   # Find the first real WITH token, but ignore anything inside quotes. The LLM
   # will happily put "WITH" in a subject line and then act innocent.
   defp do_split_with_section(text, index, _quote) when index >= byte_size(text), do: {text, nil}

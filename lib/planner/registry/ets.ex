@@ -192,11 +192,24 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     :ets.match_delete(registry.aliases, {:_, action_id, :_})
     :ets.delete(registry.embeddings, action_id)
     :ets.delete(registry.actions, action_id)
+
+    if existed, do: refresh_embedding_matrix_cache(registry)
+
     {{:ok, existed}, registry}
   end
 
   @impl Registry
   def embedding_matrix(%__MODULE__{} = registry) do
+    case :ets.lookup(registry.meta, :embedding_matrix) do
+      [{:embedding_matrix, cached}] -> cached
+      [] -> build_embedding_matrix(registry)
+    end
+  rescue
+    _error -> nil
+  end
+
+  @spec build_embedding_matrix(t()) :: Registry.embedding_matrix() | nil
+  defp build_embedding_matrix(registry) do
     entries =
       registry.embeddings
       |> :ets.tab2list()
@@ -215,8 +228,6 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
       _incomplete ->
         nil
     end
-  rescue
-    _error -> nil
   end
 
   @impl Registry
@@ -228,6 +239,7 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
       case validate_embedding(registry, action_id, tensor) do
         :ok ->
           :ets.insert(registry.embeddings, {action_id, tensor})
+          refresh_embedding_matrix_cache(registry)
           {:ok, registry}
 
         {:error, _reason} = error ->
@@ -324,6 +336,24 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     if not is_nil(embedding) do
       :ets.insert(registry.embeddings, {action_id, embedding})
     end
+
+    refresh_embedding_matrix_cache(registry)
+  end
+
+  @spec refresh_embedding_matrix_cache(t()) :: :ok
+  defp refresh_embedding_matrix_cache(registry) do
+    complete_matrix =
+      if :ets.info(registry.embeddings, :size) > 0 and
+           :ets.info(registry.embeddings, :size) == action_count(registry) do
+        build_embedding_matrix(registry)
+      end
+
+    case complete_matrix do
+      nil -> :ets.delete(registry.meta, :embedding_matrix)
+      matrix -> :ets.insert(registry.meta, {:embedding_matrix, matrix})
+    end
+
+    :ok
   end
 
   defp index_aliases(aliases_tab, action) do
@@ -649,6 +679,8 @@ defmodule SpectreKinetic.Planner.Registry.ETS do
     Enum.each(embedding_entries, fn {embedding, action_id} ->
       :ets.insert(registry.embeddings, {action_id, embedding})
     end)
+
+    refresh_embedding_matrix_cache(registry)
 
     Logger.info("Planner ETS registry loaded #{action_count(registry)} actions from #{path}")
     {:ok, registry}

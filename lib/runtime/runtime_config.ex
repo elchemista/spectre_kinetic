@@ -86,7 +86,7 @@ defmodule SpectreKinetic.RuntimeConfig do
   @max_total_slot_string_bytes 1_024 * 1_024
 
   @typep slot_budget :: %{nodes: non_neg_integer(), string_bytes: non_neg_integer()}
-  @typep slot_validation :: {:ok, slot_budget()} | {:error, :invalid | :limit}
+  @typep slot_validation :: {:ok, slot_budget()} | {:error, :ambiguous | :invalid | :limit}
 
   @doc """
   Returns the planner defaults before application config or environment overrides.
@@ -408,6 +408,7 @@ defmodule SpectreKinetic.RuntimeConfig do
     case validate_slot_map(slots, 0, budget) do
       {:ok, _remaining_budget} -> []
       {:error, :limit} -> [%{field: :slots, reason: :exceeds_complexity_limit}]
+      {:error, :ambiguous} -> [%{field: :slots, reason: :must_have_unique_keys}]
       {:error, :invalid} -> [%{field: :slots, reason: :must_be_json_compatible_map}]
     end
   end
@@ -632,10 +633,39 @@ defmodule SpectreKinetic.RuntimeConfig do
     do: {:error, :limit}
 
   defp validate_slot_map(slots, depth, budget) do
-    with {:ok, budget} <- consume_slot_node(budget) do
+    with :ok <- validate_unique_slot_keys(slots, depth),
+         {:ok, budget} <- consume_slot_node(budget) do
       validate_slot_entries(slots, depth, budget)
     end
   end
+
+  @spec validate_unique_slot_keys(map(), non_neg_integer()) :: :ok | {:error, :ambiguous}
+  defp validate_unique_slot_keys(slots, depth) do
+    canonical_keys =
+      slots
+      |> Map.keys()
+      |> Enum.map(&canonical_slot_key(&1, depth))
+      |> Enum.reject(&is_nil/1)
+
+    if length(canonical_keys) == MapSet.size(MapSet.new(canonical_keys)),
+      do: :ok,
+      else: {:error, :ambiguous}
+  end
+
+  defp canonical_slot_key(key, 0) when is_atom(key),
+    do: key |> Atom.to_string() |> String.downcase()
+
+  defp canonical_slot_key(key, 0) when is_binary(key) do
+    if String.valid?(key), do: String.downcase(key)
+  end
+
+  defp canonical_slot_key(key, _depth) when is_atom(key), do: Atom.to_string(key)
+
+  defp canonical_slot_key(key, _depth) when is_binary(key) do
+    if String.valid?(key), do: key
+  end
+
+  defp canonical_slot_key(_key, _depth), do: nil
 
   @spec validate_slot_entries(map(), non_neg_integer(), slot_budget()) :: slot_validation()
   defp validate_slot_entries(slots, depth, budget) do

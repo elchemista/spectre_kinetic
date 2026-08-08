@@ -492,6 +492,30 @@ defmodule SpectreKinetic.RuntimeBoundaryHardeningTest do
     end
   end
 
+  test "library runtime contains faulty mutation backend behavior" do
+    valid_action = action("Example", "run")
+
+    assert Runtime.add_action(
+             runtime(%{mode: {:add_action, :invalid}}, nil, ControlledBackend),
+             valid_action
+           ) == {:error, {:invalid_registry_return, :upsert_action, :invalid}}
+
+    assert Runtime.add_action(
+             runtime(%{mode: {:add_action, :raise}}, nil, ControlledBackend),
+             valid_action
+           ) == {:error, {:exception, "controlled failure"}}
+
+    assert Runtime.delete_action(
+             runtime(%{mode: {:delete_action, :invalid}}, nil, ControlledBackend),
+             "Example.run/0"
+           ) == {:error, {:invalid_registry_return, :delete_action, :invalid}}
+
+    assert Runtime.delete_action(
+             runtime(%{mode: {:delete_action, :raise}}, nil, ControlledBackend),
+             "Example.run/0"
+           ) == {:error, {:exception, "controlled failure"}}
+  end
+
   defp runtime(registry, encoder, registry_module \\ ETS) do
     %Runtime{
       registry_module: registry_module,

@@ -246,6 +246,7 @@ defmodule SpectreKinetic.DecisionBoundaryContractTest do
     assert {:ok, %Catalog{} = catalog} = Catalog.build(action_providers: [mount])
     assert length(catalog.actions) == 2
     assert map_size(catalog.targets) == 2
+    assert Enum.map(catalog.actions, & &1["name"]) == ["submit", "inspect"]
 
     submit = Enum.find(catalog.actions, &(&1["name"] == "submit"))
     inspect = Enum.find(catalog.actions, &(&1["name"] == "inspect"))
@@ -320,6 +321,27 @@ defmodule SpectreKinetic.DecisionBoundaryContractTest do
              Catalog.build(action_providers: [mount, mount])
 
     assert duplicate_tool == submit["id"]
+
+    ambiguous_examples =
+      Mount.new(:ambiguous, Provider,
+        specs: [
+          %{name: :first, schema: [], metadata: %{examples: ["RUN SAME OPERATION"]}},
+          %{name: :second, schema: [], metadata: %{examples: [" run   same operation "]}}
+        ]
+      )
+
+    assert {:error, {:duplicate_action_provider_example, first_id, second_id}} =
+             Catalog.build(action_providers: [ambiguous_examples])
+
+    refute first_id == second_id
+
+    assert Catalog.build(action_providers: :invalid) ==
+             {:error, {:invalid_action_providers, :invalid}}
+
+    assert Catalog.build([:invalid]) == {:error, {:invalid_catalog_options, [:invalid]}}
+
+    assert Catalog.build(action_providers: [%{}]) ==
+             {:error, {:invalid_action_provider_mount, %{}}}
   end
 
   test "planner interprets provider examples without executing the selected operation" do

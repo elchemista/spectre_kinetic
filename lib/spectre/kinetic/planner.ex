@@ -46,6 +46,8 @@ defmodule Spectre.Kinetic.Planner do
     :classifiers
   ]
 
+  @temp_registry_attempts 5
+
   @spec plan_response(String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def plan_response(text, _ctx, opts) when is_binary(text) and is_list(opts) do
     scan = SpectreKinetic.extract_al_scan(text)
@@ -168,7 +170,7 @@ defmodule Spectre.Kinetic.Planner do
     action_module = Module.concat(["Spectre", "Action"])
 
     if Code.ensure_loaded?(action_module) and function_exported?(action_module, :new, 1),
-      do: apply(action_module, :new, [attrs]),
+      do: action_module.new(attrs),
       else: attrs
   end
 
@@ -243,22 +245,52 @@ defmodule Spectre.Kinetic.Planner do
 
   @spec with_temp_registry([map()], keyword(), (term() -> term())) :: term()
   defp with_temp_registry(actions, runtime_opts, function) do
+    with {:ok, json} <- Jason.encode(%{"actions" => actions}),
+         {:ok, path} <- write_temp_registry(json) do
+      try do
+        load_and_run(Keyword.put(runtime_opts, :registry_json, path), function)
+      after
+        File.rm(path)
+      end
+    else
+      {:error, reason} -> {:error, {:provider_registry_failed, reason}}
+    end
+  end
+
+  @spec write_temp_registry(binary(), non_neg_integer()) ::
+          {:ok, Path.t()} | {:error, term()}
+  defp write_temp_registry(json, attempts \\ @temp_registry_attempts)
+
+  defp write_temp_registry(_json, 0), do: {:error, :temporary_registry_collision}
+
+  defp write_temp_registry(json, attempts) do
     path =
       Path.join(
         System.tmp_dir!(),
-        "spectre_kinetic_providers_#{System.unique_integer([:positive, :monotonic])}.json"
+        "spectre_kinetic_providers_#{random_suffix()}.json"
       )
 
-    try do
-      with {:ok, json} <- Jason.encode(%{"actions" => actions}),
-           :ok <- File.write(path, json) do
-        load_and_run(Keyword.put(runtime_opts, :registry_json, path), function)
-      else
-        {:error, reason} -> {:error, {:provider_registry_failed, reason}}
-      end
-    after
-      File.rm(path)
+    case File.open(path, [:write, :exclusive, :binary], &IO.binwrite(&1, json)) do
+      {:ok, :ok} ->
+        {:ok, path}
+
+      {:ok, {:error, reason}} ->
+        File.rm(path)
+        {:error, reason}
+
+      {:error, :eexist} ->
+        write_temp_registry(json, attempts - 1)
+
+      {:error, reason} ->
+        {:error, reason}
     end
+  end
+
+  @spec random_suffix() :: binary()
+  defp random_suffix do
+    18
+    |> :crypto.strong_rand_bytes()
+    |> Base.url_encode64(padding: false)
   end
 
   @spec configured_registry?(keyword()) :: boolean()
@@ -280,7 +312,12 @@ defmodule Spectre.Kinetic.Planner do
   defp plan_opts(opts), do: Keyword.take(opts, @plan_option_keys)
 
   @spec value(map(), atom()) :: term()
-  defp value(map, key), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  defp value(map, key) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> Map.get(map, Atom.to_string(key))
+    end
+  end
 
   @spec plain_map(map()) :: map()
   defp plain_map(%KineticAction{} = action), do: Map.from_struct(action)

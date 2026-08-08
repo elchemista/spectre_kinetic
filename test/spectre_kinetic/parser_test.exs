@@ -120,6 +120,13 @@ defmodule SpectreKinetic.ParserTest do
     assert {:ok, "CHECK USER'S ACCOUNT"} = SpectreKinetic.validate_al("CHECK USER'S ACCOUNT")
   end
 
+  test "duplicate explicit argument names are rejected case-insensitively" do
+    al = "SEND MESSAGE WITH: TO=first@example.com to=second@example.com"
+
+    assert {:error, :duplicate_al_argument} = SpectreKinetic.validate_al(al)
+    assert {:error, :duplicate_al_argument} = SpectreKinetic.parse_al(al)
+  end
+
   defp parser_examples do
     explicit_examples =
       for {key, value} <- @explicit_fields,

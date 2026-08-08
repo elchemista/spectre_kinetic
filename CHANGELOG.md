@@ -10,6 +10,17 @@ All notable changes to Spectre Kinetic are documented in this file.
   build CI.
 - Pinned the test-only Spectre integration dependency directly to the GitHub
   `0.2.0` tag.
+- Made provider catalog construction and exact-example lookup linear, cached
+  complete ETS embedding matrices, and replaced linear candidate ID indexing.
+
+### Fixed
+
+- Preserved planner error diagnostics in public actions and rejected duplicate
+  AL/slot keys before they could silently overwrite values.
+- Returned structured errors for incompatible embedding dimensions and faulty
+  registry mutation backends instead of crashing planner calls.
+- Rejected ambiguous provider examples and created temporary provider
+  registries with unpredictable, exclusive files.
 
 ## [0.2.0] - 2026-08-01
 
