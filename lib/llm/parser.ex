@@ -27,6 +27,7 @@ defmodule SpectreKinetic.Parser do
           | :unterminated_al_quote
           | :unterminated_al_brace
           | :unexpected_al_brace
+          | :duplicate_al_argument
           | :invalid_al_verb
 
   alias SpectreKinetic.Parser.Args
@@ -95,9 +96,19 @@ defmodule SpectreKinetic.Parser do
   defp validate_normalized(""), do: {:error, :empty_al}
 
   defp validate_normalized(normalized) do
-    with :ok <- normalized |> first_token() |> validate_first_token() do
-      Syntax.validate(normalized)
+    with :ok <- normalized |> first_token() |> validate_first_token(),
+         :ok <- Syntax.validate(normalized) do
+      validate_unique_arguments(normalized)
     end
+  end
+
+  defp validate_unique_arguments(normalized) do
+    {_head, with_part} = Args.split_with_section(normalized)
+    args_source = with_part || normalized
+
+    if Args.duplicate_explicit_key(args_source),
+      do: {:error, :duplicate_al_argument},
+      else: :ok
   end
 
   defp validate_first_token(nil), do: {:error, :empty_al}

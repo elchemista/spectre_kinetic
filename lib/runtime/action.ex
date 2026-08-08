@@ -152,7 +152,8 @@ defmodule SpectreKinetic.Action do
       classifier_results: plan["classifier_results"] || %{},
       warnings: plan["warnings"] || [],
       halted?: Map.get(plan, "halted?", false),
-      alternatives: build_alternatives(plan)
+      alternatives: build_alternatives(plan),
+      error: plan["error"]
     }
   end
 

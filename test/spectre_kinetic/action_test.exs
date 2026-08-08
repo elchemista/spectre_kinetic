@@ -155,4 +155,15 @@ defmodule SpectreKinetic.ActionTest do
 
     assert action.status == :error
   end
+
+  test "from_plan preserves planner error diagnostics" do
+    action =
+      Action.from_plan("SEND EMAIL", %{
+        "status" => "error",
+        "error" => {:registry_backend_failed, :lookup}
+      })
+
+    assert action.status == :error
+    assert action.error == {:registry_backend_failed, :lookup}
+  end
 end

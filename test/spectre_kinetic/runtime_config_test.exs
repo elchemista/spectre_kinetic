@@ -81,6 +81,26 @@ defmodule SpectreKinetic.RuntimeConfigTest do
                RuntimeConfig.validate_options(slots: %{items: [1 | :improper]})
     end
 
+    test "rejects slot keys that collapse at the planner boundary" do
+      assert {:error, {:invalid_options, [%{field: :slots, reason: :must_have_unique_keys}]}} =
+               RuntimeConfig.validate_options(slots: %{:TO => "first", "to" => "second"})
+
+      assert {:error, {:invalid_request, [%{field: :slots, reason: :must_have_unique_keys}]}} =
+               RuntimeConfig.validate_request(%{
+                 "al" => "SEND MESSAGE",
+                 "slots" => %{"recipient" => "second", recipient: "first"}
+               })
+
+      assert :ok =
+               RuntimeConfig.validate_options(
+                 slots: %{metadata: %{"CaseSensitive" => 1, "casesensitive" => 2}}
+               )
+
+      assert {:error,
+              {:invalid_options, [%{field: :slots, reason: :must_be_json_compatible_map}]}} =
+               RuntimeConfig.validate_options(slots: %{<<255>> => "invalid key"})
+    end
+
     test "does not let callers use the former missing-value sentinel" do
       sentinel = :__spectre_kinetic_missing__
 

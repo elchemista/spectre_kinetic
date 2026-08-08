@@ -15,7 +15,6 @@ defmodule SpectreKinetic.MixProject do
       deps: deps(),
       dialyzer: [plt_add_apps: [:mix]],
       description: description(),
-      package: package(),
       docs: [
         main: "readme",
         extras: [
@@ -42,30 +41,9 @@ defmodule SpectreKinetic.MixProject do
     "Elixir-first planning toolkit for Action Language tool selection and reranker fallback"
   end
 
-  defp package do
-    [
-      name: "spectre_kinetic",
-      maintainers: ["Yuriy Zhar"],
-      files: ~w(
-             lib
-             docs
-             priv/dataset
-             mix.exs
-             README.md
-             CHANGELOG.md
-             TRAIN.md
-             LICENSE
-      ),
-      licenses: ["Apache-2.0"],
-      links: %{
-        "GitHub" => @source_url
-      }
-    ]
-  end
-
   defp deps do
     [
-      {:spectre, github: "elchemista/spectre", branch: "main", only: :test},
+      {:spectre, github: "elchemista/spectre", tag: "0.2.0", only: :test},
       {:jason, "~> 1.2"},
       {:nx, "~> 0.11"},
       {:axon, "~> 0.7"},

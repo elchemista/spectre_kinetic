@@ -1,7 +1,7 @@
 defmodule Spectre.Kinetic.Catalog do
   @moduledoc false
 
-  defstruct actions: [], targets: %{}
+  defstruct actions: [], targets: %{}, exact_tools: %{}
 
   @type target :: %{
           required(:via) => term(),
@@ -13,7 +13,8 @@ defmodule Spectre.Kinetic.Catalog do
 
   @type t :: %__MODULE__{
           actions: [map()],
-          targets: %{optional(String.t()) => target()}
+          targets: %{optional(String.t()) => target()},
+          exact_tools: %{optional(String.t()) => String.t()}
         }
 
   @doc """
@@ -21,11 +22,23 @@ defmodule Spectre.Kinetic.Catalog do
   provider/action references.
   """
   @spec build(keyword()) :: {:ok, t()} | {:error, term()}
-  def build(opts) do
-    opts
-    |> Keyword.get(:action_providers, [])
-    |> Enum.reduce_while({:ok, %__MODULE__{}}, &add_provider/2)
+  def build(opts) when is_list(opts) do
+    if Keyword.keyword?(opts) do
+      case Keyword.get(opts, :action_providers, []) do
+        providers when is_list(providers) ->
+          providers
+          |> Enum.reduce_while({:ok, %__MODULE__{}}, &add_provider/2)
+          |> finalize_catalog()
+
+        providers ->
+          {:error, {:invalid_action_providers, providers}}
+      end
+    else
+      {:error, {:invalid_catalog_options, opts}}
+    end
   end
+
+  def build(opts), do: {:error, {:invalid_catalog_options, opts}}
 
   @spec resolve(t(), String.t()) :: {:ok, target()} | {:error, term()}
   def resolve(%__MODULE__{targets: targets}, selected_tool) when is_binary(selected_tool) do
@@ -78,21 +91,13 @@ defmodule Spectre.Kinetic.Catalog do
   @spec exact_tool(t(), String.t() | nil) :: String.t() | nil
   def exact_tool(%__MODULE__{}, nil), do: nil
 
-  def exact_tool(%__MODULE__{actions: actions}, al) when is_binary(al) do
-    normalized = normalize_al(al)
-
-    Enum.find_value(actions, fn action ->
-      if Enum.any?(
-           List.wrap(action["examples"]),
-           &(is_binary(&1) and normalize_al(&1) == normalized)
-         ),
-         do: action["id"]
-    end)
-  end
+  def exact_tool(%__MODULE__{exact_tools: exact_tools}, al) when is_binary(al),
+    do: Map.get(exact_tools, normalize_al(al))
 
   @spec add_provider(term(), {:ok, t()}) :: {:cont, {:ok, t()}} | {:halt, {:error, term()}}
   defp add_provider(mount, {:ok, catalog}) when is_map(mount) do
-    with {:ok, specs} <- provider_specs(mount),
+    with :ok <- validate_mount(mount),
+         {:ok, specs} <- provider_specs(mount),
          {:ok, entries} <- provider_entries(mount, specs),
          {:ok, catalog} <- merge_entries(catalog, entries) do
       {:cont, {:ok, catalog}}
@@ -104,14 +109,25 @@ defmodule Spectre.Kinetic.Catalog do
   defp add_provider(mount, {:ok, _catalog}),
     do: {:halt, {:error, {:invalid_action_provider_mount, mount}}}
 
+  @spec validate_mount(map()) :: :ok | {:error, term()}
+  defp validate_mount(mount) do
+    mount_module = Module.concat(["Spectre", "Action", "Provider", "Mount"])
+
+    if Map.get(mount, :__struct__) == mount_module and Map.has_key?(mount, :id),
+      do: :ok,
+      else: {:error, {:invalid_action_provider_mount, mount}}
+  end
+
   @spec provider_specs(map()) :: {:ok, [map()]} | {:error, term()}
   defp provider_specs(mount) do
     provider = Module.concat(["Spectre", "Action", "Provider"])
 
     if Code.ensure_loaded?(provider) and function_exported?(provider, :actions, 1) do
-      case apply(provider, :actions, [mount]) do
-        {:ok, specs} -> {:ok, Enum.map(specs, &plain_map/1)}
+      case provider.actions(mount) do
+        {:ok, specs} when is_list(specs) -> {:ok, Enum.map(specs, &plain_map/1)}
+        {:ok, specs} -> {:error, {:invalid_action_provider_specs, specs}}
         {:error, _reason} = error -> error
+        other -> {:error, {:invalid_action_provider_reply, other}}
       end
     else
       {:error, :spectre_action_provider_not_loaded}
@@ -186,22 +202,54 @@ defmodule Spectre.Kinetic.Catalog do
 
   @spec merge_entries(t(), [{map(), target()}]) :: {:ok, t()} | {:error, term()}
   defp merge_entries(catalog, entries) do
-    Enum.reduce_while(entries, {:ok, catalog}, fn {action, target}, {:ok, current} ->
-      id = action["id"]
+    Enum.reduce_while(entries, {:ok, catalog}, &merge_entry/2)
+  end
 
-      if Map.has_key?(current.targets, id) do
-        {:halt, {:error, {:duplicate_action_provider_tool, id}}}
-      else
-        {:cont,
-         {:ok,
-          %{
-            current
-            | actions: current.actions ++ [action],
-              targets: Map.put(current.targets, id, target)
-          }}}
+  @spec merge_entry({map(), target()}, {:ok, t()}) ::
+          {:cont, {:ok, t()}} | {:halt, {:error, term()}}
+  defp merge_entry({action, target}, {:ok, catalog}) do
+    id = action["id"]
+
+    if Map.has_key?(catalog.targets, id) do
+      {:halt, {:error, {:duplicate_action_provider_tool, id}}}
+    else
+      case add_exact_examples(catalog.exact_tools, action) do
+        {:ok, exact_tools} ->
+          {:cont,
+           {:ok,
+            %{
+              catalog
+              | actions: [action | catalog.actions],
+                targets: Map.put(catalog.targets, id, target),
+                exact_tools: exact_tools
+            }}}
+
+        {:error, _reason} = error ->
+          {:halt, error}
+      end
+    end
+  end
+
+  @spec add_exact_examples(map(), map()) :: {:ok, map()} | {:error, term()}
+  defp add_exact_examples(exact_tools, action) do
+    id = action["id"]
+
+    Enum.reduce_while(List.wrap(action["examples"]), {:ok, exact_tools}, fn example, {:ok, acc} ->
+      normalized = normalize_al(example)
+
+      case Map.get(acc, normalized) do
+        nil -> {:cont, {:ok, Map.put(acc, normalized, id)}}
+        ^id -> {:cont, {:ok, acc}}
+        other_id -> {:halt, {:error, {:duplicate_action_provider_example, other_id, id}}}
       end
     end)
   end
+
+  @spec finalize_catalog({:ok, t()} | {:error, term()}) :: {:ok, t()} | {:error, term()}
+  defp finalize_catalog({:ok, catalog}),
+    do: {:ok, %{catalog | actions: Enum.reverse(catalog.actions)}}
+
+  defp finalize_catalog({:error, _reason} = error), do: error
 
   @spec runtime_action_map([map()]) :: {:ok, %{String.t() => map()}} | {:error, term()}
   defp runtime_action_map(actions) do
@@ -346,7 +394,13 @@ defmodule Spectre.Kinetic.Catalog do
 
   @spec spec_value(map() | nil, atom()) :: term()
   defp spec_value(nil, _key), do: nil
-  defp spec_value(spec, key), do: Map.get(spec, key) || Map.get(spec, Atom.to_string(key))
+
+  defp spec_value(spec, key) do
+    case Map.fetch(spec, key) do
+      {:ok, value} -> value
+      :error -> Map.get(spec, Atom.to_string(key))
+    end
+  end
 
   @spec plain_map(map()) :: map()
   defp plain_map(%{__struct__: _module} = struct), do: Map.from_struct(struct)

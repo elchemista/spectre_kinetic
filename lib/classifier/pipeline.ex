@@ -20,7 +20,12 @@ defmodule SpectreKinetic.ClassifierPipeline do
   @known_statuses Map.keys(@status_ranks)
 
   defmodule Spec do
-    @moduledoc false
+    @moduledoc """
+    Initialized classifier entry returned by `SpectreKinetic.ClassifierPipeline.init_specs/1`.
+
+    The stored state is produced once by the classifier's `init/1` callback and
+    can be reused across calls to `SpectreKinetic.ClassifierPipeline.run/2`.
+    """
 
     defstruct [:module, :state]
 

@@ -92,7 +92,7 @@ defmodule Spectre.Kinetic.Actions do
     if Code.ensure_loaded?(spec_module) and function_exported?(spec_module, :new, 1) do
       spec
       |> Map.put(:via, provider_id)
-      |> then(&apply(spec_module, :new, [&1]))
+      |> then(&spec_module.new(&1))
       |> Map.get(:schema_hash)
     end
   end

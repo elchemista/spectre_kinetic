@@ -32,7 +32,6 @@ defmodule Spectre.Kinetic do
   """
 
   @version "0.2.0"
-  @spectre_stack_dsl Module.concat(["Spectre", "Stack", "DSL"])
   @spectre_extension Module.concat(["Spectre", "Extension"])
 
   @doc false
@@ -62,8 +61,10 @@ defmodule Spectre.Kinetic do
   @doc false
   @spec compile(keyword(), Macro.t() | nil, Macro.Env.t()) :: {:ok, stack_config()}
   def compile(opts, block, caller) do
+    stack_dsl = Module.concat(["Spectre", "Stack", "DSL"])
+
     classifiers =
-      apply(@spectre_stack_dsl, :compile!, [block, caller, [classifier: [1, 2]]])
+      stack_dsl.compile!(block, caller, classifier: [1, 2])
       |> Enum.map(&classifier_config!/1)
 
     {:ok, %{options: opts, classifiers: classifiers}}
@@ -84,8 +85,10 @@ defmodule Spectre.Kinetic do
   """
   @spec config(module()) :: {:ok, keyword()} | {:error, term()}
   def config(agent) when is_atom(agent) do
+    extension = Module.concat(["Spectre", "Extension"])
+
     with :ok <- ensure_spectre_extension(),
-         {:ok, mount} <- apply(@spectre_extension, :fetch, [agent, :kinetic]),
+         {:ok, mount} <- extension.fetch(agent, :kinetic),
          config when is_list(config) <- mount.compiled do
       {:ok, config}
     else

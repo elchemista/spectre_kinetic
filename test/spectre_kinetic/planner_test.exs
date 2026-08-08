@@ -68,6 +68,13 @@ defmodule SpectreKinetic.PlannerTest do
     def score_batch(_runtime, _pairs), do: :unexpected
   end
 
+  defmodule FaultyRegistry do
+    def embedding_matrix(:invalid), do: :invalid
+    def embedding_matrix(:raise), do: raise("registry read failed")
+    def embedding_matrix(:invalid_actions), do: nil
+    def all_actions(:invalid_actions), do: :invalid
+  end
+
   setup do
     {:ok, store} = RegistryStore.start_link(name: nil)
 
@@ -541,6 +548,46 @@ defmodule SpectreKinetic.PlannerTest do
 
     assert {:error, {:invalid_request, [%{field: :al, reason: :invalid_al_verb}]}} =
              Planner.plan("123 SEND MESSAGE", %{})
+  end
+
+  test "embedded retrieval rejects incompatible query dimensions", %{store: store} do
+    Enum.each(RegistryStore.all_actions(store), fn action ->
+      assert :ok =
+               RegistryStore.put_embedding(
+                 store,
+                 action["id"],
+                 Nx.tensor([1.0, 0.0], type: :f32)
+               )
+    end)
+
+    {:ok, embedder} = FakeEmbedder.start_link([1.0, 0.0, 0.0])
+
+    assert {:error, {:embedding_dimension_mismatch, 3, 2}} =
+             Planner.plan("SEND MESSAGE", %{
+               registry: store,
+               embedder: embedder,
+               top_k: 1
+             })
+  end
+
+  test "retrieval contains faulty registry reads" do
+    assert Planner.plan("SEND MESSAGE", %{
+             registry_module: FaultyRegistry,
+             registry: :invalid
+           }) == {:error, {:invalid_registry_return, :embedding_matrix, :invalid}}
+
+    assert {:error,
+            {:registry_backend_failed, :embedding_matrix,
+             {:raise, RuntimeError, "registry read failed"}}} =
+             Planner.plan("SEND MESSAGE", %{
+               registry_module: FaultyRegistry,
+               registry: :raise
+             })
+
+    assert Planner.plan("SEND MESSAGE", %{
+             registry_module: FaultyRegistry,
+             registry: :invalid_actions
+           }) == {:error, {:invalid_registry_return, :all_actions, :invalid}}
   end
 
   # Production registries expose a matrix only when every action has an

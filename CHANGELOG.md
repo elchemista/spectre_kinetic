@@ -4,6 +4,24 @@ All notable changes to Spectre Kinetic are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Made distribution GitHub-only by removing Hex package metadata and package
+  build CI.
+- Pinned the test-only Spectre integration dependency directly to the GitHub
+  `0.2.0` tag.
+- Made provider catalog construction and exact-example lookup linear, cached
+  complete ETS embedding matrices, and replaced linear candidate ID indexing.
+
+### Fixed
+
+- Preserved planner error diagnostics in public actions and rejected duplicate
+  AL/slot keys before they could silently overwrite values.
+- Returned structured errors for incompatible embedding dimensions and faulty
+  registry mutation backends instead of crashing planner calls.
+- Rejected ambiguous provider examples and created temporary provider
+  registries with unpredictable, exclusive files.
+
 ## [0.2.0] - 2026-08-01
 
 ### Changed
@@ -11,7 +29,7 @@ All notable changes to Spectre Kinetic are documented in this file.
 - Kept the core package independent from Spectre; the optional integration is
   compiled without a runtime dependency and implements Stack contract 1
   without pinning a Spectre release line.
-- Spectre is fetched directly from GitHub's `main` branch only in the test
+- Spectre is fetched directly from GitHub's `0.2.0` tag only in the test
   environment.
 - Verified standalone planning, classifier pipelines, provider catalogs, and
   staged Action integration against the Spectre 0.2.0 operational runtime.
