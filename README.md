@@ -2,16 +2,15 @@
 
 Elixir-first planning from Action Language to validated function-call candidates.
 
-The exact `0.2.0` compatibility surface is published in the
+The exact `0.3.0` compatibility surface is published in the
 [public API manifest](docs/PUBLIC_API.md).
 
 ## Optional Spectre integration
 
 Kinetic is a standalone planning toolkit. Spectre is not a runtime or package
 dependency: the adapter under `Spectre.Kinetic` is loaded on demand when both
-libraries are present. Its manifest targets Stack contract version 1 without
-pinning Kinetic to a Spectre release line. Integration tests fetch Spectre's
-`0.2.0` tag directly from GitHub.
+libraries are present. Its manifest targets Stack contract version 1 and
+Spectre `~> 0.3.0`. Integration tests resolve Spectre `~> 0.3.0` from Hex.
 
 Kinetic still selects and validates a provider-neutral Action; Spectre remains
 responsible for authorization, staging, persistence, idempotency, execution,
@@ -22,7 +21,7 @@ and operational-loop ownership.
 Version `0.1.6` is a consolidation-only release with no new runtime feature and
 no intentional breaking change. Elixir 1.19 on Erlang/OTP 28 is the initially
 guaranteed pair. Uniform CI runs format, warnings-as-errors compilation, tests,
-non-strict Credo, Dialyzer, and ExDoc. Kinetic now lives
+strict Credo, Dialyzer, and ExDoc. Kinetic now lives
 on `main`, owns its core-integration contracts, and remains a one-way consumer
 of Spectre rather than a test dependency of core.
 
@@ -146,10 +145,14 @@ candidate with scores, args, missing fields, warnings, and classifier results.
 ```elixir
 def deps do
   [
-    {:spectre_kinetic, github: "elchemista/spectre_kinetic", tag: "v0.2.0"}
+    {:spectre, "~> 0.3.0"},
+    {:spectre_kinetic, github: "elchemista/spectre_kinetic", tag: "v0.3.0"}
   ]
 end
 ```
+
+The Spectre dependency is needed only for the optional Stack and Agent
+integration. Standalone Kinetic planning does not require Spectre at runtime.
 
 Spectre Kinetic is distributed exclusively from GitHub; there is no Hex
 package.

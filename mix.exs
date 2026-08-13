@@ -1,7 +1,7 @@
 defmodule SpectreKinetic.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.3.0"
   @source_url "https://github.com/elchemista/spectre_kinetic"
 
   def project do
@@ -43,7 +43,7 @@ defmodule SpectreKinetic.MixProject do
 
   defp deps do
     [
-      {:spectre, github: "elchemista/spectre", tag: "0.2.0", only: :test},
+      {:spectre, "~> 0.3.0", only: :test},
       {:jason, "~> 1.2"},
       {:nx, "~> 0.11"},
       {:axon, "~> 0.7"},
