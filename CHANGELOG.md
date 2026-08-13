@@ -13,7 +13,7 @@ All notable changes to Spectre Kinetic are documented in this file.
   `~> 0.3.0` requirement.
 - Raised the Kinetic package and Stack compatibility contract to `0.3.0` and
   Spectre `~> 0.3.0`.
-- Enforced strict Credo in CI alongside the existing Dialyzer job.
+- Ran default Credo checks in CI alongside the existing Dialyzer job.
 - Made provider catalog construction and exact-example lookup linear, cached
   complete ETS embedding matrices, and replaced linear candidate ID indexing.
 

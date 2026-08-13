@@ -21,7 +21,7 @@ and operational-loop ownership.
 Version `0.1.6` is a consolidation-only release with no new runtime feature and
 no intentional breaking change. Elixir 1.19 on Erlang/OTP 28 is the initially
 guaranteed pair. Uniform CI runs format, warnings-as-errors compilation, tests,
-strict Credo, Dialyzer, and ExDoc. Kinetic now lives
+Credo, Dialyzer, and ExDoc. Kinetic now lives
 on `main`, owns its core-integration contracts, and remains a one-way consumer
 of Spectre rather than a test dependency of core.
 
