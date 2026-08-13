@@ -35,11 +35,11 @@ defmodule SpectreKinetic.StackContractTest do
   alias SpectreKinetic.StackContractStack
 
   test "publishes the versioned decision-interpreter manifest" do
-    assert SpectreKinetic.version() == "0.2.0"
+    assert SpectreKinetic.version() == "0.3.0"
     assert {:ok, package} = V1.verify_installable(Spectre.Kinetic)
     assert package.id == :kinetic
-    assert package.version == "0.2.0"
-    assert package.spectre == ">= 0.0.0"
+    assert package.version == "0.3.0"
+    assert package.spectre == "~> 0.3.0"
     assert package.provides == [{:service, :kinetic}]
     assert package.operations == []
     assert package.actions == []

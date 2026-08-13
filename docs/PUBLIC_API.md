@@ -1,9 +1,9 @@
-# Spectre Kinetic public API — 0.2.0
+# Spectre Kinetic public API — 0.3.0
 
-This file is the normative public API manifest for Spectre Kinetic `0.2.0`. It
+This file is the normative public API manifest for Spectre Kinetic `0.3.0`. It
 retains the recoverable `0.1.6` surface while keeping the core planning toolkit
 independent from Spectre. The optional adapter implements Stack contract 1 but
-does not pin a Spectre release. Compatibility guarantees apply only to the
+requires Spectre `~> 0.3.0`. Compatibility guarantees apply only to the
 modules and callables listed below. Any module, function, macro, or callback
 not listed here is an implementation detail even when it is exported or
 visible in generated docs.

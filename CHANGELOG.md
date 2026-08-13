@@ -4,12 +4,16 @@ All notable changes to Spectre Kinetic are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-13
+
 ### Changed
 
-- Made distribution GitHub-only by removing Hex package metadata and package
-  build CI.
-- Pinned the test-only Spectre integration dependency directly to the GitHub
-  `0.2.0` tag.
+- Kept Kinetic distribution GitHub-only without Hex package metadata.
+- Resolved the test-only Spectre integration dependency from Hex with the
+  `~> 0.3.0` requirement.
+- Raised the Kinetic package and Stack compatibility contract to `0.3.0` and
+  Spectre `~> 0.3.0`.
+- Enforced strict Credo in CI alongside the existing Dialyzer job.
 - Made provider catalog construction and exact-example lookup linear, cached
   complete ETS embedding matrices, and replaced linear candidate ID indexing.
 
@@ -74,7 +78,8 @@ All notable changes to Spectre Kinetic are documented in this file.
 - Frame compilation, the final closed-Move IR, and continuity-plane lifecycle
   remain later migration phases.
 
-[Unreleased]: https://github.com/elchemista/spectre_kinetic/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/elchemista/spectre_kinetic/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/elchemista/spectre_kinetic/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/elchemista/spectre_kinetic/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/elchemista/spectre_kinetic/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/elchemista/spectre_kinetic/compare/v0.1.4...v0.1.5
