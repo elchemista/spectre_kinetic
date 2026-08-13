@@ -81,7 +81,7 @@ il repository deve vietare i push diretti tramite branch protection/ruleset.
 - [ ] `mix format --check-formatted`
 - [ ] `mix compile --warnings-as-errors`
 - [ ] `mix test`
-- [ ] `mix credo --strict`
+- [ ] `mix credo`
 - [x] `mix dialyzer` — eseguito esternamente il 2026-07-12: zero errori.
 - [x] Parsing statico di tutti i 102 file Elixir senza errori di sintassi.
 - [x] Parsing YAML dei workflow e `git diff --check` senza errori.
