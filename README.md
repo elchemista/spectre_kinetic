@@ -2,7 +2,7 @@
 
 Elixir-first planning from Action Language to validated function-call candidates.
 
-The exact `0.3.0` compatibility surface is published in the
+The supported surface is documented in the
 [public API manifest](docs/PUBLIC_API.md).
 
 ## Optional Spectre integration
@@ -10,20 +10,11 @@ The exact `0.3.0` compatibility surface is published in the
 Kinetic is a standalone planning toolkit. Spectre is not a runtime or package
 dependency: the adapter under `Spectre.Kinetic` is loaded on demand when both
 libraries are present. Its manifest targets Stack contract version 1 and
-Spectre `~> 0.3.0`. Integration tests resolve Spectre `~> 0.3.0` from Hex.
+integration tests resolve Spectre from the declared test dependency.
 
 Kinetic still selects and validates a provider-neutral Action; Spectre remains
 responsible for authorization, staging, persistence, idempotency, execution,
 and operational-loop ownership.
-
-## 0.1.6 Recoverable Baseline
-
-Version `0.1.6` is a consolidation-only release with no new runtime feature and
-no intentional breaking change. Elixir 1.19 on Erlang/OTP 28 is the initially
-guaranteed pair. Uniform CI runs format, warnings-as-errors compilation, tests,
-Credo, Dialyzer, and ExDoc. Kinetic now lives
-on `main`, owns its core-integration contracts, and remains a one-way consumer
-of Spectre rather than a test dependency of core.
 
 ## Why Use This?
 
@@ -146,7 +137,7 @@ candidate with scores, args, missing fields, warnings, and classifier results.
 def deps do
   [
     {:spectre, "~> 0.3.0"},
-    {:spectre_kinetic, github: "elchemista/spectre_kinetic", tag: "v0.3.0"}
+    {:spectre_kinetic, github: "elchemista/spectre_kinetic", branch: "main"}
   ]
 end
 ```

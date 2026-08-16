@@ -31,7 +31,7 @@ defmodule Spectre.Kinetic do
   Spectre keeps ownership of policy, persistence, and execution lifecycle.
   """
 
-  @version "0.3.0"
+  @version "0.1.0"
   @spectre_extension Module.concat(["Spectre", "Extension"])
 
   @doc false
