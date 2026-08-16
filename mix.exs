@@ -43,7 +43,7 @@ defmodule SpectreKinetic.MixProject do
 
   defp deps do
     [
-      {:spectre, "~> 0.3.0", only: :test},
+      spectre_dep(),
       {:jason, "~> 1.2"},
       {:nx, "~> 0.11"},
       {:axon, "~> 0.7"},
@@ -55,6 +55,16 @@ defmodule SpectreKinetic.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
+  end
+
+  defp spectre_dep do
+    case System.get_env("SPECTRE_PATH") do
+      path when is_binary(path) and path != "" ->
+        {:spectre, path: Path.expand(path, __DIR__), only: :test, override: true}
+
+      _unset ->
+        {:spectre, "~> 0.3.0", only: :test}
+    end
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
