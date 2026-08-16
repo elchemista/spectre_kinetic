@@ -12,14 +12,16 @@ defmodule SpectreKinetic.GenericProviderIntegrationContractTest.Provider do
         name: :open_issue,
         description: "Opens an issue in a remote tracker.",
         mode: :write,
+        # The schema stays inside Spectre's closed JSON-Schema subset. Slot
+        # aliases are discovery metadata, not a schema constraint.
         schema: %{
           type: "object",
           properties: %{
-            title: %{type: "string", aliases: ["SUBJECT"]}
+            title: %{type: "string"}
           },
           required: ["title"]
         },
-        metadata: %{examples: [@example]}
+        metadata: %{examples: [@example], aliases: %{title: ["SUBJECT"]}}
       }
     ]
   end
@@ -67,6 +69,7 @@ defmodule SpectreKinetic.GenericProviderIntegrationContractTest do
   alias __MODULE__.Provider
 
   @example ~s(OPEN ISSUE WITH: TITLE="Parser bug")
+  @alias_example ~s(OPEN ISSUE WITH: SUBJECT="Parser bug")
 
   test "Kinetic plans and core dispatches an unrelated generic provider" do
     context = %Context{agent: Agent, input: Input.new(""), state: %State{}}
@@ -103,5 +106,20 @@ defmodule SpectreKinetic.GenericProviderIntegrationContractTest do
               provider_id: {:remote, :issues},
               namespace: :integration
             }} = ActionDispatcher.dispatch(effect, context)
+  end
+
+  test "metadata aliases map foreign slots onto the canonical schema argument" do
+    context = %Context{agent: Agent, input: Input.new(""), state: %State{}}
+
+    planner_opts =
+      ActionConfig.planner_opts(context,
+        effect_owner: Agent,
+        effect_scope: :agent
+      )
+
+    assert {:ok, %Effect{name: :open_issue, args: %{"title" => "Parser bug"}} = effect} =
+             ActionPlanner.plan(@alias_example, context, planner_opts)
+
+    assert {:ok, %{opened_issue: "Parser bug"}} = ActionDispatcher.dispatch(effect, context)
   end
 end

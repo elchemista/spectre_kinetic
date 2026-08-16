@@ -101,6 +101,16 @@ defmodule Spectre.Kinetic.Planner do
     |> Map.fetch!(:clean_text)
   end
 
+  @doc """
+  Declares that reply cleaning is not safe to apply to individual stream deltas.
+
+  An AL block is only recognizable once its complete text is available, so a
+  partial delta cannot be certified as free of Action Language. Streaming
+  therefore fails closed for Agents that mount this planner.
+  """
+  @spec incremental_cleaner?() :: boolean()
+  def incremental_cleaner?, do: false
+
   @spec convert_chain(ActionChain.t(), Catalog.t()) :: {:ok, [map()]} | {:error, term()}
   defp convert_chain(%ActionChain{actions: actions}, catalog) do
     actions

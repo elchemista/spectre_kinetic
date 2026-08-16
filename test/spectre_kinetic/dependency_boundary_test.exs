@@ -15,7 +15,7 @@ defmodule SpectreKinetic.DependencyBoundaryTest do
           opts
 
         _unset ->
-          assert {:spectre, "~> 0.3.0", opts} = dependency
+          assert {:spectre, "~> 0.3.2", opts} = dependency
           refute Keyword.has_key?(opts, :path)
           opts
       end

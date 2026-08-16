@@ -4,6 +4,20 @@ All notable changes to Spectre Kinetic are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Raised the test-only Spectre integration dependency and the Stack
+  compatibility contract to `~> 0.3.2`.
+- Read generic-provider argument aliases from action metadata instead of the
+  action schema. Spectre `0.3.2` validates declared schemas against a closed
+  JSON-Schema subset, so an extra `aliases` keyword now fails dispatch closed.
+
+### Added
+
+- Declared `Spectre.Kinetic.Planner.incremental_cleaner?/0` as `false`. Action
+  Language blocks are only recognizable in a complete reply, so streaming
+  cannot certify individual deltas and fails closed.
+
 ## [0.3.0] - 2026-08-13
 
 ### Changed

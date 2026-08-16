@@ -17,6 +17,9 @@ defmodule Spectre.Kinetic.Catalog do
           exact_tools: %{optional(String.t()) => String.t()}
         }
 
+  @typedoc "Argument aliases declared in provider metadata, keyed by argument name."
+  @type aliases :: %{optional(String.t()) => [term()]}
+
   @doc """
   Builds a Kinetic registry plus the trusted reverse mapping to Spectre
   provider/action references.
@@ -187,7 +190,7 @@ defmodule Spectre.Kinetic.Catalog do
   @spec generic_planner_action(term(), atom() | String.t(), map()) :: map()
   defp generic_planner_action(via, name, spec) do
     schema = spec_value(spec, :schema) || %{}
-    args = schema_args(schema)
+    args = schema_args(schema, spec_aliases(spec))
 
     %{
       "module" => planner_module_name(via),
@@ -275,38 +278,93 @@ defmodule Spectre.Kinetic.Catalog do
       else: {:cont, {:ok, Map.put(normalized, id, action)}}
   end
 
-  @spec schema_args(term()) :: [map()]
-  defp schema_args(schema) when is_list(schema), do: Enum.map(schema, &normalize_arg/1)
+  @spec schema_args(term(), aliases()) :: [map()]
+  defp schema_args(schema, aliases) when is_list(schema),
+    do: Enum.map(schema, &normalize_arg(&1, aliases))
 
-  defp schema_args(schema) when is_map(schema) do
+  defp schema_args(schema, aliases) when is_map(schema) do
     case Map.get(schema, :args) || Map.get(schema, "args") do
-      nil -> json_schema_args(schema)
-      args -> args |> List.wrap() |> Enum.map(&normalize_arg/1)
+      nil -> json_schema_args(schema, aliases)
+      args -> args |> List.wrap() |> Enum.map(&normalize_arg(&1, aliases))
     end
   end
 
-  defp schema_args(_schema), do: []
+  defp schema_args(_schema, _aliases), do: []
 
-  @spec json_schema_args(map()) :: [map()]
-  defp json_schema_args(schema) do
+  # Spectre validates a declared action schema against a closed JSON-Schema
+  # subset, so slot aliases cannot be carried as an extra schema keyword. They
+  # are declared in provider metadata instead, which stays discovery-only data.
+  @spec spec_aliases(map()) :: aliases()
+  defp spec_aliases(spec) do
+    metadata = spec_value(spec, :metadata) || %{}
+
+    metadata
+    |> then(&(Map.get(&1, :aliases) || Map.get(&1, "aliases")))
+    |> normalize_alias_map()
+  end
+
+  @spec normalize_alias_map(term()) :: aliases()
+  defp normalize_alias_map(aliases) when is_map(aliases) and not is_struct(aliases) do
+    Enum.reduce(aliases, %{}, fn {name, values}, acc ->
+      case alias_key(name) do
+        nil -> acc
+        key -> Map.put(acc, key, alias_list(values))
+      end
+    end)
+  end
+
+  defp normalize_alias_map(aliases) when is_list(aliases) do
+    if Keyword.keyword?(aliases),
+      do: aliases |> Map.new() |> normalize_alias_map(),
+      else: %{}
+  end
+
+  defp normalize_alias_map(_aliases), do: %{}
+
+  @spec alias_key(term()) :: String.t() | nil
+  defp alias_key(name) when is_atom(name) and not is_nil(name), do: Atom.to_string(name)
+  defp alias_key(name) when is_binary(name), do: name
+  defp alias_key(_name), do: nil
+
+  # Invalid entries are kept verbatim so registry normalization rejects them
+  # with a precise error instead of silently dropping a declared alias.
+  @spec alias_list(term()) :: [term()]
+  defp alias_list(values) do
+    values |> List.wrap() |> Enum.map(&alias_value/1)
+  end
+
+  @spec alias_value(term()) :: term()
+  defp alias_value(value) when is_atom(value) and not is_nil(value), do: Atom.to_string(value)
+  defp alias_value(value), do: value
+
+  @spec merge_aliases([term()], [term()]) :: [term()]
+  defp merge_aliases(declared, extra) do
+    Enum.uniq_by(declared ++ extra, fn
+      value when is_binary(value) -> String.downcase(value)
+      value -> value
+    end)
+  end
+
+  @spec json_schema_args(map(), aliases()) :: [map()]
+  defp json_schema_args(schema, aliases) do
     properties = Map.get(schema, :properties) || Map.get(schema, "properties") || %{}
     required = Map.get(schema, :required) || Map.get(schema, "required") || []
     required = MapSet.new(Enum.map(List.wrap(required), &to_string/1))
 
-    json_schema_args(properties, required)
+    json_schema_args(properties, required, aliases)
   end
 
-  @spec json_schema_args(term(), MapSet.t(String.t())) :: [map()]
-  defp json_schema_args(properties, required) when is_map(properties) do
+  @spec json_schema_args(term(), MapSet.t(String.t()), aliases()) :: [map()]
+  defp json_schema_args(properties, required, aliases) when is_map(properties) do
     properties
     |> Enum.sort_by(fn {name, _definition} -> to_string(name) end)
-    |> Enum.map(&json_schema_arg(&1, required))
+    |> Enum.map(&json_schema_arg(&1, required, aliases))
   end
 
-  defp json_schema_args(_properties, _required), do: []
+  defp json_schema_args(_properties, _required, _aliases), do: []
 
-  @spec json_schema_arg({term(), term()}, MapSet.t(String.t())) :: map()
-  defp json_schema_arg({name, definition}, required) do
+  @spec json_schema_arg({term(), term()}, MapSet.t(String.t()), aliases()) :: map()
+  defp json_schema_arg({name, definition}, required, aliases) do
     name = to_string(name)
     definition = if is_map(definition), do: definition, else: %{}
 
@@ -314,11 +372,7 @@ defmodule Spectre.Kinetic.Catalog do
       "name" => name,
       "type" => json_schema_type(definition),
       "required" => MapSet.member?(required, name),
-      "aliases" =>
-        definition
-        |> then(&(Map.get(&1, :aliases) || Map.get(&1, "aliases") || []))
-        |> List.wrap()
-        |> Enum.map(&to_string/1)
+      "aliases" => Map.get(aliases, name, [])
     }
   end
 
@@ -352,22 +406,32 @@ defmodule Spectre.Kinetic.Catalog do
   defp json_primitive_type("null"), do: "nil"
   defp json_primitive_type(type), do: to_string(type)
 
-  @spec normalize_arg(term()) :: map()
-  defp normalize_arg(arg) when is_map(arg) do
+  @spec normalize_arg(term(), aliases()) :: map()
+  defp normalize_arg(arg, aliases) when is_map(arg) do
+    name = to_string(Map.get(arg, :name) || Map.get(arg, "name"))
+
+    declared =
+      arg
+      |> then(&(Map.get(&1, :aliases) || Map.get(&1, "aliases") || []))
+      |> alias_list()
+
     %{
-      "name" => to_string(Map.get(arg, :name) || Map.get(arg, "name")),
+      "name" => name,
       "type" => to_string(Map.get(arg, :type) || Map.get(arg, "type") || "term()"),
       "required" => Map.get(arg, :required, Map.get(arg, "required", true)),
-      "aliases" =>
-        arg
-        |> then(&(Map.get(&1, :aliases) || Map.get(&1, "aliases") || []))
-        |> List.wrap()
-        |> Enum.map(&to_string/1)
+      "aliases" => merge_aliases(declared, Map.get(aliases, name, []))
     }
   end
 
-  defp normalize_arg(name) when is_atom(name) or is_binary(name) do
-    %{"name" => to_string(name), "type" => "term()", "required" => true, "aliases" => []}
+  defp normalize_arg(name, aliases) when is_atom(name) or is_binary(name) do
+    name = to_string(name)
+
+    %{
+      "name" => name,
+      "type" => "term()",
+      "required" => true,
+      "aliases" => Map.get(aliases, name, [])
+    }
   end
 
   @spec spec_examples(map()) :: [String.t()]

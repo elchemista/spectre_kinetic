@@ -136,7 +136,7 @@ candidate with scores, args, missing fields, warnings, and classifier results.
 ```elixir
 def deps do
   [
-    {:spectre, "~> 0.3.0"},
+    {:spectre, "~> 0.3.2"},
     {:spectre_kinetic, github: "elchemista/spectre_kinetic", branch: "main"}
   ]
 end
@@ -289,6 +289,34 @@ Borrowed and precompiled runtimes are checked against that Agent's provider
 catalog before planning. Missing, changed, or unmounted actions fail closed.
 
 Standalone `SpectreKinetic` APIs remain available and do not require Spectre.
+
+### Aliases for generic providers
+
+Any `Spectre.Action.Provider` can be planned by Kinetic, not only the built-in
+one. Spectre validates a declared action schema against a closed JSON-Schema
+subset and rejects unknown keywords, so slot aliases belong in the action
+metadata rather than inside the schema:
+
+```elixir
+%{
+  name: :open_issue,
+  description: "Opens an issue in a remote tracker.",
+  mode: :write,
+  schema: %{
+    type: "object",
+    properties: %{title: %{type: "string"}},
+    required: ["title"]
+  },
+  metadata: %{
+    examples: [~s(OPEN ISSUE WITH: TITLE="Parser bug")],
+    aliases: %{title: ["SUBJECT"]}
+  }
+}
+```
+
+Kinetic then maps `OPEN ISSUE WITH: SUBJECT="Parser bug"` onto the canonical
+`"title"` argument, and Spectre still validates the planned arguments against
+the schema before the provider executes.
 
 ## Quick Start
 

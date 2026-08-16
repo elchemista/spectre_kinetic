@@ -41,7 +41,7 @@ defmodule Spectre.Kinetic do
       module: __MODULE__,
       version: @version,
       contract: 1,
-      spectre: "~> 0.3.0",
+      spectre: "~> 0.3.2",
       provides: [{:service, :kinetic}],
       agent_extensions: [Spectre.Kinetic.Extension],
       dsl: __MODULE__,
