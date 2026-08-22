@@ -207,7 +207,7 @@ defmodule Spectre.Kinetic.Planner do
   defp with_runtime(%Catalog{} = catalog, opts, function) do
     case borrowed_runtime(opts) do
       nil -> with_owned_runtime(catalog, opts, function)
-      runtime -> with_verified_runtime(runtime, catalog, function)
+      runtime -> with_verified_runtime(runtime, catalog, opts, function)
     end
   end
 
@@ -220,7 +220,7 @@ defmodule Spectre.Kinetic.Planner do
   @spec with_owned_runtime(Catalog.t(), keyword(), (term() -> term())) :: term()
   defp with_owned_runtime(%Catalog{} = catalog, opts, function) do
     runtime_opts = Keyword.take(opts, @runtime_option_keys)
-    verified = &with_verified_runtime(&1, catalog, function)
+    verified = &with_verified_runtime(&1, catalog, opts, function)
 
     if configured_registry?(runtime_opts) or catalog.actions == [] do
       load_and_run(runtime_opts, verified)
@@ -244,11 +244,12 @@ defmodule Spectre.Kinetic.Planner do
     end
   end
 
-  @spec with_verified_runtime(term(), Catalog.t(), (term() -> term())) :: term()
-  defp with_verified_runtime(runtime, %Catalog{} = catalog, function) do
+  @spec with_verified_runtime(term(), Catalog.t(), keyword(), (term() -> term())) :: term()
+  defp with_verified_runtime(runtime, %Catalog{} = catalog, opts, function) do
     actions = SpectreKinetic.action_definitions(runtime)
+    verification_opts = Keyword.take(opts, [:allow_unmounted_actions])
 
-    with :ok <- Catalog.verify_runtime(catalog, actions) do
+    with :ok <- Catalog.verify_runtime(catalog, actions, verification_opts) do
       function.(runtime)
     end
   end

@@ -4,6 +4,13 @@ All notable changes to Spectre Kinetic are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Added an explicit `allow_unmounted_actions: true` planner boundary for
+  role-scoped provider catalogs backed by a shared registry artifact. Mounted
+  action schemas are still verified exactly, and unmounted selections remain
+  non-executable at catalog resolution.
+
 ### Changed
 
 - Raised the test-only Spectre integration dependency and the Stack
