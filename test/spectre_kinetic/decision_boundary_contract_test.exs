@@ -300,6 +300,17 @@ defmodule SpectreKinetic.DecisionBoundaryContractTest do
 
     assert extra_id == extra["id"]
 
+    assert :ok =
+             Catalog.verify_runtime(catalog, catalog.actions ++ [extra],
+               allow_unmounted_actions: true
+             )
+
+    assert {:error, {:invalid_runtime_verification_options, _opts}} =
+             Catalog.verify_runtime(catalog, catalog.actions, allow_unmounted_actions: :yes)
+
+    assert {:error, {:invalid_runtime_verification_options, [:invalid]}} =
+             Catalog.verify_runtime(catalog, catalog.actions, [:invalid])
+
     assert Catalog.verify_runtime(catalog, :invalid) ==
              {:error, {:invalid_kinetic_runtime_actions, :invalid}}
 
@@ -414,17 +425,41 @@ defmodule SpectreKinetic.DecisionBoundaryContractTest do
       )
 
     assert {:ok, catalog} = Catalog.build(action_providers: [mount])
-    registry_path = write_registry(catalog.actions)
+
+    extra =
+      planner_action("External", "outside", [], ["RUN OUTSIDE ACTION"])
+
+    registry_path = write_registry(catalog.actions ++ [extra])
 
     assert {:ok, runtime} = SpectreKinetic.load_runtime(registry_json: registry_path)
     on_exit(fn -> SpectreKinetic.close_runtime(runtime) end)
 
-    assert {:ok, %Action{via: :audit, name: :record}} =
+    assert {:error, {:kinetic_action_not_mounted, extra_id}} =
              Planner.plan("RECORD AUDIT SUBJECT=deploy", %{},
                action_providers: [mount],
                runtime: runtime,
                tool_threshold: 0.0
              )
+
+    assert extra_id == extra["id"]
+
+    assert {:ok, %Action{via: :audit, name: :record}} =
+             Planner.plan("RECORD AUDIT SUBJECT=deploy", %{},
+               action_providers: [mount],
+               runtime: runtime,
+               allow_unmounted_actions: true,
+               tool_threshold: 0.0
+             )
+
+    assert {:error, {:unmapped_action_provider, outside_id}} =
+             Planner.plan("RUN OUTSIDE ACTION", %{},
+               action_providers: [mount],
+               runtime: runtime,
+               allow_unmounted_actions: true,
+               tool_threshold: 0.0
+             )
+
+    assert outside_id == extra["id"]
 
     empty = SpectreKinetic.load_runtime!(allow_empty_registry: true)
     on_exit(fn -> SpectreKinetic.close_runtime(empty) end)

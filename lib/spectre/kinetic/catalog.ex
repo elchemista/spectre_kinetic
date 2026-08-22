@@ -55,17 +55,34 @@ defmodule Spectre.Kinetic.Catalog do
   Verifies that a runtime registry still contains the action definitions
   compiled from the Agent's mounted providers.
   """
-  @spec verify_runtime(t(), [map()]) :: :ok | {:error, term()}
-  def verify_runtime(%__MODULE__{actions: expected}, runtime_actions)
-      when is_list(runtime_actions) do
-    with {:ok, actual} <- runtime_action_map(runtime_actions),
+  @spec verify_runtime(t(), [map()], keyword()) :: :ok | {:error, term()}
+  def verify_runtime(catalog, runtime_actions, opts \\ [])
+
+  def verify_runtime(%__MODULE__{actions: expected}, runtime_actions, opts)
+      when is_list(runtime_actions) and is_list(opts) do
+    with :ok <- validate_verification_options(opts),
+         {:ok, actual} <- runtime_action_map(runtime_actions),
          :ok <- verify_expected_actions(expected, actual) do
-      verify_no_extra_actions(expected, actual)
+      if Keyword.get(opts, :allow_unmounted_actions, false),
+        do: :ok,
+        else: verify_no_extra_actions(expected, actual)
     end
   end
 
-  def verify_runtime(%__MODULE__{}, runtime_actions),
+  def verify_runtime(%__MODULE__{}, runtime_actions, _opts),
     do: {:error, {:invalid_kinetic_runtime_actions, runtime_actions}}
+
+  defp validate_verification_options(opts) do
+    if Keyword.keyword?(opts) do
+      case {Keyword.keys(opts) -- [:allow_unmounted_actions],
+            Keyword.get(opts, :allow_unmounted_actions, false)} do
+        {[], value} when is_boolean(value) -> :ok
+        _invalid -> {:error, {:invalid_runtime_verification_options, opts}}
+      end
+    else
+      {:error, {:invalid_runtime_verification_options, opts}}
+    end
+  end
 
   @spec verify_expected_actions([map()], %{String.t() => map()}) ::
           :ok | {:error, term()}
