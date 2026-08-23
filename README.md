@@ -136,7 +136,7 @@ candidate with scores, args, missing fields, warnings, and classifier results.
 ```elixir
 def deps do
   [
-    {:spectre, "~> 0.3.2"},
+    {:spectre, "~> 0.3.3"},
     {:spectre_kinetic, github: "elchemista/spectre_kinetic", branch: "main"}
   ]
 end
