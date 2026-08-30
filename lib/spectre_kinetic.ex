@@ -75,6 +75,7 @@ defmodule SpectreKinetic do
 
   @type plan_option ::
           {:slots, map()}
+          | {:candidate_action_ids, [binary()]}
           | {:top_k, pos_integer()}
           | {:tool_threshold, float()}
           | {:mapping_threshold, float()}

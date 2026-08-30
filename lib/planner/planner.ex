@@ -31,6 +31,7 @@ defmodule SpectreKinetic.Planner do
           optional(:fallback_margin) => float(),
           optional(:reranker_threshold) => float(),
           optional(:slots) => map(),
+          optional(:candidate_action_ids) => [binary()],
           optional(:registry_module) => module(),
           optional(:registry) => GenServer.server(),
           optional(:embedder) => GenServer.server(),

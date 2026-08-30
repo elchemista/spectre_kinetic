@@ -225,6 +225,22 @@ defmodule SpectreKinetic.PlannerTest do
       assert result["candidates"] != []
     end
 
+    test "limits lexical retrieval to the explicit candidate action scope", %{store: store} do
+      {:ok, result} =
+        Planner.plan(
+          ~s(SEND OUTBOUND EMAIL WITH: TO=user@test.com SUBJECT="Hi" BODY="Hello"),
+          %{
+            registry: store,
+            embedder: nil,
+            candidate_action_ids: ["Dynamic.Sms.send/2"],
+            tool_threshold: 0.0
+          }
+        )
+
+      assert result["selected_tool"] == "Dynamic.Sms.send/2"
+      assert Enum.map(result["candidates"], & &1["id"]) == ["Dynamic.Sms.send/2"]
+    end
+
     test "uses embedding matrix when registry and embedder provide one", %{store: store} do
       :ok =
         install_test_embeddings(store, %{
@@ -241,6 +257,29 @@ defmodule SpectreKinetic.PlannerTest do
 
       assert result["selected_tool"] == "Dynamic.Sms.send/2"
       assert result["tool_score"] == 1.0
+    end
+
+    test "limits embedded retrieval to the explicit candidate action scope", %{store: store} do
+      :ok =
+        install_test_embeddings(store, %{
+          "Dynamic.Sms.send/2" => [1.0, 0.0]
+        })
+
+      {:ok, embedder} = FakeEmbedder.start_link([1.0, 0.0])
+
+      {:ok, result} =
+        Planner.plan(
+          "ROUTE MESSAGE SOMEWHERE WITH: TO=+15551234567 BODY=Code",
+          %{
+            registry: store,
+            embedder: embedder,
+            candidate_action_ids: ["Dynamic.Email.send/3"],
+            tool_threshold: 0.0
+          }
+        )
+
+      assert result["selected_tool"] == "Dynamic.Email.send/3"
+      assert Enum.map(result["candidates"], & &1["id"]) == ["Dynamic.Email.send/3"]
     end
 
     test "emits telemetry when embedded retrieval falls back to lexical", %{store: store} do

@@ -81,6 +81,33 @@ defmodule SpectreKinetic.RuntimeConfigTest do
                RuntimeConfig.validate_options(slots: %{items: [1 | :improper]})
     end
 
+    test "validates candidate action scopes" do
+      assert :ok =
+               RuntimeConfig.validate_options(
+                 candidate_action_ids: ["Dynamic.Email.send/3", "Dynamic.Sms.send/2"]
+               )
+
+      assert {:error,
+              {:invalid_options,
+               [%{field: :candidate_action_ids, reason: :must_contain_non_blank_binaries}]}} =
+               RuntimeConfig.validate_options(candidate_action_ids: [""])
+
+      assert {:error,
+              {:invalid_options,
+               [%{field: :candidate_action_ids, reason: :must_contain_unique_values}]}} =
+               RuntimeConfig.validate_options(
+                 candidate_action_ids: ["Action.run/0", "Action.run/0"]
+               )
+
+      assert {:error,
+              {:invalid_options, [%{field: :candidate_action_ids, reason: :must_be_list}]}} =
+               RuntimeConfig.validate_options(candidate_action_ids: MapSet.new(["Action.run/0"]))
+
+      assert {:error,
+              {:invalid_options, [%{field: :candidate_action_ids, reason: :must_be_list}]}} =
+               RuntimeConfig.validate_options(candidate_action_ids: ["Action.run/0" | :improper])
+    end
+
     test "rejects slot keys that collapse at the planner boundary" do
       assert {:error, {:invalid_options, [%{field: :slots, reason: :must_have_unique_keys}]}} =
                RuntimeConfig.validate_options(slots: %{:TO => "first", "to" => "second"})

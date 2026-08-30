@@ -36,6 +36,7 @@ defmodule Spectre.Kinetic.Planner do
 
   @plan_option_keys [
     :slots,
+    :candidate_action_ids,
     :top_k,
     :tool_threshold,
     :mapping_threshold,
@@ -73,7 +74,7 @@ defmodule Spectre.Kinetic.Planner do
           keyword()
         ) :: {:ok, map()} | {:error, term()}
   defp plan_response_with_runtime(runtime, text, clean_text, catalog, opts) do
-    with {:ok, chain} <- SpectreKinetic.plan_chain(runtime, text, plan_opts(opts)),
+    with {:ok, chain} <- SpectreKinetic.plan_chain(runtime, text, plan_opts(opts, catalog)),
          {:ok, actions} <- convert_chain(chain, catalog) do
       {:ok, %{reply_text: clean_text, actions: actions}}
     end
@@ -89,7 +90,7 @@ defmodule Spectre.Kinetic.Planner do
   @spec plan_with_runtime(term(), String.t(), Catalog.t(), keyword()) ::
           {:ok, map()} | {:error, term()}
   defp plan_with_runtime(runtime, al, catalog, opts) do
-    with {:ok, action} <- SpectreKinetic.plan(runtime, al, plan_opts(opts)) do
+    with {:ok, action} <- SpectreKinetic.plan(runtime, al, plan_opts(opts, catalog)) do
       convert_action(action, catalog, 0)
     end
   end
@@ -319,8 +320,12 @@ defmodule Spectre.Kinetic.Planner do
     )
   end
 
-  @spec plan_opts(keyword()) :: keyword()
-  defp plan_opts(opts), do: Keyword.take(opts, @plan_option_keys)
+  @spec plan_opts(keyword(), Catalog.t()) :: keyword()
+  defp plan_opts(opts, %Catalog{} = catalog) do
+    opts
+    |> Keyword.take(@plan_option_keys)
+    |> Keyword.put(:candidate_action_ids, Catalog.action_ids(catalog))
+  end
 
   @spec value(map(), atom()) :: term()
   defp value(map, key) do

@@ -114,6 +114,10 @@ defmodule Spectre.Kinetic.Catalog do
   def exact_tool(%__MODULE__{exact_tools: exact_tools}, al) when is_binary(al),
     do: Map.get(exact_tools, normalize_al(al))
 
+  @doc false
+  @spec action_ids(t()) :: [String.t()]
+  def action_ids(%__MODULE__{targets: targets}), do: targets |> Map.keys() |> Enum.sort()
+
   @spec add_provider(term(), {:ok, t()}) :: {:cont, {:ok, t()}} | {:halt, {:error, term()}}
   defp add_provider(mount, {:ok, catalog}) when is_map(mount) do
     with :ok <- validate_mount(mount),

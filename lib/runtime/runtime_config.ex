@@ -57,6 +57,7 @@ defmodule SpectreKinetic.RuntimeConfig do
                            :__spectre_mode__,
                            :actions,
                            :allow_empty_registry,
+                           :candidate_action_ids,
                            :classifiers,
                            :dictionary,
                            :embedder,
@@ -452,8 +453,48 @@ defmodule SpectreKinetic.RuntimeConfig do
       runtime_path_issues(options) ++
       runtime_module_issues(options) ++
       classifier_issues(options) ++
+      candidate_action_ids_issues(options) ++
       boolean_option_issues(options, :allow_empty_registry)
   end
+
+  defp candidate_action_ids_issues(options) do
+    case Map.fetch(options, :candidate_action_ids) do
+      :error ->
+        []
+
+      {:ok, ids} when is_list(ids) ->
+        case validate_candidate_action_ids(ids, MapSet.new(), 0) do
+          :ok -> []
+          reason -> [%{field: :candidate_action_ids, reason: reason}]
+        end
+
+      {:ok, _ids} ->
+        [%{field: :candidate_action_ids, reason: :must_be_list}]
+    end
+  end
+
+  defp validate_candidate_action_ids([], _seen, _count), do: :ok
+
+  defp validate_candidate_action_ids([_id | _rest], _seen, 10_000),
+    do: :exceeds_item_limit
+
+  defp validate_candidate_action_ids([id | rest], seen, count) when is_binary(id) do
+    cond do
+      not String.valid?(id) or String.trim(id) == "" ->
+        :must_contain_non_blank_binaries
+
+      MapSet.member?(seen, id) ->
+        :must_contain_unique_values
+
+      true ->
+        validate_candidate_action_ids(rest, MapSet.put(seen, id), count + 1)
+    end
+  end
+
+  defp validate_candidate_action_ids([_id | _rest], _seen, _count),
+    do: :must_contain_non_blank_binaries
+
+  defp validate_candidate_action_ids(_improper_tail, _seen, _count), do: :must_be_list
 
   defp unknown_option_issues(options) do
     options

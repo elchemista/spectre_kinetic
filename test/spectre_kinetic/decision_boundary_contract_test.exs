@@ -451,15 +451,13 @@ defmodule SpectreKinetic.DecisionBoundaryContractTest do
                tool_threshold: 0.0
              )
 
-    assert {:error, {:unmapped_action_provider, outside_id}} =
+    assert {:error, {:action_plan_not_executable, 0, :no_tool}} =
              Planner.plan("RUN OUTSIDE ACTION", %{},
                action_providers: [mount],
                runtime: runtime,
                allow_unmounted_actions: true,
-               tool_threshold: 0.0
+               tool_threshold: 0.99
              )
-
-    assert outside_id == extra["id"]
 
     empty = SpectreKinetic.load_runtime!(allow_empty_registry: true)
     on_exit(fn -> SpectreKinetic.close_runtime(empty) end)

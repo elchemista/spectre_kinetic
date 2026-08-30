@@ -21,7 +21,8 @@ defmodule SpectreKinetic.Planner.Retrieval do
           registry_module: module(),
           registry: term(),
           embedder: GenServer.server() | nil,
-          top_k: pos_integer()
+          top_k: pos_integer(),
+          candidate_action_ids: MapSet.t(binary()) | nil
         }
 
   @type candidate :: %{action: map(), embedding_score: number()}
@@ -33,7 +34,8 @@ defmodule SpectreKinetic.Planner.Retrieval do
       registry_module: Map.get(opts, :registry_module, RegistryStore),
       registry: Map.get(opts, :registry, RegistryStore),
       embedder: Map.get(opts, :embedder),
-      top_k: plan_option(opts, :top_k)
+      top_k: plan_option(opts, :top_k),
+      candidate_action_ids: candidate_action_ids(opts)
     }
   end
 
@@ -43,14 +45,26 @@ defmodule SpectreKinetic.Planner.Retrieval do
         registry_module: registry_module,
         registry: registry,
         embedder: embedder,
-        top_k: top_k
+        top_k: top_k,
+        candidate_action_ids: candidate_action_ids
       }) do
     case registry_read(:embedding_matrix, fn -> registry_module.embedding_matrix(registry) end) do
       {:ok, {matrix, action_ids}} ->
-        retrieve_embedded(al_text, registry_module, registry, embedder, top_k, matrix, action_ids)
+        retrieve_embedded(
+          al_text,
+          registry_module,
+          registry,
+          embedder,
+          top_k,
+          matrix,
+          action_ids,
+          candidate_action_ids
+        )
 
       {:ok, nil} ->
-        result = retrieve_lexical(al_text, registry_module, registry, top_k)
+        result =
+          retrieve_lexical(al_text, registry_module, registry, top_k, candidate_action_ids)
+
         emit_lexical_fallback(result, top_k, :embedding_matrix_unavailable)
         result
 
@@ -62,14 +76,21 @@ defmodule SpectreKinetic.Planner.Retrieval do
     end
   end
 
-  @spec retrieve_lexical(binary(), module(), term(), pos_integer()) ::
+  @spec retrieve_lexical(
+          binary(),
+          module(),
+          term(),
+          pos_integer(),
+          MapSet.t(binary()) | nil
+        ) ::
           {:ok, [candidate()]} | {:error, term()}
-  defp retrieve_lexical(al_text, registry_module, registry, top_k) do
+  defp retrieve_lexical(al_text, registry_module, registry, top_k, candidate_action_ids) do
     with {:ok, actions} <-
            registry_read(:all_actions, fn -> registry_module.all_actions(registry) end),
          :ok <- validate_registry_actions(actions) do
       candidates =
         actions
+        |> Enum.filter(&candidate_allowed?(&1, candidate_action_ids))
         |> Enum.map(&lexical_candidate(al_text, &1))
         |> Enum.sort_by(& &1.embedding_score, :desc)
         |> Enum.take(top_k)
@@ -91,17 +112,37 @@ defmodule SpectreKinetic.Planner.Retrieval do
           GenServer.server() | nil,
           pos_integer(),
           Nx.Tensor.t(),
-          [binary()]
+          [binary()],
+          MapSet.t(binary()) | nil
         ) :: {:ok, [candidate()]} | {:error, term()}
-  defp retrieve_embedded(al_text, registry_module, registry, embedder, top_k, matrix, action_ids) do
+  defp retrieve_embedded(
+         al_text,
+         registry_module,
+         registry,
+         embedder,
+         top_k,
+         matrix,
+         action_ids,
+         candidate_action_ids
+       ) do
     case embed_query(embedder, al_text) do
       {:ok, query_vec} ->
         with :ok <- validate_embedding_inputs(query_vec, matrix, action_ids) do
-          embedded_candidates(query_vec, matrix, top_k, action_ids, registry_module, registry)
+          embedded_candidates(
+            query_vec,
+            matrix,
+            top_k,
+            action_ids,
+            candidate_action_ids,
+            registry_module,
+            registry
+          )
         end
 
       {:error, :embedder_unavailable} ->
-        result = retrieve_lexical(al_text, registry_module, registry, top_k)
+        result =
+          retrieve_lexical(al_text, registry_module, registry, top_k, candidate_action_ids)
+
         emit_lexical_fallback(result, top_k, :embedder_unavailable)
         result
 
@@ -115,20 +156,33 @@ defmodule SpectreKinetic.Planner.Retrieval do
           Nx.Tensor.t(),
           pos_integer(),
           [binary()],
+          MapSet.t(binary()) | nil,
           module(),
           term()
         ) :: {:ok, [candidate()]} | {:error, term()}
-  defp embedded_candidates(query_vec, matrix, top_k, action_ids, registry_module, registry) do
-    action_ids = List.to_tuple(action_ids)
+  defp embedded_candidates(
+         query_vec,
+         matrix,
+         top_k,
+         action_ids,
+         candidate_action_ids,
+         registry_module,
+         registry
+       ) do
+    action_id_tuple = List.to_tuple(action_ids)
 
     candidates =
       query_vec
       |> Scorer.cosine_similarity(matrix)
-      |> Scorer.top_k(top_k)
+      |> Scorer.top_k(length(action_ids))
+      |> Enum.filter(fn {idx, _score} ->
+        candidate_id_allowed?(elem(action_id_tuple, idx), candidate_action_ids)
+      end)
+      |> Enum.take(top_k)
 
     candidates
     |> Enum.reduce_while({:ok, []}, fn {idx, score}, {:ok, acc} ->
-      action_id = elem(action_ids, idx)
+      action_id = elem(action_id_tuple, idx)
 
       result =
         registry_read(:get_action, fn -> registry_module.get_action(registry, action_id) end)
@@ -248,6 +302,22 @@ defmodule SpectreKinetic.Planner.Retrieval do
   catch
     kind, reason -> {:error, {:registry_backend_failed, operation, {kind, reason}}}
   end
+
+  defp candidate_action_ids(opts) do
+    case Map.get(opts, :candidate_action_ids) do
+      nil -> nil
+      ids -> MapSet.new(ids)
+    end
+  end
+
+  defp candidate_allowed?(action, candidate_action_ids) do
+    candidate_id_allowed?(Map.get(action, "id") || Map.get(action, :id), candidate_action_ids)
+  end
+
+  defp candidate_id_allowed?(_action_id, nil), do: true
+
+  defp candidate_id_allowed?(action_id, candidate_action_ids),
+    do: MapSet.member?(candidate_action_ids, action_id)
 
   @spec plan_option(map(), atom()) :: term()
   defp plan_option(opts, key) do
