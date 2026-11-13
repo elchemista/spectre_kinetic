@@ -40,6 +40,7 @@ defmodule Spectre.Kinetic.Extension do
         provider_opts =
           opts
           |> Keyword.take([:mode, :modes])
+          |> provider_modes()
           |> Keyword.put(:module, module)
 
         [
@@ -54,6 +55,14 @@ defmodule Spectre.Kinetic.Extension do
         raise ArgumentError,
               "Spectre.Kinetic :actions must be a module, got: #{inspect(invalid)}"
     end
+  end
+
+  # The interpreter's closed-moves configuration is not an Action's effect
+  # mode. Only per-action modes or an explicit action default reach the catalog.
+  defp provider_modes(opts) do
+    if Keyword.get(opts, :mode) == :closed_moves,
+      do: Keyword.delete(opts, :mode),
+      else: opts
   end
 
   @spec action_planner(keyword()) :: {module(), keyword()}

@@ -798,3 +798,26 @@ user/LLM text
 
 That last arrow belongs to you. The library helps you make the decision with
 less guessing and more structure.
+
+## Spectre 0.4 Server tools
+
+Install `Spectre.Kinetic` in your Stack and select that Stack with
+`use Spectre.Server, tools: MyApp.AI`. Spectre generates the local `kinetic/3`
+helper from `Spectre.Kinetic.tools/1`; do not import a `kinetic` function from
+this library. The helper receives a consolidated, unplanned model response:
+
+```elixir
+def handle_result(:model_response, {:generated, response}, ctx) do
+  kinetic(ctx, response, on_result: :actions_ready)
+end
+```
+
+The result is `{:prepared, %{text: text, actions: candidates}}`. Candidates
+retain the core catalog's provider, owner, scope and schema metadata. Submit
+chosen candidates through `propose/4`; interpretation never executes an action.
+A response already generated with `planning: true` is rejected to prevent
+duplicate planning. The installed planner must remain `Spectre.Kinetic.Planner`.
+Standalone `SpectreKinetic.plan/3` and runtime ownership are unchanged.
+
+Run compatibility tests against the working core with
+`SPECTRE_PATH=../spectre mix test`. This branch targets Spectre `~> 0.4.0`.
