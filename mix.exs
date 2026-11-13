@@ -19,12 +19,16 @@ defmodule SpectreKinetic.MixProject do
         main: "readme",
         extras: [
           "README.md",
+          "docs/INDEX.md",
+          "docs/MIGRATING_TO_SPECTRE_0_4.md",
+          "docs/LEGACY_0_3.md",
+          "docs/STANDALONE.md",
           "docs/PUBLIC_API.md",
           "CHANGELOG.md",
           "TRAIN.md",
           "LICENSE"
         ],
-        source_ref: "v#{@version}"
+        source_ref: "feature/stack-tools-0.4"
       ],
       source_url: @source_url,
       homepage_url: @source_url

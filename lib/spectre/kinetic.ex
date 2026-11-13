@@ -1,34 +1,33 @@
 defmodule Spectre.Kinetic do
   @moduledoc """
-  Stack package and legacy Agent integration for `SpectreKinetic`.
+  Stack integration for Action Language interpretation in Spectre core 0.4.
 
-  Install Kinetic in a `Spectre.Stack` to declare the classifier pipeline used
-  to interpret constrained decisions:
+  Install this package in a `Spectre.Stack`, select that Stack on the Agent,
+  and declare `use Spectre.Server, tools: MyApp.AI` on its Server. The
+  installation's `tools/1` descriptor generates the private `kinetic/3` helper;
+  it is not a function imported from this module.
 
-      install Spectre.Kinetic, mode: :closed_moves do
-        classifier MyApp.IntentClassifier
-        classifier MyApp.SafetyClassifier, threshold: 0.85
-      end
-
-  The Stack configuration is immutable data. Selecting it activates the
-  Kinetic planner and, when `:actions` is configured, its built-in Action
-  provider. It does not start a global planner or execute the selected
-  decision. Kinetic owns interpretation; the Spectre core owns authorization
-  and execution.
-
-  The legacy Agent extension remains available:
-
-      use Spectre.Agent
-      use Spectre.Kinetic,
+      install Spectre.Kinetic,
+        mode: :closed_moves,
         actions: MyApp.Actions,
-        runtime: MyApp.KineticRuntime
+        modes: [send_email: :write]
 
-  `:actions` mounts the built-in `Spectre.Kinetic.Actions` provider, so the
-  application does not need to implement an adapter. Omit it when other
-  extensions, such as MCP or Lens, already contribute the providers that
-  Kinetic should plan.
+  Generate with `planning: false`, then pass the consolidated model result to
+  `kinetic(ctx, result, on_result: :prepared)`. Interpretation returns complete
+  proposals through `handle_result/3`; it does not execute actions. Forward
+  each proposal's arguments and metadata to the Server's `propose/4` helper.
+  The host's governed binding then runs through GAM before capability release.
 
-  Spectre keeps ownership of policy, persistence, and execution lifecycle.
+  The Stack configuration is immutable. It does not start a global planner.
+  `:actions` mounts the built-in Action provider; omit it when another package
+  supplies the providers Kinetic should interpret. Planner mode and action
+  effect modes are separate declarations.
+
+  The direct `SpectreKinetic` API remains available for standalone use.
+  Agent-local `use Spectre.Kinetic` is a compatibility extension; the current
+  architecture and migration examples are in the README and migration guide.
+  See the [Governed Act Model](https://spectre.guide/en/governed-act-model)
+  for the host authority and evidence boundary.
   """
 
   @version "0.1.0"

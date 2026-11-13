@@ -3,7 +3,7 @@
 This file is the normative public API manifest for Spectre Kinetic `0.1.0`.
 The core planning toolkit remains independent from Spectre. The optional
 adapter implements Stack contract 1 but
-requires Spectre `~> 0.3.3`. Compatibility guarantees apply only to the
+targets unreleased Spectre core `~> 0.4.0`. Compatibility guarantees apply only to the
 modules and callables listed below. Any module, function, macro, or callback
 not listed here is an implementation detail even when it is exported or
 visible in generated docs.
@@ -22,7 +22,7 @@ type, and struct contract.
 - `Mix.Tasks.SpectreKinetic.TrainClassifier`
 - `Mix.Tasks.SpectreKinetic.TrainReranker`
 - `Spectre.Kinetic`
-  - functions: `config/1`
+  - functions: `tools/1`, `config/1`
 - `Spectre.Kinetic.Actions`
 - `Spectre.Kinetic.Planner`
 - `SpectreKinetic`
@@ -110,3 +110,10 @@ type, and struct contract.
 - `SpectreKinetic.Tool`
 - `SpectreKinetic.Tool.Extractor`
   - functions: `extract_app/1`, `extract_module/1`, `extract_modules/1`
+
+## Core 0.4 Server tools
+
+The Stack Installable `tools/1` descriptor and generated Server helpers are
+documented in the [migration guide](MIGRATING_TO_SPECTRE_0_4.md). Native direct
+APIs keep their existing contracts; helper results are explicitly projected
+for durable Server use. See the [documentation index](INDEX.md).
