@@ -14,7 +14,7 @@ version numbers remain independent. Use the Git/path dependencies in the
 | Application behavior | Flow bodies / Instance and Run continuation | `Spectre.Server` callbacks and queued commands |
 | Tool entry | Direct call / Action provider | Generated helper schedules a command; no import from package |
 | Results | Immediate value or Invocation resumption | `handle_result(tag, result, ctx)` after worker result acquisition |
-| Effects | Legacy application policies | Host GAM candidate, presentation, consent and admitted executor |
+| Effects | Legacy application policies | Automatic AgentServer GAM lifecycle and registered effect adapter |
 | Durability | Legacy Run/Instance projection | Server checkpoint, inbox/outbox and typed portable results |
 
 The migration does **not** remove `SpectreKinetic.plan/3`, registries, classifiers and training. Direct calls do not acquire
@@ -40,7 +40,7 @@ early. Never put PIDs, functions or provider clients into persisted arguments.
 
 Cognitive `:safe` operations can replay after interruption. `:never` operations
 return `{:tool_unknown, details}` after uncertain execution and need application
-reconciliation. Governed operations require an explicit host binding and follow
+reconciliation. Governed operations require an allowed operation entry in automatic GAM and follow
 GAM reconciliation; they are not automatically retried as cognitive calls.
 Native GenServer callbacks remain available through the Server behavior; return
 commands through that boundary rather than bypassing its bookkeeping.
@@ -67,17 +67,20 @@ Kinetic never chooses the host's authority or executes the function. Install
 `actions:` to mount Kinetic functions, or use other installed action providers.
 `modes:` declares action effect types; `mode: :closed_moves` is not an action mode.
 
-The host binds the namespaced operation, for example
-`{:kinetic, :send_email}`, in `Spectre.Server.GAM` configuration. Its candidate
-factory validates recipient/content and supplies the governed material, required
-consent/presentation and an executor contract. Only the admitted executor calls
-the action implementation. Do not replace this with a direct action call inside
-`handle_result`, which would bypass the declared boundary.
+Enable the namespaced operation, for example `{:kinetic, :send_email}`, in the
+root Server's `gam: [operations: ...]` configuration. Stack `effects/1`
+registration supplies the execution adapter; Spectre automatically freezes the
+Candidate, prepares any required Presentation and runs the GAM protocol. An
+application `handle_action/2` callback can restrict recipient/content but does
+not construct a Host or grant authority. Only the admitted executor calls the
+action implementation. A direct action call inside `handle_result` would
+bypass that declared boundary.
 
 The [executable all-tools workflow](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/integration/stack_tools/support/workflow.ex)
-and [host/executor fixture](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/integration/stack_tools/support/host.ex) show the
+and [automatic configuration fixture](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/integration/stack_tools/support/configuration.ex) show the
 full model → kinetic → propose → GAM → executor → result sequence using fake
-external transports. They are integration tests, not production authority policy.
+external transports. They test the same automatic GAM path used by applications;
+real transport credentials and business authorization remain application setup.
 
 ## GAM and consent
 
@@ -105,8 +108,41 @@ See [core AgentServer](https://github.com/elchemista/spectre/blob/feature/agent-
 3. Replace legacy flow effects with explicit helper commands/result handlers;
    retain direct APIs only where caller-owned execution is intentional.
 4. Configure named resources and trusted identity required by the package.
-5. Bind governed effects to the host's candidates/executors and consent handling.
+5. Configure allowed operations and confirmation in AgentServer; use
+   `handle_action/2` for business checks. Spectre constructs GAM records and runs
+   the registered executor only after admission.
 6. Test refused, uncertain and interrupted paths as well as successful results;
    verify portable snapshots before deploying existing conversations.
 7. Review checkpoint/installation changes explicitly; never replay a potentially
    executed effect just to work around a migration error.
+
+## Reusable Skill servers
+
+Use the Stack-generated `kinetic` helper in a Skill's ordinary
+`Spectre.Server` callbacks. The Agent mounts `Spectre.Skill, server: ...`; each
+mount then owns its GenServer, state, workers, streams, pending intentions and
+checkpoint key. No package-specific Skill adapter or extra installation is needed.
+
+```text
+AgentServer ─────┐
+Research Skill ──┼──→ one automatic GAM boundary → same Domain / authority ledger
+Knowledge Skill ┘
+```
+
+The root creates this connection once and passes it to the children. Do not
+bootstrap another Domain, copy the ledger, implement a Skill Host or extend
+ingress manually. Mounting grants no authority. Governed effects must satisfy
+both root `gam:` operations and the mount's `governed:` references; scoped
+Kinetic references keep their complete mounted scope. Ledger/Lab inspect the
+calling runtime's checkpoint, not a copy of the shared GAM history.
+
+The shared kernel orders admission while workers can run concurrently. Every
+proposal retains its Skill invocation provenance. A confirmation belongs to the
+originating mount and exact presentation, so it cannot approve a different
+Skill's pending request. Timer expiry and closure enter the same lifecycle
+ledger without erasing Acts, uncertain Outcomes or Duties. No per-Skill GAM
+configuration is required.
+
+See the [core shared/local ownership table and confirmation example](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/docs/SKILLS.md),
+[automatic GAM contract](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/docs/MANAGED_GAM.md)
+and [LiveView showcase](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/docs/DEMO.md).

@@ -35,6 +35,19 @@ defmodule Spectre.Kinetic.Actions do
     end
   end
 
+  @doc "Validates the registered action and arguments before entering application code."
+  @spec validate(map(), keyword()) :: :ok | {:error, term()}
+  def validate(action, opts) when is_map(action) do
+    with {:ok, module} <- action_module(opts),
+         {:ok, entries} <- Extractor.extract_module(module),
+         {:ok, entry} <- resolve_entry(action, entries, module, opts),
+         {:ok, function} <- existing_function(entry["name"]),
+         :ok <- ensure_exported(module, function, entry["arity"]),
+         {:ok, _values} <- ordered_args(entry["args"], action_value(action, :args)) do
+      :ok
+    end
+  end
+
   @spec action_spec(map(), module(), keyword()) :: map()
   defp action_spec(entry, module, opts) do
     name = existing_name(entry["name"])

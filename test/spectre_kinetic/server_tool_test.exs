@@ -1,5 +1,6 @@
 defmodule Spectre.Kinetic.ServerToolTest do
-  use ExUnit.Case, async: true
+  # The shared Stack fixture publishes to one globally registered probe.
+  use ExUnit.Case, async: false
 
   alias Spectre.Kinetic.ServerTool
 
@@ -17,6 +18,31 @@ defmodule Spectre.Kinetic.ServerToolTest do
     assert tools.kinetic.operations.interpret.path == :cognitive
     assert Spectre.Stack.Tools.validate!(tools) == tools
     refute function_exported?(Spectre.Kinetic, :kinetic, 3)
+  end
+
+  test "managed execution resolves the registered catalog and freezes its schema" do
+    alias Spectre.Server.GAM.Effect
+
+    assert {:ok, effect} = Effect.resolve(Agent, {:kinetic, :ping})
+    assert effect.adapter == ServerTool
+    assert effect.operation == :ping
+    assert is_binary(effect.schema_hash)
+    assert String.starts_with?(effect.contract_ref, "spectre:effect:")
+
+    assert {:ok, scoped} = Effect.resolve(Agent, {{:skill, :tools}, :kinetic, :ping})
+    assert scoped.contract_ref == effect.contract_ref
+
+    context = %{agent: Agent, command_id: "act:ping", identity: %{subject: "alice"}}
+    assert {:ok, "pong reviewed"} = Effect.execute(effect, %{"target" => "reviewed"}, context)
+
+    assert {:error, :definitive_no_effect, :effect_contract_changed} =
+             Effect.execute(%{effect | contract_ref: "changed"}, %{"target" => "x"}, context)
+
+    assert {:error, :effect_schema_mismatch} =
+             Effect.resolve(Agent, {:kinetic, :ping}, %{schema_hash: "old"})
+
+    assert {:error, {:unregistered_effect, {:kinetic, :unknown}}} =
+             Effect.resolve(Agent, {:kinetic, :unknown})
   end
 
   test "only consolidated unplanned model output is accepted" do

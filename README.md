@@ -82,9 +82,9 @@ end
 `MyApp.TextModel` is your configured model adapter; create
 `priv/mail/prompts/send.eex` to request the declared Action Language. The example
 mail function is deliberately a simulation: replace its body in the host.
-The host must configure the GAM binding for `{:kinetic, :send_email}` before
-that proposal can execute. This snippet does not fabricate a universal email
-consent policy. See the [migration guide](docs/MIGRATING_TO_SPECTRE_0_4.md).
+Configure `gam: [operations: %{{:kinetic, :send_email} => [confirm: true]}]`
+at AgentServer startup. Spectre creates the Domain, frozen presentation and
+execution path; `handle_action/2` can add recipient or business checks. See the [migration guide](docs/MIGRATING_TO_SPECTRE_0_4.md).
 
 The helper accepts a **consolidated generated response**, with `planning: false`
 and its original `model_output`. It is called in `handle_result`, after the
@@ -113,10 +113,12 @@ The [Governed Act Model manifesto](https://spectre.guide/en/governed-act-model)
 distinguishes evidence, bounded authority, admitted Acts and unresolved duties.
 An installed tool or a model proposal is not user consent. Spectre's default
 cognitive path can classify, select, observe and prepare proposals without
-requesting end-user permission for every computation. The host declares the
-governed surface and its bindings; protected disclosure or resource use can
-also belong to that surface. GAM records the governed lifecycle and gates the
-host executor. Uncertain effects require reconciliation, not a blind retry.
+requesting end-user permission for every computation. The application configures
+the governed operations and their bindings; protected disclosure or resource use
+can also belong to that surface. AgentServer automatically coordinates GAM and
+registered effect adapters, including consent when required. Root and Skill
+Servers share one Domain; no application GAM Host is needed. Uncertain effects
+require reconciliation, not a blind retry.
 
 ## Direct APIs and further reading
 
@@ -125,3 +127,40 @@ host executor. Uncertain effects require reconciliation, not a blind retry.
 - [Historical Instance/Run integration](docs/LEGACY_0_3.md)
 - [Classifier training](TRAIN.md)
 - [Changes in this branch](CHANGELOG.md)
+
+## Use inside a reusable Skill
+
+The `kinetic` helper is generated in a Skill callback module with
+`use Spectre.Server, tools: MyApp.AI`, using the same installed Stack. A
+`Spectre.Skill` with `server:` has a separate GenServer, local assigns, workers,
+streams, pending intentions and checkpoint key.
+
+**It uses the root AgentServer's same automatic GAM integration, Domain and
+authority ledger.** Configure `gam:` once on the root. Mounting a Skill creates
+no new Domain or grant and needs no additional Host or consent ingress. Shared
+Stack resources stay in their existing supervised runtime.
+
+Agent and Skill workers can run concurrently; the shared kernel orders admission.
+A governed effect must be enabled in root `operations` and permitted by the
+mount's `governed:` references. Each Skill proposal records its mount and
+invocation provenance. Consent identifies the originating Skill and exact
+presentation: approving an email cannot approve another Skill's memory write.
+Timer closure is recorded in the same Domain and does not erase a Duty.
+Ordinary cognitive operations retain their configured provider boundary.
+
+See the [core Skill ownership and consent guide](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/docs/SKILLS.md),
+[automatic GAM responsibilities](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/docs/MANAGED_GAM.md)
+and [two-Skill LiveView showcase](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/docs/DEMO.md).
+
+## Managed GAM execution registration
+
+The optional `c:Spectre.Stack.Installable.effects/1` callback registers immutable
+execution adapters for Spectre 0.4 managed GAM. Kinetic registers its configured action catalog. The helper still prepares proposals from completed model output; it never executes AL while tokens stream.
+
+The effect registration is included in the compiled installation digest and is
+checked again before execution. It grants no authority: the application enables
+operations and the GAM kernel admits each concrete consequence before the adapter
+runs. AgentServer owns GAM automatically in every environment. Native package
+APIs remain available outside the AgentServer loop; their caller owns that boundary.
+Adapters implement `execute_effect/3` and distinguish successful observations,
+definitive no-effect and uncertain outcomes; uncertain effects are not retried.

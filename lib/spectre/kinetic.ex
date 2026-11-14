@@ -67,6 +67,43 @@ defmodule Spectre.Kinetic do
     }
   end
 
+  @doc "Registers the closed action catalog for managed GAM execution; grants no authority."
+  @spec effects(map()) :: map()
+  def effects(config) do
+    config
+    |> Map.get(:options, [])
+    |> Spectre.Kinetic.Extension.action_providers()
+    |> Enum.reduce(%{}, fn {provider, _module, opts}, effects ->
+      actions_module = Keyword.fetch!(opts, :module)
+
+      case Code.ensure_compiled(actions_module) do
+        {:module, _} -> :ok
+        {:error, reason} -> raise ArgumentError, "Kinetic actions unavailable: #{inspect(reason)}"
+      end
+
+      annotations = actions_module.__spectre_tools__()
+      Map.merge(effects, Map.new(annotations, &effect_descriptor(&1, provider, opts)))
+    end)
+  end
+
+  @spec effect_descriptor(map(), atom(), keyword()) :: {term(), map()}
+  defp effect_descriptor(entry, provider, opts) do
+    {{provider, entry.function},
+     %{
+       contract: 1,
+       adapter: Spectre.Kinetic.ServerTool,
+       operation: entry.function,
+       side_effect: :non_idempotent,
+       material: :arguments,
+       partition: [],
+       schema_hash: nil,
+       config: %{
+         options: Keyword.put(opts, :provider_id, provider),
+         annotation: entry
+       }
+     }}
+  end
+
   @type stack_config :: %{
           required(:options) => keyword(),
           required(:classifiers) => [classifier_config()]
