@@ -1,6 +1,11 @@
 defmodule SpectreKinetic do
   @moduledoc """
   Elixir-first planning toolkit for Action Language tool selection.
+
+  This is the immediate standalone API. For an AgentServer, install
+  `Spectre.Kinetic` in the Stack and use the generated `kinetic/3` helper after
+  model generation. Its asynchronous result contains proposals; host GAM
+  admission remains separate from interpretation.
   """
 
   alias SpectreKinetic.Action

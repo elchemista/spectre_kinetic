@@ -15,7 +15,7 @@ defmodule SpectreKinetic.DependencyBoundaryTest do
           opts
 
         _unset ->
-          assert {:spectre, "~> 0.3.3", opts} = dependency
+          assert {:spectre, "~> 0.4.0", opts} = dependency
           refute Keyword.has_key?(opts, :path)
           opts
       end
@@ -23,6 +23,8 @@ defmodule SpectreKinetic.DependencyBoundaryTest do
     assert opts[:only] == :test
     refute Keyword.has_key?(opts, :github)
 
-    refute Keyword.has_key?(config, :package)
+    assert config[:package][:licenses] == ["Apache-2.0"]
+    assert "docs" in config[:package][:files]
+    refute "test" in config[:package][:files]
   end
 end
