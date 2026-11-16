@@ -60,8 +60,8 @@ not construct a Host or grant authority. Only the admitted executor calls the
 action implementation. A direct action call inside `handle_result` would
 bypass that declared boundary.
 
-The [executable all-tools workflow](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/integration/stack_tools/support/workflow.ex)
-and [automatic configuration fixture](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/integration/stack_tools/support/configuration.ex) show the
+The [executable all-tools workflow](https://github.com/elchemista/spectre_ecosystem/blob/main/integration/stack_tools/support/workflow.ex)
+and [automatic configuration fixture](https://github.com/elchemista/spectre_ecosystem/blob/main/integration/stack_tools/support/configuration.ex) show the
 full model → kinetic → propose → GAM → executor → result sequence using fake
 external transports. They test the same automatic GAM path used by applications;
 real transport credentials and business authorization remain application setup.
