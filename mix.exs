@@ -9,6 +9,7 @@ defmodule SpectreKinetic.MixProject do
       app: :spectre_kinetic,
       name: "Spectre Kinetic",
       version: @version,
+      package: package(),
       elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -16,6 +17,7 @@ defmodule SpectreKinetic.MixProject do
       dialyzer: [plt_add_apps: [:mix]],
       description: description(),
       docs: [
+        assets: %{"docs/assets" => "docs/assets"},
         main: "readme",
         extras: [
           "README.md",
@@ -73,4 +75,16 @@ defmodule SpectreKinetic.MixProject do
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
+
+  defp package do
+    [
+      licenses: ["Apache-2.0"],
+      links: %{
+        "GitHub" => @source_url,
+        "Documentation" => "#{@source_url}/blob/feature/stack-tools-0.4/README.md",
+        "Changelog" => "#{@source_url}/blob/feature/stack-tools-0.4/CHANGELOG.md"
+      },
+      files: ~w(lib priv docs mix.exs .formatter.exs README.md CHANGELOG.md TRAIN.md LICENSE)
+    ]
+  end
 end

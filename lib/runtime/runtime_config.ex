@@ -463,7 +463,7 @@ defmodule SpectreKinetic.RuntimeConfig do
         []
 
       {:ok, ids} when is_list(ids) ->
-        case validate_candidate_action_ids(ids, MapSet.new(), 0) do
+        case validate_candidate_action_ids(ids, %{}, 0) do
           :ok -> []
           reason -> [%{field: :candidate_action_ids, reason: reason}]
         end
@@ -483,11 +483,11 @@ defmodule SpectreKinetic.RuntimeConfig do
       not String.valid?(id) or String.trim(id) == "" ->
         :must_contain_non_blank_binaries
 
-      MapSet.member?(seen, id) ->
+      Map.has_key?(seen, id) ->
         :must_contain_unique_values
 
       true ->
-        validate_candidate_action_ids(rest, MapSet.put(seen, id), count + 1)
+        validate_candidate_action_ids(rest, Map.put(seen, id, true), count + 1)
     end
   end
 

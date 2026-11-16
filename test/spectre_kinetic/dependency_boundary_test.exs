@@ -23,6 +23,8 @@ defmodule SpectreKinetic.DependencyBoundaryTest do
     assert opts[:only] == :test
     refute Keyword.has_key?(opts, :github)
 
-    refute Keyword.has_key?(config, :package)
+    assert config[:package][:licenses] == ["Apache-2.0"]
+    assert "docs" in config[:package][:files]
+    refute "test" in config[:package][:files]
   end
 end

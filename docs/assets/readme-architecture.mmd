@@ -1,0 +1,5 @@
+flowchart TB
+  M["Consolidated model output"] -->|"kinetic"| P["Validated proposals"]
+  P -->|"propose"| G["GAM admission"]
+  G -->|"admitted Act"| A["Registered action"]
+  A -->|"observed outcome"| S["AgentServer"]
