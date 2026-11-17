@@ -30,7 +30,7 @@ defmodule SpectreKinetic.MixProject do
           "TRAIN.md",
           "LICENSE"
         ],
-        source_ref: "feature/stack-tools-0.4"
+        source_ref: @version
       ],
       source_url: @source_url,
       homepage_url: @source_url
@@ -81,8 +81,8 @@ defmodule SpectreKinetic.MixProject do
       licenses: ["Apache-2.0"],
       links: %{
         "GitHub" => @source_url,
-        "Documentation" => "#{@source_url}/blob/feature/stack-tools-0.4/README.md",
-        "Changelog" => "#{@source_url}/blob/feature/stack-tools-0.4/CHANGELOG.md"
+        "Documentation" => "https://hexdocs.pm/spectre_kinetic/#{@version}",
+        "Changelog" => "#{@source_url}/blob/#{@version}/CHANGELOG.md"
       },
       files: ~w(lib priv docs mix.exs .formatter.exs README.md CHANGELOG.md TRAIN.md LICENSE)
     ]

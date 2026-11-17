@@ -494,7 +494,7 @@ The real workflow is:
 4. train classifiers from those source rows
 5. load the classifier artifact directories at runtime
 
-See [priv/dataset/README.md](https://github.com/elchemista/spectre_kinetic/blob/feature/stack-tools-0.4/priv/dataset/README.md) for exact dataset row
+See [priv/dataset/README.md](https://github.com/elchemista/spectre_kinetic/blob/0.1.0/priv/dataset/README.md) for exact dataset row
 formats and the full command sequence.
 
 ## Server Adapter

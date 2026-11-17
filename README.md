@@ -14,18 +14,15 @@ planner and the generated `kinetic/3` helper.
 Planning prepares data. Only the admitted execution path calls the registered
 action implementation; streaming tokens cannot execute it.
 
-## Installation on this development branch
+## Installation
 
-Use these matching branches while core 0.4 is unreleased. Pin reviewed commit
-refs for deployment; satellite package versions are independent of core.
+Add the packages to your application:
 
 ```elixir
 defp deps do
   [
-    {:spectre, github: "elchemista/spectre",
-     branch: "feature/agent-server-gam", override: true},
-    {:spectre_kinetic, github: "elchemista/spectre_kinetic",
-     branch: "feature/stack-tools-0.4"}
+    {:spectre, "~> 0.4.0"},
+    {:spectre_kinetic, "~> 0.1.0"}
   ]
 end
 ```
@@ -133,12 +130,12 @@ effects (`:read`, `:write`, `:destructive`). Neither grants authority.
 
 ## Runtime and examples
 
-The generated `kinetic` helper also works in [Skill Server callbacks](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/docs/SKILLS.md).
+The generated `kinetic` helper also works in [Skill Server callbacks](https://github.com/elchemista/spectre/blob/0.4.0/docs/SKILLS.md).
 Skills share the root's GAM Domain; enable governed operations on the root and
 allow them in the mount's `governed:` references. The
-[core tool guide](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/docs/STACK_TOOLS.md) covers scheduling and recovery;
-[Managed GAM](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/docs/MANAGED_GAM.md) covers consent and registered execution.
+[core tool guide](https://github.com/elchemista/spectre/blob/0.4.0/docs/STACK_TOOLS.md) covers scheduling and recovery;
+[Managed GAM](https://github.com/elchemista/spectre/blob/0.4.0/docs/MANAGED_GAM.md) covers consent and registered execution.
 
 See the [LiveView demo](https://github.com/elchemista/demo_spectre) for an application,
 the [Spectre guides](https://spectre.guide) for articles, and the
-[release audit](https://github.com/elchemista/spectre/blob/feature/agent-server-gam/docs/RELEASE_0_4.md) for verified revisions.
+[release audit](https://github.com/elchemista/spectre/blob/0.4.0/docs/RELEASE_0_4.md) for verified revisions.
