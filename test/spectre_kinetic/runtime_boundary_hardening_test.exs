@@ -32,9 +32,12 @@ defmodule SpectreKinetic.RuntimeBoundaryHardeningTest.ControlledBackend do
   @moduledoc false
 
   def new(opts) do
+    opts = Keyword.get(opts, :registry_backend_opts, opts)
     mode = Keyword.get(opts, :mode, :ok)
     result(mode, :new, {:ok, %{mode: mode, test_pid: Keyword.get(opts, :test_pid)}})
   end
+
+  def new_staging(_active, opts), do: new(opts)
 
   def load_json(state, _path), do: result(state.mode, :load_json, {:ok, state})
   def load_compiled(state, _path), do: result(state.mode, :load_compiled, {:ok, state})
@@ -66,6 +69,17 @@ defmodule SpectreKinetic.RuntimeBoundaryHardeningTest.ControlledBackend do
   defp result(_mode, _operation, default), do: default
 end
 
+defmodule SpectreKinetic.RuntimeBoundaryHardeningTest.UnavailableReranker do
+  @moduledoc false
+
+  def load(opts) do
+    send(self(), {:reranker_load_options, opts})
+    {:error, :model_unavailable}
+  end
+
+  def score_batch(_runtime, _pairs), do: {:error, :model_unavailable}
+end
+
 defmodule SpectreKinetic.RuntimeBoundaryHardeningTest do
   use ExUnit.Case, async: false
 
@@ -76,9 +90,11 @@ defmodule SpectreKinetic.RuntimeBoundaryHardeningTest do
   alias SpectreKinetic.Planner.RegistryStore
   alias SpectreKinetic.Planner.Runtime
   alias SpectreKinetic.Planner.Runtime.Embeddings
+  alias SpectreKinetic.Planner.Runtime.Loader
   alias SpectreKinetic.RuntimeBoundaryHardeningTest.ControlledBackend
   alias SpectreKinetic.RuntimeBoundaryHardeningTest.RejectEmbeddingBackend
   alias SpectreKinetic.RuntimeBoundaryHardeningTest.ResponseEncoder
+  alias SpectreKinetic.RuntimeBoundaryHardeningTest.UnavailableReranker
 
   test "ONNX helpers normalize tokenizer inputs and close model-load failures" do
     trap_exits()
@@ -514,6 +530,87 @@ defmodule SpectreKinetic.RuntimeBoundaryHardeningTest do
              runtime(%{mode: {:delete_action, :raise}}, nil, ControlledBackend),
              "Example.run/0"
            ) == {:error, {:exception, "controlled failure"}}
+  end
+
+  test "failed runtime construction closes an allocated backend before returning" do
+    assert {:error, {:invalid_registry_return, :new, :invalid}} =
+             Runtime.load(
+               registry_module: ControlledBackend,
+               allow_empty_registry: true,
+               registry_backend_opts: [mode: {:new, :invalid}, test_pid: self()]
+             )
+
+    refute_received {:backend_closed, _}
+
+    for {mode, expected} <- [
+          {{:action_count, :error}, :controlled_error},
+          {{:action_count, :invalid}, {:invalid_registry_return, :action_count, :invalid}},
+          {{:action_count, :raise}, {:runtime_component_failed, "controlled failure"}},
+          {{:action_count, :throw}, {:runtime_component_failed, {:throw, :controlled_failure}}}
+        ] do
+      assert {:error, ^expected} =
+               Runtime.load(
+                 registry_module: ControlledBackend,
+                 allow_empty_registry: true,
+                 registry_backend_opts: [mode: mode, test_pid: self()]
+               )
+
+      assert_receive {:backend_closed, ^mode}
+      refute_received {:backend_closed, _}
+    end
+  end
+
+  test "failed staged reloads release their new backend without altering the active one" do
+    assert {:error, {:invalid_registry_return, :new_staging, :invalid}} =
+             Loader.stage_registry(ControlledBackend, :active, "replacement.json",
+               registry_backend_opts: [mode: {:new, :invalid}, test_pid: self()]
+             )
+
+    refute_received {:backend_closed, _}
+
+    for {mode, expected} <- [
+          {{:load_json, :error}, :controlled_error},
+          {{:load_json, :invalid}, {:invalid_registry_return, :load, :invalid}},
+          {{:load_json, :throw}, {:runtime_component_failed, {:throw, :controlled_failure}}},
+          {{:action_count, :error}, :controlled_error},
+          {{:action_count, :invalid}, {:invalid_registry_return, :action_count, :invalid}}
+        ] do
+      active = %{mode: :active, test_pid: self()}
+
+      assert {:error, ^expected} =
+               Loader.stage_registry(ControlledBackend, active, "replacement.json",
+                 allow_empty_registry: true,
+                 registry_backend_opts: [mode: mode, test_pid: self()]
+               )
+
+      assert_receive {:backend_closed, ^mode}
+      refute_received {:backend_closed, :active}
+    end
+  end
+
+  test "reranker load failure preserves its options and releases the owned registry" do
+    model_dir = tmp_dir("unavailable-reranker")
+
+    assert {:error, :model_unavailable} =
+             Runtime.load(
+               registry_module: ControlledBackend,
+               registry_backend_opts: [test_pid: self()],
+               allow_empty_registry: true,
+               tool_selection_fallback: :reranker,
+               fallback_runtime_module: UnavailableReranker,
+               fallback_model_dir: model_dir,
+               reranker_max_length: 128,
+               reranker_score_index: 1,
+               reranker_score_transform: :softmax
+             )
+
+    assert_receive {:reranker_load_options, opts}
+    assert opts[:fallback_model_dir] == model_dir
+    assert opts[:max_length] == 128
+    assert opts[:score_index] == 1
+    assert opts[:score_transform] == :softmax
+    assert_receive {:backend_closed, :ok}
+    refute_received {:backend_closed, _}
   end
 
   defp runtime(registry, encoder, registry_module \\ ETS) do

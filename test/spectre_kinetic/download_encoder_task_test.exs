@@ -267,7 +267,8 @@ defmodule SpectreKinetic.DownloadEncoderTaskTest do
           {"model.onnx", "version https://git-lfs.github.com/spec/v1\noid sha256:abc\n",
            :git_lfs_pointer},
           {"model.onnx", "<!DOCTYPE html><title>not a model</title>", :html_response},
-          {"tokenizer.json", "not-json", :invalid_json}
+          {"tokenizer.json", "not-json", :invalid_json},
+          {"config.json", "[]", :invalid_json}
         ] do
       out_dir = Path.join(tmp_dir, "malformed-#{bad_file}")
 
@@ -288,7 +289,7 @@ defmodule SpectreKinetic.DownloadEncoderTaskTest do
           assert {:error, {:invalid_model_artifact, _path, :html_response}} = error
 
         :invalid_json ->
-          assert {:error, {:invalid_json_artifact, "tokenizer.json", _path, _reason}} = error
+          assert {:error, {:invalid_json_artifact, ^bad_file, _path, _reason}} = error
       end
 
       for file <- Map.keys(@fixtures) ++ ["encoder-manifest.json"] do
@@ -464,6 +465,79 @@ defmodule SpectreKinetic.DownloadEncoderTaskTest do
     send(first_pid, :continue_download)
     assert {:ok, _result} = Task.await(first_task, 5_000)
     refute File.exists?(lock_path(out_dir))
+  end
+
+  test "invalid downloader replies never install a generation or retain its lock", %{
+    tmp_dir: tmp_dir
+  } do
+    for {name, downloader, reason} <- [
+          {"unexpected", fn _, _ -> :unexpected end, :invalid_downloader_result},
+          {"throw", fn _, _ -> throw(:disconnected) end, :download_failed},
+          {"raise", fn _, _ -> raise "transport failed" end, :download_failed},
+          {"missing", fn _, _ -> {:ok, :accepted} end, :missing_download},
+          {"empty", fn _, path -> File.write(path, "") end, :empty_download},
+          {"directory", fn _, path -> File.mkdir(path) end, :invalid_download}
+        ] do
+      out_dir = Path.join(tmp_dir, name)
+      opts = DownloadEncoder.options!(["--out", out_dir]) |> Keyword.put(:downloader, downloader)
+
+      assert {:error, error} = DownloadEncoder.download(opts)
+      assert elem(error, 0) == reason
+      assert File.ls!(out_dir) == []
+    end
+  end
+
+  test "untrusted manifest identity and checksum records fail before transport", %{
+    tmp_dir: tmp_dir
+  } do
+    manifest =
+      trusted_manifest(Map.new(@fixtures, fn {file, content} -> {file, sha256(content)} end))
+
+    for {name, invalid, reason} <- [
+          {"schema", Map.put(manifest, "schema_version", 2), {:unsupported_schema_version, 2}},
+          {"revision", Map.put(manifest, "revision", @custom_revision),
+           {:revision_mismatch, @default_revision, @custom_revision}},
+          {"identity", Map.delete(manifest, "model"), :missing_manifest_identity},
+          {"files", Map.put(manifest, "files", []), :missing_manifest_files},
+          {"missing", put_in(manifest, ["files"], %{}), {:missing_checksum, "model.onnx"}},
+          {"checksum", put_in(manifest, ["files", "model.onnx"], "invalid"),
+           {:invalid_checksum, "model.onnx"}},
+          {"entry", put_in(manifest, ["files", "model.onnx"], %{}),
+           {:invalid_checksum_entry, "model.onnx"}}
+        ] do
+      out_dir = Path.join(tmp_dir, name)
+      path = Path.join(tmp_dir, name <> ".json")
+      File.write!(path, Jason.encode!(invalid))
+
+      opts =
+        DownloadEncoder.options!(["--out", out_dir, "--checksum-manifest", path])
+        |> Keyword.put(:downloader, fn _, _ -> flunk("invalid manifest reached transport") end)
+
+      assert {:error, {:checksum_manifest_invalid, ^path, ^reason}} =
+               DownloadEncoder.download(opts)
+
+      assert File.ls!(out_dir) == []
+    end
+  end
+
+  test "a failed fresh installation removes files already committed in that attempt", %{
+    tmp_dir: tmp_dir
+  } do
+    out_dir = Path.join(tmp_dir, "fresh-rollback")
+
+    opts =
+      DownloadEncoder.options!(["--out", out_dir])
+      |> Keyword.put(:downloader, &File.write(&2, fixture_content(&1)))
+      |> Keyword.put(:renamer, fn source, destination ->
+        if Path.basename(destination) == "encoder-manifest.json",
+          do: throw(:storage_disconnected),
+          else: File.rename(source, destination)
+      end)
+
+    assert {:error, {:atomic_rename_failed, _path, {:throw, :storage_disconnected}}} =
+             DownloadEncoder.download(opts)
+
+    assert File.ls!(out_dir) == []
   end
 
   test "rejects a mismatched model before downloading", %{tmp_dir: tmp_dir} do

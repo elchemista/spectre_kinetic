@@ -63,6 +63,47 @@ defmodule SpectreKinetic.ClassifierAxonTest do
              AxonRuntime.load(PlanConfidence, model_dir: model_dir)
   end
 
+  test "the loaded slot classifier keeps low confidence and incompatible models explicit" do
+    metadata = %{
+      "classifier" => "slot_confidence",
+      "feature_dim" => SlotConfidence.feature_dim(),
+      "hidden_dim" => 4
+    }
+
+    model_dir = write_artifacts!(SlotConfidence, metadata)
+    on_exit(fn -> File.rm_rf!(model_dir) end)
+    params_path = Path.join(model_dir, "params.etf")
+    params = params_path |> File.read!() |> :erlang.binary_to_term()
+
+    data =
+      params.data
+      |> put_in(["dense_1", "kernel"], Nx.broadcast(0.0, {4, 1}))
+      |> put_in(["dense_1", "bias"], Nx.broadcast(0.0, {1}))
+
+    File.write!(params_path, :erlang.term_to_binary(%{params | data: data}))
+    state = SlotConfidence.init(model_dir: model_dir, min_slot_confidence: 1.0)
+
+    assert {:ok, classified} = SlotConfidence.call(context(), state)
+    result = classified.classifier_results.slot_confidence
+    assert result.slots["path"].required
+    assert result.slots["path"].source == "path"
+    assert result.required_min_confidence == 0.5
+    assert result.decision == :needs_clarification
+    assert classified.status == :needs_clarification
+    assert "one or more required mapped slots have low confidence" in classified.warnings
+
+    incompatible = Map.update!(metadata, "feature_dim", &(&1 + 1))
+    incompatible_dir = write_artifacts!(SlotConfidence, incompatible)
+    on_exit(fn -> File.rm_rf!(incompatible_dir) end)
+    incompatible_state = SlotConfidence.init(model_dir: incompatible_dir)
+    dimensions = SlotConfidence.feature_dim()
+
+    assert {:error, {:feature_dim_mismatch, expected, ^dimensions}} =
+             SlotConfidence.call(context(), incompatible_state)
+
+    assert expected == dimensions + 1
+  end
+
   test "axon runtime safely rejects unknown atoms and oversized parameters" do
     model_dir =
       write_artifacts!(PlanConfidence, %{

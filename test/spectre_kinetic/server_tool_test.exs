@@ -12,6 +12,18 @@ defmodule Spectre.Kinetic.ServerToolTest do
     use Spectre.Agent
   end
 
+  defmodule ResultActions do
+    use SpectreKinetic
+
+    @al ~s(REPORT OUTCOME RESULT="ok")
+    @doc "Returns the host's observed execution result."
+    @spec report(term()) :: term()
+    def report(result) do
+      send(self(), {:action_called, result})
+      result
+    end
+  end
+
   test "registration is cognitive and does not export a fake kinetic function" do
     tools = Spectre.Kinetic.tools(%{})
     assert tools.kinetic.adapter == ServerTool
@@ -45,6 +57,54 @@ defmodule Spectre.Kinetic.ServerToolTest do
              Effect.resolve(Agent, {:kinetic, :unknown})
   end
 
+  test "effect registration preserves the closed catalog and rejects unavailable actions" do
+    assert %{{:kinetic, :report} => effect} =
+             Spectre.Kinetic.effects(%{options: [actions: ResultActions]})
+
+    assert effect.adapter == ServerTool
+    assert effect.side_effect == :non_idempotent
+    assert effect.material == :arguments
+    assert {:ok, hash} = ServerTool.effect_schema(:report, %{config: effect.config})
+    assert is_binary(hash)
+
+    assert {:error, :registered_action_unavailable} =
+             ServerTool.effect_schema(:missing, %{config: effect.config})
+
+    assert {:error, {:invalid_kinetic_actions_module, nil}} =
+             ServerTool.effect_schema(:report, %{config: %{options: [module: nil]}})
+
+    assert_raise ArgumentError, ~r/Kinetic actions unavailable/, fn ->
+      Spectre.Kinetic.effects(%{options: [actions: SpectreKinetic.UnavailableResultActions]})
+    end
+  end
+
+  test "admitted execution preserves uncertainty and never invokes an invalid request" do
+    effect = Spectre.Kinetic.effects(%{options: [actions: ResultActions]})[{:kinetic, :report}]
+    {:ok, hash} = ServerTool.effect_schema(:report, %{config: effect.config})
+    context = %{effect_config: effect.config, effect_schema_hash: hash}
+
+    for {reply, expected} <- [
+          {:ok, {:ok, %{completed: true}}},
+          {{:error, :failed, :rejected}, {:error, :failed, :rejected}},
+          {{:error, :definitive_no_effect, :cancelled},
+           {:error, :definitive_no_effect, :cancelled}},
+          {{:error, :ambiguous, :timeout}, {:error, :ambiguous, :timeout}},
+          {{:error, :offline}, {:error, :ambiguous, :offline}},
+          {:unexpected_reply, {:error, :ambiguous, :invalid_action_result}}
+        ] do
+      assert ServerTool.execute_effect(:report, %{"result" => reply}, context) == expected
+      assert_receive {:action_called, ^reply}
+    end
+
+    assert {:error, :definitive_no_effect, {:missing_action_argument, "result"}} =
+             ServerTool.execute_effect(:report, %{}, context)
+
+    refute_received {:action_called, _}
+
+    assert {:ok, {:error, :planner_unavailable}} =
+             ServerTool.project(:interpret, {:error, :planner_unavailable})
+  end
+
   test "only consolidated unplanned model output is accepted" do
     response = %{planning: false, model_output: "<al>PING</al>", text: "Public text"}
 
@@ -61,6 +121,9 @@ defmodule Spectre.Kinetic.ServerToolTest do
 
     assert {:error, :kinetic_planner_required} =
              ServerTool.prepare(:interpret, response, %{agent: OtherAgent})
+
+    assert {:error, :unknown_kinetic_operation} =
+             ServerTool.prepare(:execute, response, %{agent: Agent})
   end
 
   test "the actual planner prepares a complete proposal without executing its action" do

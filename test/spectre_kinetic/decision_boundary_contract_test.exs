@@ -228,7 +228,11 @@ defmodule SpectreKinetic.DecisionBoundaryContractTest do
               "required" => ["count", "items"]
             },
             metadata: %{
-              examples: ["SUBMIT OPERATION COUNT=2 ITEMS=[a,b]"]
+              examples: [
+                "SUBMIT OPERATION COUNT=2 ITEMS=[a,b]",
+                " submit operation count=2 items=[a,b] "
+              ],
+              aliases: [count: [:quantity, "amount"], items: :entries]
             }
           },
           %{
@@ -238,7 +242,10 @@ defmodule SpectreKinetic.DecisionBoundaryContractTest do
               :operation_id,
               %{"name" => "verbose", "type" => "boolean()", "required" => false}
             ],
-            "metadata" => %{"examples" => ["INSPECT OPERATION ID=op-1"]}
+            "metadata" => %{
+              "examples" => ["INSPECT OPERATION ID=op-1"],
+              "aliases" => %{"operation_id" => [:id]}
+            }
           }
         ]
       )
@@ -265,6 +272,14 @@ defmodule SpectreKinetic.DecisionBoundaryContractTest do
 
     assert inspect["arity"] == 2
     assert Enum.map(inspect["args"], & &1["name"]) == ["operation_id", "verbose"]
+
+    assert Enum.find(submit["args"], &(&1["name"] == "count"))["aliases"] == [
+             "quantity",
+             "amount"
+           ]
+
+    assert Enum.find(submit["args"], &(&1["name"] == "items"))["aliases"] == ["entries"]
+    assert hd(inspect["args"])["aliases"] == ["id"]
 
     assert {:ok, target} = Catalog.resolve(catalog, submit["id"])
     assert target.via == :operations
@@ -350,6 +365,7 @@ defmodule SpectreKinetic.DecisionBoundaryContractTest do
              {:error, {:invalid_action_providers, :invalid}}
 
     assert Catalog.build([:invalid]) == {:error, {:invalid_catalog_options, [:invalid]}}
+    assert Catalog.build(nil) == {:error, {:invalid_catalog_options, nil}}
 
     assert Catalog.build(action_providers: [%{}]) ==
              {:error, {:invalid_action_provider_mount, %{}}}
