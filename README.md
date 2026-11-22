@@ -43,34 +43,60 @@ For sibling checkouts, replace these with `path: "../spectre"` and
 `path: "../spectre_kinetic"` dependencies. Package integration tests use
 `SPECTRE_PATH=../spectre mix test`.
 
-### Stack, Agent and Server
+### Register actions in the Stack
 
-![Spectre Kinetic integration architecture](docs/assets/readme-architecture.svg)
-
-[Diagram source](docs/assets/readme-architecture.mmd) · [Migration guide](docs/MIGRATING_TO_SPECTRE_0_4.md).
-
-The Stack installs capabilities, the Agent declares routes and the Server owns
-the application callbacks. `Spectre.Kinetic.integration/1` registers the
-planner service and the scoped cognitive tool `{:kinetic, :interpret}`.
-`use Spectre.Server, tools:` generates its `kinetic/3` helper. Both routes
-use the same tool binding.
+Pass your action module once with `actions:`. Kinetic registers every public
+function in that module annotated with `@al`. To add another action, add its
+annotation and function to the module. The Stack declaration stays the same.
 
 ```elixir
 defmodule MyApp.MailActions do
   use SpectreKinetic
   @al ~s(SEND EMAIL TO="dev@example.com" BODY="Hello")
-  @doc "Send an email through the host mail transport."
+  @doc "Simulates sending an email for this example."
   @spec send_email(String.t(), String.t()) :: {:ok, map()}
   def send_email(to, body), do: {:ok, %{to: to, body: body, simulated: true}}
 end
 
 defmodule MyApp.MailAI do
   use Spectre.Stack
-  install Spectre.Kinetic,
-    mode: :closed_moves, actions: MyApp.MailActions,
-    modes: [send_email: :write]
+  install Spectre.Kinetic, actions: MyApp.MailActions
 end
+```
 
+`@al` gives Kinetic an example of the Action Language that invokes the next
+function. Here `SEND EMAIL` selects `send_email/2` and `TO` and `BODY` supply
+its arguments. The registration also creates the GAM operation
+`{:kinetic, :send_email}` using the default provider ID `:kinetic` and the
+function name `:send_email`.
+
+### Do I need `mode:` or `modes:`?
+
+Both are optional. They set the action's effect classification in the catalog.
+Use `:read` for reads, `:write` for changes such as sending an email and
+`:destructive` for destructive changes such as deleting a record.
+
+| Configuration | Effect |
+| --- | --- |
+| `actions: MyApp.MailActions` | Registers all annotated actions with an unspecified mode (`nil`). |
+| `mode: :write` | Sets the default for every action in the module. |
+| `modes: [send_email: :write]` | Sets the mode for the named function. Entries override the default. |
+
+For example, with `mode: :write, modes: [lookup_contact: :read]`, a
+`lookup_contact/1` action would be classified as a read and the rest as writes.
+`mode: :closed_moves` is accepted for compatibility with older examples.
+In 0.2.0 it has the same effect as leaving `mode:` unset. GAM permissions and
+confirmation rules are set separately by the host.
+
+### Generate, prepare and propose
+
+![Model output goes to Kinetic. The Server submits the prepared proposal to GAM to authorize execution.](docs/assets/readme-architecture.svg)
+
+The Agent routes the input to the Server. The Server generates Action Language
+and passes it to Kinetic through the `kinetic/3` helper provided by
+`tools: MyApp.MailAI`.
+
+```elixir
 defmodule MyApp.MailServer do
   use Spectre.Server, tools: MyApp.MailAI, prompt_root: "priv/mail/prompts"
 
@@ -80,13 +106,16 @@ defmodule MyApp.MailServer do
   def handle_result(:draft, {:generated, response}, ctx),
     do: kinetic(ctx, response, on_result: :prepared)
 
+  def handle_result(:prepared, {:prepared, %{actions: [], text: text}}, ctx),
+    do: respond(ctx, text)
+
   def handle_result(:prepared, {:prepared, %{actions: [proposal]}}, ctx) do
     propose(ctx, proposal.operation, proposal.args,
       proposal_metadata: proposal.metadata, on_result: :sent)
   end
 
   def handle_result(:sent, {:governed, %{outcome: %{status: :succeeded}}}, ctx),
-    do: respond(ctx, "The host confirmed the email operation.")
+    do: respond(ctx, "The simulated email action completed.")
 
   def handle_result(tag, result, ctx), do: super(tag, result, ctx)
 end
@@ -100,26 +129,43 @@ defmodule MyApp.MailAgent do
 end
 ```
 
-`MyApp.TextModel` is your configured model adapter; create
-`priv/mail/prompts/send.eex` to request the declared Action Language. The example
-mail function is deliberately a simulation: replace its body in the host.
-Configure `gam: [operations: %{{:kinetic, :send_email} => [confirm: true]}]`
-at AgentServer startup:
+`MyApp.TextModel` is your model adapter. `prompt_root:` points to the directory
+where `generate(ctx, :send, ...)` finds `priv/mail/prompts/send.text.heex`.
+Create that file with this prompt.
+
+```text
+When the request includes a recipient address and a message body, return
+one Action Language expression using <al>SEND EMAIL TO="..." BODY="..."</al>.
+If either field is missing, ask for it in plain text.
+
+<%= Spectre.Prompt.data(@input.text) %>
+```
+
+- `{:mail, :send}` pairs the Agent's flow and route with the Server callback.
+- `planning: false` leaves preparation to Kinetic. `on_result:` selects the
+  next `handle_result/3` clause by tag. Here `:draft` receives the model reply
+  and `:prepared` receives Kinetic's action list.
+- `propose/4` submits the prepared operation and arguments to GAM. It carries
+  the original `proposal_metadata:` so Spectre can check the binding.
+  `:sent` handles the observed outcome after execution.
+
+At Server startup, enable that operation and require human confirmation.
 
 ```elixir
 {:ok, server} = Spectre.Server.start_link(
   agent: MyApp.MailAgent, consumer: self(),
   gam: [operations: %{{:kinetic, :send_email} => [confirm: true]}])
-{:ok, interaction} = Spectre.Server.input(server, "send email to the team")
+{:ok, _interaction} =
+  Spectre.Server.input(server, ~s(send email to dev@example.com with body "Hello"))
 ```
 
-Spectre creates the Domain, frozen presentation and registered execution path.
-`handle_action/2` can add recipient or business checks. See the [migration guide](docs/MIGRATING_TO_SPECTRE_0_4.md).
+The `consumer:` receives the presentation and the result. It shows the
+recipient and body, then submits the user's decision. After approval, the
+registered action returns a simulated receipt. Use the same policy mechanism
+for your application's mail executor. [Managed GAM](https://github.com/elchemista/spectre/blob/0.4.1/docs/MANAGED_GAM.md).
 
-The helper accepts a **consolidated generated response**, with `planning: false`
-and its original `model_output`. It is called in `handle_result`, after the
-model has generated AL. A response already planned with `planning: true` is
-rejected. To call the same binding by scope, use
+Pass the full generated response to Kinetic. Its `model_output` holds the
+Action Language. To call the same binding by scope, use
 `call_tool(ctx, {:kinetic, :interpret}, response, on_result: :prepared)`.
 If the Stack installation uses `as:`, use that installation ID in the tuple.
 
@@ -134,15 +180,14 @@ the single-proposal example intentionally falls back to the Server default.
 The callback returns a context containing commands. Spectre checkpoints the
 outbox before workers run, projects portable results and dispatches the next
 callback. Streaming previews are not consolidated plans. Cognitive planning is
-repeatable; the later governed effect has its own reconciliation lifecycle.
-`mode: :closed_moves` is interpreter configuration; `modes:` describes action
-effects (`:read`, `:write`, `:destructive`). Neither grants authority.
+repeatable. The later governed effect has its own reconciliation lifecycle.
 
 
 ## Direct APIs and further reading
 
 - [Standalone planning, classifiers, training and runtime guide](docs/STANDALONE.md)
 - [Public API contract](docs/PUBLIC_API.md)
+- [Migration guide](docs/MIGRATING_TO_SPECTRE_0_4.md)
 - [Classifier training](TRAIN.md)
 - [Changes in this branch](CHANGELOG.md)
 

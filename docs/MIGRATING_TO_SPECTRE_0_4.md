@@ -63,7 +63,9 @@ Each proposal carries `operation`, `args` and `metadata`. Forward that metadata
 unchanged to `propose`; it includes provider, schema hash, owner and scope.
 Kinetic never chooses the host's authority or executes the function. Install
 `actions:` to mount Kinetic functions, or use other installed action providers.
-`modes:` declares action effect types; `mode: :closed_moves` is not an action mode.
+All annotated functions are registered through `actions:`. See [action mode
+defaults and overrides](../README.md#do-i-need-mode-or-modes) for the optional
+`mode:` and `modes:` settings.
 
 Enable the namespaced operation, for example `{:kinetic, :send_email}`, in the
 root Server's `gam: [operations: ...]` configuration. Stack `effects/1`

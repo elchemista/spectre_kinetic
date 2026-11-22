@@ -7,10 +7,7 @@ defmodule Spectre.Kinetic do
   typed installation generates the private `kinetic/3` helper. The scoped
   tool `{:kinetic, :interpret}` uses the same binding.
 
-      install Spectre.Kinetic,
-        mode: :closed_moves,
-        actions: MyApp.Actions,
-        modes: [send_email: :write]
+      install Spectre.Kinetic, actions: MyApp.Actions
 
   Generate with `planning: false`, then pass the consolidated model result to
   `kinetic(ctx, result, on_result: :prepared)`. Interpretation returns complete
@@ -19,9 +16,10 @@ defmodule Spectre.Kinetic do
   The host's governed binding then runs through GAM before capability release.
 
   The Stack configuration is immutable. It does not start a global planner.
-  `:actions` mounts the built-in Action provider; omit it when another package
-  supplies the providers Kinetic should interpret. Planner mode and action
-  effect modes are separate declarations.
+  `actions:` mounts the annotated functions in your module. Omit it when
+  another package supplies your action providers. Use the optional `mode:`
+  to set a default effect classification and `modes:` to override individual
+  actions.
 
   Use `SpectreKinetic` to parse and plan independently. See the
   [Governed Act Model](https://spectre.guide/en/governed-act-model) for the
