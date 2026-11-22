@@ -1,14 +1,30 @@
-# Migrating Kinetic to Spectre core 0.4
+# Migrating Kinetic to Spectre core 0.4.1
 
-This guide covers integration with Spectre `~> 0.4.0`. Install the compatible
-package versions shown in the [README](../README.md), then follow the ownership
-and callback changes below. Satellite versions remain independent of core.
+This guide covers integration with Spectre Core `~> 0.4.1` from Hex. Use the
+[README dependency example](../README.md#optional-spectre-integration)
+to install Kinetic from the `0.2.0` GitHub branch.
+
+## Upgrading from Kinetic 0.1.0
+
+The Stack still uses `install Spectre.Kinetic`. The private `kinetic/3` helper
+and its continuation result are unchanged. Kinetic now declares its planner
+and interpreter through `integration/1`. Applications can also call
+`call_tool(ctx, {:kinetic, :interpret}, response, on_result: :prepared)`.
+Use your local installation ID in the tuple when you set `as:`.
+
+Move any Agent-local `use Spectre.Kinetic` declaration and its options to
+`install Spectre.Kinetic` in the Agent's Stack. Keep `use SpectreKinetic`
+on modules that annotate Elixir functions with Action Language examples.
+
+Keep the existing GAM operations and confirmation policies in the host.
+Review any durable command checkpoints using the core migration procedure
+before bringing existing sessions forward.
 
 ## What changes from core 0.3
 
 | Concern | Existing 0.3 application | Core 0.4 application |
 | --- | --- | --- |
-| Installation | Stack package configuration | Same package registration plus optional `tools/1` descriptor |
+| Installation | Stack package configuration | Typed planner and tool declarations through `integration/1` |
 | Recognition | Flows and route strategies | Agent keeps declaration-only routes and classifiers |
 | Application behavior | Flow bodies / Instance and Run continuation | `Spectre.Server` callbacks and queued commands |
 | Tool entry | Direct call / Action provider | Generated helper schedules a command; no import from package |
@@ -16,17 +32,16 @@ and callback changes below. Satellite versions remain independent of core.
 | Effects | Legacy application policies | Automatic AgentServer GAM lifecycle and registered effect adapter |
 | Durability | Legacy Run/Instance projection | Server checkpoint, inbox/outbox and typed portable results |
 
-The migration does **not** remove `SpectreKinetic.plan/3`, registries, classifiers and training. Direct calls do not acquire
-Server semantics merely because the package is installed. Keep standalone
-workflows explicitly caller-owned. Historical examples remain in
-[the legacy guide](LEGACY_0_3.md).
+The standalone APIs for planning, registry management, classifiers and training
+keep their existing contracts. Applications using those APIs own when and how
+their selected actions execute.
 
 ## Server callbacks
 
 `use Spectre.Server, tools: MyApp.AI` generates helpers from the installed Stack.
 Return the context produced by a helper; the result arrives later through
 `handle_result/3` using its `on_result:` tag. Keep process handles outside durable
-arguments and assigns. The [core tool guide](https://github.com/elchemista/spectre/blob/0.4.0/docs/STACK_TOOLS.md) defines validation, checkpointing and recovery.
+arguments and assigns. The [core tool guide](https://github.com/elchemista/spectre/blob/0.4.1/docs/STACK_TOOLS.md) defines validation, checkpointing and recovery.
 
 ## From a model response to a governed action
 
@@ -87,4 +102,4 @@ real transport credentials and business authorization remain application setup.
 The same helper works in a mounted Skill Server. Configure GAM on the root;
 the mount's `governed:` references restrict its effect operations. Skills share
 the root Domain while keeping their own state and checkpoints. See the
-[Skill guide](https://github.com/elchemista/spectre/blob/0.4.0/docs/SKILLS.md) for setup and consent routing.
+[Skill guide](https://github.com/elchemista/spectre/blob/0.4.1/docs/SKILLS.md) for setup and consent routing.

@@ -3,6 +3,7 @@ defmodule Spectre.Kinetic.ServerToolTest do
   use ExUnit.Case, async: false
 
   alias Spectre.Kinetic.ServerTool
+  alias SpectreKinetic.StackContractStack
 
   defmodule Agent do
     use Spectre.Agent, stack: SpectreKinetic.StackContractStack
@@ -10,6 +11,32 @@ defmodule Spectre.Kinetic.ServerToolTest do
 
   defmodule OtherAgent do
     use Spectre.Agent
+  end
+
+  defmodule Server do
+    use Spectre.Server, tools: SpectreKinetic.StackContractStack
+
+    @response %{planning: false, model_output: ~s(Ready. <al>PING TARGET="stack"</al>)}
+
+    def handle_flow({:tool, :helper}, _input, ctx),
+      do: kinetic(ctx, @response, on_result: :interpreted)
+
+    def handle_flow({:tool, :scoped}, _input, ctx),
+      do: call_tool(ctx, {:kinetic, :interpret}, @response, on_result: :interpreted)
+
+    def handle_result(:interpreted, {:prepared, %{actions: [proposal]}}, ctx),
+      do: respond(ctx, proposal.args["target"])
+
+    def handle_result(tag, result, ctx), do: super(tag, result, ctx)
+  end
+
+  defmodule ServerAgent do
+    use Spectre.Agent, stack: SpectreKinetic.StackContractStack, server: Server
+
+    flow :tool do
+      on(:helper, regex: ~r/^helper$/)
+      on(:scoped, regex: ~r/^scoped$/)
+    end
   end
 
   defmodule ResultActions do
@@ -25,11 +52,30 @@ defmodule Spectre.Kinetic.ServerToolTest do
   end
 
   test "registration is cognitive and does not export a fake kinetic function" do
-    tools = Spectre.Kinetic.tools(%{})
-    assert tools.kinetic.adapter == ServerTool
-    assert tools.kinetic.operations.interpret.path == :cognitive
-    assert Spectre.Stack.Tools.validate!(tools) == tools
+    assert {:ok, installation} =
+             Spectre.Stack.Definition.installation(StackContractStack, :kinetic)
+
+    %{tools: %{kinetic: helper}, integration: integration} = installation.adapters
+    tool = integration.tools.interpret
+
+    assert tool.helper == :kinetic
+    assert tool.descriptor == helper
+    assert helper.adapter == ServerTool
+    assert %{path: :cognitive, retry: :safe} = helper.operations.interpret
+    assert tool.public.arguments["required"] == ["model_output", "planning"]
     refute function_exported?(Spectre.Kinetic, :kinetic, 3)
+  end
+
+  test "an AgentServer resolves both helper and scoped calls to the interpretation tool" do
+    Process.register(self(), SpectreKinetic.StackContractProbe)
+    server = start_supervised!({Spectre.Server, agent: ServerAgent, consumer: self()})
+
+    for input <- ["helper", "scoped"] do
+      assert {:ok, interaction} = Spectre.Server.input(server, input)
+      assert_receive {Spectre.Server, ^server, {:response, ^interaction, "stack", _}}, 1_000
+    end
+
+    refute_received {:kinetic_action_executed, _target}
   end
 
   test "managed execution resolves the registered catalog and freezes its schema" do
@@ -113,8 +159,22 @@ defmodule Spectre.Kinetic.ServerToolTest do
 
     assert {:ok, _} = ServerTool.prepare(:interpret, [response], %{agent: Agent})
 
+    assert {:ok, %{text: "<al>PING</al>"}} =
+             ServerTool.prepare(
+               :interpret,
+               %{"planning" => false, "model_output" => "<al>PING</al>"},
+               %{agent: Agent}
+             )
+
     assert {:error, :response_already_planned} =
              ServerTool.prepare(:interpret, %{planning: true}, %{})
+
+    assert {:error, :response_already_planned} =
+             ServerTool.prepare(
+               :interpret,
+               %{"planning" => false, "model_output" => "<al>PING</al>", planning: true},
+               %{agent: Agent}
+             )
 
     assert {:error, :model_output_required} =
              ServerTool.prepare(:interpret, %{text: "cleaned"}, %{})

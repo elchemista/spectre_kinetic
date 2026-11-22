@@ -1,9 +1,14 @@
 # Standalone Kinetic guide
 
 This guide documents direct library APIs. Calls here execute in the caller's
-application; they do not implicitly become AgentServer commands or pass through
-GAM. For the registered 0.4 helpers see the [README](../README.md) and
-[migration guide](MIGRATING_TO_SPECTRE_0_4.md). Existing standalone APIs are unchanged.
+application. Add Kinetic from GitHub to use these APIs on their own.
+
+```elixir
+{:spectre_kinetic, github: "elchemista/spectre_kinetic", branch: "0.2.0"}
+```
+
+To use AgentServer and GAM, follow the
+[Spectre integration](../README.md#optional-spectre-integration).
 
 ## Why Use This?
 
@@ -159,9 +164,9 @@ action.status
 # :ok
 ```
 
-The standalone planner returns data and does not call
-`MyApp.Emailer.send/2`. When mounted through `use Spectre.Kinetic`, its
-built-in provider invokes the selected function only after Spectre has staged,
+The standalone planner returns the selected function and its arguments to the
+caller. With `install Spectre.Kinetic, actions: MyApp.Emailer` in a Spectre Stack,
+the built-in provider invokes the selected function after Spectre has staged,
 authorized, persisted, and dispatched the action.
 
 Primitive argument types declared by the registry are enforced during slot
@@ -494,7 +499,7 @@ The real workflow is:
 4. train classifiers from those source rows
 5. load the classifier artifact directories at runtime
 
-See [priv/dataset/README.md](https://github.com/elchemista/spectre_kinetic/blob/0.1.0/priv/dataset/README.md) for exact dataset row
+See [priv/dataset/README.md](../priv/dataset/README.md) for exact dataset row
 formats and the full command sequence.
 
 ## Server Adapter

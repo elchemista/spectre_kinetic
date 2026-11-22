@@ -9,22 +9,24 @@ defmodule Spectre.Kinetic.Extension do
 
   @spec compile(module(), keyword()) :: {:ok, keyword()} | {:error, term()}
   def compile(_owner, opts) do
-    case Keyword.fetch(opts, :stack_config) do
-      {:ok, %{options: options, classifiers: classifiers}} ->
-        classifier_specs =
-          Enum.map(classifiers, fn
-            %{module: module, options: []} -> module
-            %{module: module, options: classifier_opts} -> {module, classifier_opts}
-          end)
+    case Keyword.get(opts, :stack_config) do
+      %{options: _, classifiers: _} = config ->
+        {:ok, stack_options(config)}
 
-        {:ok, Keyword.put(options, :classifiers, classifier_specs)}
-
-      :error ->
-        {:ok, opts}
-
-      {:ok, invalid} ->
+      invalid ->
         {:error, {:invalid_kinetic_stack_config, invalid}}
     end
+  end
+
+  @spec stack_options(Spectre.Kinetic.stack_config()) :: keyword()
+  def stack_options(%{options: options, classifiers: classifiers}) do
+    classifier_specs =
+      Enum.map(classifiers, fn
+        %{module: module, options: []} -> module
+        %{module: module, options: classifier_opts} -> {module, classifier_opts}
+      end)
+
+    Keyword.put(options, :classifiers, classifier_specs)
   end
 
   @spec agent_config(keyword()) :: keyword()
@@ -65,9 +67,6 @@ defmodule Spectre.Kinetic.Extension do
       else: opts
   end
 
-  @spec action_planner(keyword()) :: {module(), keyword()}
-  def action_planner(opts) do
-    planner_opts = Keyword.drop(opts, [:actions, :provider, :mode, :modes])
-    {Spectre.Kinetic.Planner, planner_opts}
-  end
+  @spec planner_options(keyword()) :: keyword()
+  def planner_options(opts), do: Keyword.drop(opts, [:actions, :provider, :mode, :modes])
 end

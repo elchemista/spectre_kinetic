@@ -2,6 +2,17 @@
 
 All notable changes to Spectre Kinetic are documented in this file.
 
+## 0.2.0 — Unreleased
+
+- Install this release from the `0.2.0` GitHub branch.
+- Register the Kinetic planner service and the `{:kinetic, :interpret}` tool
+  through `Spectre.Integration` on Spectre 0.4.1. The existing `kinetic/3`
+  helper calls the same tool.
+- Install the Spectre adapter through the Stack. Move any Agent-local
+  `use Spectre.Kinetic` options to `install Spectre.Kinetic` in the Stack.
+- Standalone parsing, planning, training and runtime APIs continue to work
+  with only `spectre_kinetic` installed.
+
 ## 0.1.0 — 2026-11-17
 
 - Exercise the existing 0.4 branch in CI against explicit compatible source checkouts; refresh obsolete dependency locks.

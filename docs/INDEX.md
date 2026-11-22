@@ -1,12 +1,11 @@
 # Kinetic documentation
 
-Start with the current README for core 0.4; legacy examples are explicitly separated.
+Start with the standalone guide or the Spectre 0.4.1 integration in the README.
 
-- [Current 0.4 overview and example](../README.md)
-- [Migration from core 0.3](MIGRATING_TO_SPECTRE_0_4.md)
 - [Standalone APIs and workflows](STANDALONE.md)
+- [Spectre 0.4.1 integration and example](../README.md#optional-spectre-integration)
+- [Migration from previous Spectre integrations](MIGRATING_TO_SPECTRE_0_4.md)
 - [Public API contract](PUBLIC_API.md)
-- [Historical 0.3/Instance examples](LEGACY_0_3.md)
 - [Changelog](../CHANGELOG.md)
 
 [Governed Act Model manifesto](https://spectre.guide/en/governed-act-model)

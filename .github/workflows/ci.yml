@@ -41,7 +41,7 @@ jobs:
         run: mix test
 
       - name: Verify published Spectre dependency
-        run: mix deps | grep -E '^\* spectre 0\.4\.[0-9]+ \(Hex package\)'
+        run: mix deps | grep -E '^\* spectre 0\.4\.1 \(Hex package\)'
 
       - name: Run Credo (non-strict)
         run: mix credo
@@ -66,6 +66,11 @@ jobs:
 
       - name: Install dependencies
         run: mix deps.get
+
+      - name: Verify standalone library
+        run: |
+          mix compile --warnings-as-errors
+          mix run -e 'false = Code.ensure_loaded?(Spectre); %{args: %{"TARGET" => "test"}} = SpectreKinetic.parse_al(~s(PING TARGET="test"))'
 
       - name: Run Dialyzer
         run: mix dialyzer

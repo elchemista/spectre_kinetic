@@ -2,10 +2,9 @@ defmodule Spectre.Kinetic.Actions do
   @moduledoc """
   Built-in Spectre action provider for modules declared with `use SpectreKinetic`.
 
-  Applications mount it indirectly:
+  Kinetic mounts this provider when you configure `:actions` in your Stack.
 
-      use Spectre.Agent
-      use Spectre.Kinetic, actions: MyApp.Actions
+      install Spectre.Kinetic, actions: MyApp.Actions
 
   Kinetic owns extraction and positional invocation for the annotated module;
   Spectre still owns staging, policy, persistence, and provider dispatch.

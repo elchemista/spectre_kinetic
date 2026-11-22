@@ -1,6 +1,6 @@
 defmodule Spectre.Kinetic.ServerTool do
   @moduledoc """
-  Stack tool adapter for consolidated model responses in Spectre 0.4.
+  Stack tool adapter for consolidated model responses in Spectre 0.4.1.
 
   The core generates `kinetic/3` from the installation. This adapter only
   prepares candidates; it never executes actions or grants authority.
@@ -65,6 +65,9 @@ defmodule Spectre.Kinetic.ServerTool do
   def prepare(:interpret, %{planning: true}, _trusted),
     do: {:error, :response_already_planned}
 
+  def prepare(:interpret, %{"planning" => true}, _trusted),
+    do: {:error, :response_already_planned}
+
   def prepare(:interpret, %{planning: false, model_output: text}, %{agent: agent})
       when is_binary(text) do
     case apply(@action_config, :planner, [agent]) do
@@ -72,6 +75,9 @@ defmodule Spectre.Kinetic.ServerTool do
       _other -> {:error, :kinetic_planner_required}
     end
   end
+
+  def prepare(:interpret, %{"planning" => false, "model_output" => text}, trusted),
+    do: prepare(:interpret, %{planning: false, model_output: text}, trusted)
 
   def prepare(:interpret, _response, _trusted), do: {:error, :model_output_required}
   def prepare(_operation, _payload, _trusted), do: {:error, :unknown_kinetic_operation}

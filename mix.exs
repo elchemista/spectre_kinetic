@@ -1,7 +1,7 @@
 defmodule SpectreKinetic.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/elchemista/spectre_kinetic"
 
   def project do
@@ -23,7 +23,6 @@ defmodule SpectreKinetic.MixProject do
           "README.md",
           "docs/INDEX.md",
           "docs/MIGRATING_TO_SPECTRE_0_4.md",
-          "docs/LEGACY_0_3.md",
           "docs/STANDALONE.md",
           "docs/PUBLIC_API.md",
           "CHANGELOG.md",
@@ -69,7 +68,7 @@ defmodule SpectreKinetic.MixProject do
         {:spectre, path: Path.expand(path, __DIR__), only: :test, override: true}
 
       _unset ->
-        {:spectre, "~> 0.4.0", only: :test}
+        {:spectre, "~> 0.4.1", only: :test}
     end
   end
 
@@ -81,7 +80,7 @@ defmodule SpectreKinetic.MixProject do
       licenses: ["Apache-2.0"],
       links: %{
         "GitHub" => @source_url,
-        "Documentation" => "https://hexdocs.pm/spectre_kinetic/#{@version}",
+        "Documentation" => "#{@source_url}/blob/#{@version}/docs/INDEX.md",
         "Changelog" => "#{@source_url}/blob/#{@version}/CHANGELOG.md"
       },
       files: ~w(lib priv docs mix.exs .formatter.exs README.md CHANGELOG.md TRAIN.md LICENSE)

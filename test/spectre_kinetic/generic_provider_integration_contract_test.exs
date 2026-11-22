@@ -36,21 +36,28 @@ defmodule SpectreKinetic.GenericProviderIntegrationContractTest.Provider do
   end
 end
 
+defmodule SpectreKinetic.GenericProviderIntegrationContractTest.Stack do
+  @moduledoc false
+
+  use Spectre.Stack
+
+  install(Spectre.Kinetic,
+    top_k: 1,
+    tool_threshold: 0.0,
+    mapping_threshold: 0.0
+  )
+end
+
 defmodule SpectreKinetic.GenericProviderIntegrationContractTest.Agent do
   @moduledoc false
 
-  use Spectre.Agent
+  use Spectre.Agent, stack: SpectreKinetic.GenericProviderIntegrationContractTest.Stack
 
   action_provider(
     {:remote, :issues},
     SpectreKinetic.GenericProviderIntegrationContractTest.Provider,
     namespace: :integration
   )
-
-  use Spectre.Kinetic,
-    top_k: 1,
-    tool_threshold: 0.0,
-    mapping_threshold: 0.0
 end
 
 defmodule SpectreKinetic.GenericProviderIntegrationContractTest do

@@ -28,18 +28,6 @@ defmodule SpectreKinetic.DecisionBoundaryContractTest.Actions do
   def record(subject, detail), do: {:recorded, subject, detail}
 end
 
-defmodule SpectreKinetic.DecisionBoundaryContractTest.LegacyAgent do
-  @moduledoc false
-
-  use Spectre.Agent
-
-  use Spectre.Kinetic,
-    actions: SpectreKinetic.DecisionBoundaryContractTest.Actions,
-    provider: :audit,
-    mode: :write,
-    top_k: 2
-end
-
 defmodule SpectreKinetic.DecisionBoundaryContractTest do
   use ExUnit.Case, async: false
 
@@ -51,7 +39,6 @@ defmodule SpectreKinetic.DecisionBoundaryContractTest do
   alias Spectre.Kinetic.Extension
   alias Spectre.Kinetic.Planner
   alias SpectreKinetic.DecisionBoundaryContractTest.Actions, as: AuditActions
-  alias SpectreKinetic.DecisionBoundaryContractTest.LegacyAgent
   alias SpectreKinetic.DecisionBoundaryContractTest.Provider
   alias SpectreKinetic.DecisionBoundaryContractTest.Unannotated
 
@@ -121,7 +108,6 @@ defmodule SpectreKinetic.DecisionBoundaryContractTest do
            ]
 
     assert Extension.agent_config(compiled) == [kinetic: compiled]
-    assert Extension.compile(__MODULE__, mode: :closed_moves) == {:ok, [mode: :closed_moves]}
 
     assert Extension.compile(__MODULE__, stack_config: :invalid) ==
              {:error, {:invalid_kinetic_stack_config, :invalid}}
@@ -144,20 +130,6 @@ defmodule SpectreKinetic.DecisionBoundaryContractTest do
     assert_raise ArgumentError, ~r/:actions must be a module/, fn ->
       Extension.action_providers(actions: "invalid")
     end
-
-    assert {Planner, [runtime: :borrowed, top_k: 2]} =
-             Extension.action_planner(
-               actions: AuditActions,
-               provider: :audit,
-               mode: :write,
-               modes: [record: :write],
-               runtime: :borrowed,
-               top_k: 2
-             )
-
-    assert {:ok, legacy_config} = Spectre.Kinetic.config(LegacyAgent)
-    assert legacy_config[:actions] == AuditActions
-    assert legacy_config[:provider] == :audit
 
     assert Spectre.Kinetic.config(__MODULE__) ==
              {:error, {:unknown_spectre_definition, __MODULE__}}
